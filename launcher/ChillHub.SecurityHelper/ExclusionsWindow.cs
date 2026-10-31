@@ -16,6 +16,7 @@ namespace ChillHub.SecurityHelper {
         private readonly bool removing;
         private readonly List<Folder> folders = new();
         private readonly StackPanel configuration = new();
+        private readonly Border scope;
         private readonly ComboBox product = new() { ItemsSource = AntivirusCatalog.All, SelectedIndex = 0, MinHeight = 36, Margin = new Thickness(0, 0, 0, 16) };
         private readonly TextBlock instructions = HelperAppearance.Text("");
         private readonly TextBlock feedbackTitle = HelperAppearance.Text("", "Brush.Title", 16);
@@ -28,6 +29,7 @@ namespace ChillHub.SecurityHelper {
         private readonly Button remove = new() { Content = "Удалить исключения", MinHeight = 34, Padding = new Thickness(12, 6, 12, 6) };
         private readonly Button help = new() { Content = "Настроить вручную", MinHeight = 34, Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 0, 8) };
         private readonly StackPanel manual = new() { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 12, 0, 0) };
+        private readonly TextBlock copyHint = HelperAppearance.Text(SecuritySetupText.CopyFoldersHint);
         private readonly ComboBox copyFolder = new() { MinHeight = 34, MinWidth = 120 };
         private readonly Button copy = new() { Content = "Копировать", MinHeight = 34, MinWidth = 100, Margin = new Thickness(8, 0, 0, 0) };
         private readonly TextBlock intro;
@@ -92,8 +94,8 @@ namespace ChillHub.SecurityHelper {
             AutomationProperties.SetName(this.product, "Ваш антивирус");
             this.product.Visibility = removing ? Visibility.Collapsed : Visibility.Visible;
             this.configuration.Children.Add(this.product);
-            var scope = HelperAppearance.Text(string.Join(" · ", this.folders.Select(f => f.Group).Distinct()), "Brush.Text", 14);
-            this.configuration.Children.Add(HelperAppearance.Card(scope));
+            this.scope = HelperAppearance.Card(HelperAppearance.Text(string.Join(" · ", this.folders.Select(f => f.Group).Distinct()), "Brush.Text", 14));
+            this.configuration.Children.Add(this.scope);
             this.configuration.Children.Add(this.instructions);
 
             var copyRow = new Grid();
@@ -101,7 +103,9 @@ namespace ChillHub.SecurityHelper {
             this.copyFolder.ItemsSource = this.folders; this.copyFolder.SelectedIndex = 0;
             AutomationProperties.SetName(this.copyFolder, "Что добавить в антивирус");
             copyRow.Children.Add(this.copyFolder); Grid.SetColumn(this.copy, 1); copyRow.Children.Add(this.copy);
-            this.manual.Children.Add(HelperAppearance.Text(SecuritySetupText.CopyFoldersHint)); this.manual.Children.Add(copyRow);
+            this.copyHint.MinHeight = 36;
+            AutomationProperties.SetLiveSetting(this.copyHint, AutomationLiveSetting.Polite);
+            this.manual.Children.Add(this.copyHint); this.manual.Children.Add(copyRow);
             this.configuration.Children.Add(this.manual);
             var extra = new StackPanel { Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
             extra.Children.Add(this.help); extra.Children.Add(this.remove); this.advanced.Content = extra;
@@ -123,9 +127,10 @@ namespace ChillHub.SecurityHelper {
             this.help.Click += (_, _) => this.OpenGuide();
             this.copy.Click += (_, _) => {
                 if (this.copyFolder.SelectedItem is not Folder folder) { return; }
-                try { Clipboard.SetText(folder.Path); this.ShowFeedback(SecuritySetupText.CopyTitle, SecuritySetupText.CopyHint); }
-                catch (Exception ex) { HelperDiagnostics.Record(ex.ToString()); this.ShowFeedback(SecuritySetupText.CopyFailed, SecuritySetupText.TryAgain); }
+                try { Clipboard.SetText(folder.Path); this.PresentCopyResult(true); }
+                catch (Exception ex) { HelperDiagnostics.Record(ex.ToString()); this.PresentCopyResult(false); }
             };
+            this.copyFolder.SelectionChanged += (_, _) => this.ResetCopyHint();
             this.product.SelectionChanged += (_, _) => { this.productChosen = true; this.ShowGuide(); };
             this.ShowGuide();
             this.Loaded += async (_, _) => {
@@ -149,8 +154,12 @@ namespace ChillHub.SecurityHelper {
         private bool IsDefender => this.product.SelectedItem is AntivirusGuide { Id: "defender" };
 
         private void ShowGuide() {
+            this.ResetCopyHint();
             this.retry = false; this.nextRemoving = this.removing;
             var guide = (AntivirusGuide)this.product.SelectedItem;
+            this.intro.Visibility = this.IsDefender ? Visibility.Visible : Visibility.Collapsed;
+            this.scope.Visibility = this.IsDefender ? Visibility.Visible : Visibility.Collapsed;
+            this.configuration.Margin = new Thickness(0, this.IsDefender ? 0 : 16, 0, 0);
             this.instructions.Text = this.removing ? SecuritySetupText.RemoveWarning : this.IsDefender ? SecuritySetupText.Warning
                 : guide.Id == "mcafee" ? SecuritySetupText.FilesOnlyHint : guide.Id == "other" ? SecuritySetupText.UnknownHint : SecuritySetupText.ManualHint;
             this.instructions.SetResourceReference(TextBlock.ForegroundProperty, this.IsDefender && !this.removing ? "Brush.Warning" : "Brush.TextSecondary");
@@ -159,7 +168,12 @@ namespace ChillHub.SecurityHelper {
             this.remove.Visibility = this.journal.AddedPaths.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             this.ShowFeedback("", ""); this.details.Visibility = Visibility.Collapsed;
             if (this.invalidFolders) { this.ShowFeedback(SecuritySetupText.IncompleteTitle, SecuritySetupText.PrepareFailed); }
-            else if (this.folders.Count == 0) { this.ShowFeedback(this.removing ? SecuritySetupText.NothingToRemove : SecuritySetupText.IncompleteTitle, ""); }
+            else if (this.removing && this.folders.Count == 0) {
+                this.complete = true;
+                this.ShowFeedback(SecuritySetupText.NothingToRemove, "");
+                this.ShowCompletion();
+            }
+            else if (this.folders.Count == 0) { this.ShowFeedback(SecuritySetupText.IncompleteTitle, ""); }
             this.RefreshActions();
         }
 
@@ -176,9 +190,20 @@ namespace ChillHub.SecurityHelper {
         }
 
         private void ShowFeedback(string title, string message) {
+            this.feedbackTitle.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Title");
             this.feedbackTitle.Text = title; this.feedback.Text = message;
             this.feedbackTitle.Visibility = string.IsNullOrEmpty(title) ? Visibility.Collapsed : Visibility.Visible;
             this.feedback.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private void ResetCopyHint() {
+            this.copyHint.Text = SecuritySetupText.CopyFoldersHint;
+            this.copyHint.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextSecondary");
+        }
+
+        private void PresentCopyResult(bool copied) {
+            this.copyHint.Text = copied ? SecuritySetupText.CopyHint : SecuritySetupText.CopyFailed + ". " + SecuritySetupText.TryAgain;
+            this.copyHint.SetResourceReference(TextBlock.ForegroundProperty, copied ? "Brush.Success" : "Brush.Warning");
         }
 
         private void OpenGuide() {
@@ -188,7 +213,10 @@ namespace ChillHub.SecurityHelper {
             try {
                 Process.Start(new ProcessStartInfo(guide.Url) { UseShellExecute = true });
                 this.manual.Visibility = guide.Id == "mcafee" ? Visibility.Collapsed : Visibility.Visible;
-                this.ShowFeedback(SecuritySetupText.GuideOpened, guide.Id == "mcafee" ? SecuritySetupText.FilesOnlyHint : SecuritySetupText.GuideOpenedHint);
+                this.intro.Visibility = Visibility.Collapsed;
+                this.scope.Visibility = Visibility.Collapsed;
+                this.configuration.Margin = new Thickness(0, 16, 0, 0);
+                this.ResetCopyHint();
             }
             catch (Exception ex) { HelperDiagnostics.Record(ex.ToString()); this.ShowFeedback(SecuritySetupText.GuideFailed, SecuritySetupText.TryAgain); }
         }
@@ -205,8 +233,15 @@ namespace ChillHub.SecurityHelper {
             this.ShowFeedback(summary.Title, summary.Message);
             this.feedbackTitle.SetResourceReference(TextBlock.ForegroundProperty, summary.Complete ? "Brush.Success" : "Brush.Warning");
             this.feedbackTitle.BringIntoView();
-            if (this.complete) { this.MinHeight = 240; this.Height = Math.Min(280, SystemParameters.WorkArea.Height - 48); }
+            if (this.complete) { this.ShowCompletion(); }
             this.RefreshActions();
+        }
+
+        private void ShowCompletion() {
+            this.intro.Visibility = Visibility.Collapsed;
+            this.configuration.Visibility = Visibility.Collapsed;
+            this.MinHeight = Math.Min(240, SystemParameters.WorkArea.Height - 48);
+            this.Height = Math.Min(280, SystemParameters.WorkArea.Height - 48);
         }
 
         private async Task ChangeAsync(bool deleting) {

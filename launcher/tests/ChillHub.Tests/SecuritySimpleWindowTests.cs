@@ -38,6 +38,21 @@ namespace ChillHub.Tests {
         });
 
         [Fact]
+        public void EmptyRemovalCanBeClosedWithoutOfferingAnUnavailableOperation() => UiThread.Run(() => {
+            var window = new ExclusionsWindow(Paths, true, new SecurityJournal());
+            Assert.Contains(Descendants(window).OfType<Button>(), b => Equals(b.Content, "Готово") && b.IsEnabled);
+            Assert.DoesNotContain(Descendants(window).OfType<Button>(), b => Equals(b.Content, "Удалить"));
+            Assert.Contains(Descendants(window).OfType<TextBlock>(), t => t.Text == SecuritySetupText.NothingToRemove);
+        });
+
+        [Fact]
+        public void InvalidOwnedFolderIsNotReportedAsNothingToRemove() => UiThread.Run(() => {
+            var window = new ExclusionsWindow(Paths, true, new SecurityJournal { AddedPaths = new() { @"C:\" } });
+            Assert.DoesNotContain(Descendants(window).OfType<Button>(), b => Equals(b.Content, "Готово"));
+            Assert.Contains(Descendants(window).OfType<TextBlock>(), t => t.Text == SecuritySetupText.IncompleteTitle);
+        });
+
+        [Fact]
         public void VerifiedBatchLeavesOnlyTheCompletionAction() => UiThread.Run(() => {
             var window = new ExclusionsWindow(Paths, false, new SecurityJournal());
             window.PresentResults(Paths.Select(p => new ExclusionResult(p, ExclusionStatus.Applied, p)).ToArray(), 3, false);

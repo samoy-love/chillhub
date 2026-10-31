@@ -4,15 +4,12 @@ namespace ChillHub.Security {
     public static class SecuritySetupText {
         public const string RemoveTitle = "Удаление исключений";
         public const string RemoveIntro = "Верните проверку файлов антивирусом.";
-        public const string CopyFoldersHint = "Выберите папку и скопируйте её в антивирус.";
-        public const string CopyTitle = "Скопировано";
-        public const string CopyHint = "Вставьте в поле «Исключения» вашего антивируса.";
+        public const string CopyFoldersHint = "Добавьте каждую папку: скопируйте и вставьте в антивирус.";
+        public const string CopyHint = "Скопировано. Вставьте в исключения антивируса.";
         public const string CopyFailed = "Не удалось скопировать";
         public const string RemoveWarning = "Удалятся только исключения, добавленные Chill Hub.";
         public const string DetectionFailed = "Выберите ваш антивирус";
         public const string NothingToRemove = "Удалять нечего";
-        public const string GuideOpened = "Инструкция открыта";
-        public const string GuideOpenedHint = "Добавьте папки по инструкции. Ручную настройку помощник не проверяет.";
         public const string GuideFailed = "Не удалось открыть инструкцию";
         public const string Waiting = "Подтвердите в Windows";
         public const string CancelledTitle = "Настройка отменена";
