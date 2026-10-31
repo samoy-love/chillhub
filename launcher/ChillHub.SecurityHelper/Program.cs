@@ -26,7 +26,11 @@ namespace ChillHub.SecurityHelper {
                 finally { Update.UpdateLock.Release(installLock); }
             }
             catch (Exception ex) {
-                MessageBox.Show("Не удалось открыть настройку исключений.\n\n" + ex.Message, "Chill Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
+                // The parent reports channel failures. A modal dialog in the elevated
+                // child would keep its process (and the parent's busy state) alive.
+                if (args.Length == 0 || args[0] != "--elevated") {
+                    MessageBox.Show("Не удалось открыть настройку исключений.\n\n" + ex.Message, "Chill Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
                 Environment.ExitCode = 1;
             }
         }

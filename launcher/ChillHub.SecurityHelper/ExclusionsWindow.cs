@@ -234,8 +234,8 @@ namespace ChillHub.SecurityHelper {
             this.status.Clear(); this.details.Visibility = Visibility.Collapsed;
             try {
                 var results = await PrivilegedOperation.RunAsync(selected, deleting, result => {
-                    this.journal = SecurityJournal.Update(SecurityJournal.DefaultPath, journal => journal.Record(new[] { result }));
-                    this.status.Text += result.Path + "\n" + result.Detail + "\n\n";
+                    try { this.journal = SecurityJournal.Update(SecurityJournal.DefaultPath, journal => journal.Record(new[] { result })); }
+                    finally { this.status.Text += result.Path + "\n" + result.Detail + "\n\n"; }
                 });
                 this.PresentResults(results, selected.Length, deleting);
             }

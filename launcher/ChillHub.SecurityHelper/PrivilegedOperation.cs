@@ -26,22 +26,29 @@ namespace ChillHub.SecurityHelper {
             var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, Verb = "runas" };
             start.ArgumentList.Add("--elevated"); start.ArgumentList.Add(name); start.ArgumentList.Add(token);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("Помощник не запущен.");
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await pipe.WaitForConnectionAsync(timeout.Token);
-            if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var client) || client != process.Id) { throw new UnauthorizedAccessException("Подключился другой процесс."); }
-            using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
-            using var reader = new StreamReader(pipe, leaveOpen: true);
-            await writer.WriteLineAsync(JsonSerializer.Serialize(new OperationRequest(token, paths, remove)));
-            var results = new List<ExclusionResult>();
-            while (true) {
-                var line = await ReadBoundedLineAsync(reader, CancellationToken.None);
-                if (line == "done") { break; }
-                var result = JsonSerializer.Deserialize<ExclusionResult>(line) ?? throw new InvalidDataException("Пустой ответ помощника.");
-                if (!paths.Contains(result.Path, StringComparer.OrdinalIgnoreCase)) { throw new InvalidDataException("Помощник вернул неизвестный путь."); }
-                results.Add(result);
-                record(result); // Persist each completed path, including partial success before a crash.
-            }
-            return results.ToArray();
+            return await SecurityOperationLifetime.RunAsync(async () => {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await pipe.WaitForConnectionAsync(timeout.Token);
+                if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var client) || client != process.Id) { throw new UnauthorizedAccessException("Подключился другой процесс."); }
+                using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
+                using var reader = new StreamReader(pipe, leaveOpen: true);
+                await writer.WriteLineAsync(JsonSerializer.Serialize(new OperationRequest(token, paths, remove)));
+                var results = new List<ExclusionResult>();
+                Exception? recordingFailure = null;
+                while (true) {
+                    var line = await ReadBoundedLineAsync(reader, CancellationToken.None);
+                    if (line == "done") { break; }
+                    var result = JsonSerializer.Deserialize<ExclusionResult>(line) ?? throw new InvalidDataException("Пустой ответ помощника.");
+                    if (!paths.Contains(result.Path, StringComparer.OrdinalIgnoreCase)) { throw new InvalidDataException("Помощник вернул неизвестный путь."); }
+                    results.Add(result);
+                    // Keep consuming results after a storage failure so the child cannot
+                    // continue unnoticed after this window has returned to its idle state.
+                    try { record(result); }
+                    catch (Exception ex) { recordingFailure ??= ex; }
+                }
+                if (recordingFailure != null) { throw new IOException("Не удалось сохранить журнал изменений. Проверьте исключения в безопасности Windows.", recordingFailure); }
+                return results.ToArray();
+            }, pipe.Dispose, () => process.WaitForExitAsync());
         }
 
         internal static void Serve(string name, string token) {
