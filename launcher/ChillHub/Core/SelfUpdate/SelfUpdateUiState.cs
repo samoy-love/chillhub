@@ -15,6 +15,8 @@ namespace ChillHub.Core.SelfUpdate {
     /// </para>
     /// </summary>
     internal sealed class SelfUpdateUiState {
+        internal bool? SecurityBlocked { get; init; }
+
         /// <summary>Текст статуса; null — оставить прежний.</summary>
         internal string? StatusText { get; init; }
 

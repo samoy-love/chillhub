@@ -125,6 +125,8 @@ on:
       # в .deploy-kit/): правка drop-in'а — такая же выкатка, как правка кода.
       - 'deploy/systemd/**'
       - 'launcher/ChillHub/**'
+      - 'launcher/ChillHub.Security/**'
+      - 'launcher/ChillHub.SecurityHelper/**'
       - 'launcher/*'
       - 'updater/**'
       - 'Directory.Build.props'
@@ -424,7 +426,7 @@ jobs:
           # части: установщик один, точнее делить нечего. launcher/ разобран
           # на ChillHub/ и файлы прямо в каталоге: launcher/tests/ в артефакт
           # не входит (см. тот же комментарий).
-          echo "$FILES_CLIENT" | grep -qE '^(launcher/(ChillHub/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$)' \
+          echo "$FILES_CLIENT" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$)' \
             && CLIENT=true || CLIENT=false
 
           printf 'site=%s\napi=%s\nadmin=%s\nadmin_ui=%s\nclient=%s\n' \

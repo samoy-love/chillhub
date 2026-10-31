@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>../ChillHub/Assets/app.ico</ApplicationIcon>
+    <Product>Chill Hub</Product>
+    <Company>Chill Hub</Company>
+    <AssemblyTitle>Chill Hub — настройка защиты</AssemblyTitle>
+    <Description>Настройка исключений антивируса для Chill Hub</Description>
+    <SatelliteResourceLanguages>en;ru</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ChillHub.Security/ChillHub.Security.csproj" />
+    <Page Include="../ChillHub/Themes/Theme.Dark.xaml" Link="Themes/Theme.Dark.xaml" />
+    <Resource Include="../ChillHub/Assets/app.ico" Link="Assets/app.ico" />
+    <Compile Include="../ChillHub/Core/UI/ButtonIcon.cs" Link="Shared/ButtonIcon.cs" />
+    <Compile Include="../ChillHub/Core/UI/UiAnimations.cs" Link="Shared/UiAnimations.cs" />
+    <Compile Include="../ChillHub/Core/UI/Placeholder.cs" Link="Shared/Placeholder.cs" />
+    <Compile Include="../ChillHub/Core/UI/CaretInsetConverter.cs" Link="Shared/CaretInsetConverter.cs" />
+    <Compile Include="../ChillHub/Core/UI/PillCornerConverter.cs" Link="Shared/PillCornerConverter.cs" />
+    <Compile Include="../ChillHub/Core/UI/AcrylicHelper.cs" Link="Shared/AcrylicHelper.cs" />
+    <Compile Include="../../updater/UpdateLock.cs" Link="Shared/UpdateLock.cs" />
+  </ItemGroup>
+  <Target Name="UseLauncherVersion" BeforeTargets="GetAssemblyVersion">
+    <XmlPeek XmlInputPath="$(MSBuildProjectDirectory)/../ChillHub/ChillHub.csproj" Query="/Project/PropertyGroup/Version/text()">
+      <Output TaskParameter="Result" PropertyName="LauncherVersion" />
+    </XmlPeek>
+    <PropertyGroup>
+      <Version>$(LauncherVersion)</Version>
+    </PropertyGroup>
+  </Target>
+</Project>

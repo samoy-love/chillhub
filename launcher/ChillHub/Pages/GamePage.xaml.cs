@@ -30,6 +30,8 @@ namespace ChillHub.Pages {
     /// Кнопки «Играть» здесь нет намеренно — запуск остаётся на главной странице.
     /// </content>
     public partial class GamePage : Page {
+        private async void SecurityExclusions_Click(object sender, RoutedEventArgs e) => await Core.SecuritySetup.OpenAsync(this.securityBlockedDirectory);
+
         private readonly GameInfo game;
         private readonly HttpClient http = HttpClientProvider.Shared;
         private readonly ISyncService sync = new SimpleSyncService();
@@ -56,6 +58,7 @@ namespace ChillHub.Pages {
         private List<string> builds = new();
         private GameState currentState = GameState.NotInstalled;
         private string localVersion = string.Empty;
+        private string? securityBlockedDirectory;
 
         /// <summary>Initializes a new instance of the <see cref="GamePage"/> class — страницу для конкретной игры.</summary>
         /// <param name="game">Описание игры из списка главной страницы (объект переиспользуется, чтобы статусы совпадали).</param>
@@ -450,6 +453,8 @@ namespace ChillHub.Pages {
                 this.SetBusy(false);
                 this.SyncProgressBar.IsIndeterminate = false;
                 this.StatusText.Text = item.StatusText;
+                this.SecurityExclusionsBtn.Visibility = item.SecurityBlocked ? Visibility.Visible : Visibility.Collapsed;
+                this.securityBlockedDirectory = item.SecurityDirectory;
                 try {
                     await this.RefreshStateAsync().ConfigureAwait(true);
                 }
@@ -462,6 +467,8 @@ namespace ChillHub.Pages {
         /// <summary>Отражает снимок позиции очереди в тех же контролах, что и локальная закачка.</summary>
         private void ApplyQueueItem(Core.Game.QueueItem item) {
             try {
+                this.SecurityExclusionsBtn.Visibility = item.SecurityBlocked ? Visibility.Visible : Visibility.Collapsed;
+                this.securityBlockedDirectory = item.SecurityDirectory;
                 this.viaQueue = true;
                 if (!this.isBusy) {
                     this.SetBusy(true);
@@ -745,6 +752,8 @@ namespace ChillHub.Pages {
 
         /// <summary>Связывает установку с контролами страницы: вынесенный сценарий сам про них не знает.</summary>
         private GameSyncUi BuildSyncUi() => new GameSyncUi {
+            SetSecurityBlocked = value => this.SecurityExclusionsBtn.Visibility = value ? Visibility.Visible : Visibility.Collapsed,
+            SetSecurityDirectory = value => this.securityBlockedDirectory = value,
             SetStatus = text => this.StatusText.Text = text,
             SetSpeedEta = text => this.SpeedEtaText.Text = text,
             SetFilesSize = text => this.FilesSizeText.Text = text,

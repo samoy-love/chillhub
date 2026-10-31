@@ -20,6 +20,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\ChillHub\ChillHub.csproj" />
+    <!-- The helper embeds the shared theme but links its own UI support types.
+         An alias keeps those types separate from the launcher's namesakes. -->
+    <ProjectReference Include="..\..\ChillHub.SecurityHelper\ChillHub.SecurityHelper.csproj" Aliases="SecurityHelper" />
   </ItemGroup>
   <ItemGroup>
     <!--

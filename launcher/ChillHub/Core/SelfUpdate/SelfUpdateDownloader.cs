@@ -110,6 +110,7 @@ namespace ChillHub.Core.SelfUpdate {
                     ButtonEnabled = false,
                     StatusText = "Запрос манифеста лаунчера...",
                     Indeterminate = true,
+                    SecurityBlocked = false,
                 });
 
                 manifestUrl = $"{this.baseApi()}/manifests/launcher/{remoteVersion}.json";
@@ -123,18 +124,11 @@ namespace ChillHub.Core.SelfUpdate {
                 // A6. Полезная нагрузка и служебные файлы — в РАЗНЫХ подкаталогах.
                 // Раньше это был один путь, из-за чего «остаточное зеркалирование» в апдейтере
                 // копировало filelist.txt / apply-update.log / updater\ прямо в папку установки.
-                var sessionRoot = this.paths.SessionRoot(remoteVersion);
                 var tempRoot = this.paths.PayloadDir(remoteVersion);
                 var workDir = this.paths.WorkDir(remoteVersion);
 
-                // Чистим сессию целиком, чтобы не было нулевых файлов от прошлых попыток
-                try {
-                    if (Directory.Exists(sessionRoot)) {
-                        Directory.Delete(sessionRoot, true);
-                    }
-                }
-                catch {
-                }
+                // Сохраняем проверенные файлы и .part для повторной попытки.
+                // Списки применения ниже всегда перезаписываются по свежему манифесту.
 
                 Directory.CreateDirectory(tempRoot);
                 Directory.CreateDirectory(workDir);
@@ -217,6 +211,7 @@ namespace ChillHub.Core.SelfUpdate {
                     });
                 });
 
+                ReuseDownloadedFiles(plan);
                 await this.sync.ExecuteAsync(plan, prog, CancellationToken.None);
 
                 this.apply(new SelfUpdateUiState { StatusText = "Обновление загружено. Применяем и перезапускаем..." });
@@ -242,6 +237,16 @@ namespace ChillHub.Core.SelfUpdate {
                 }
 
                 return new SelfUpdateDownload { Result = SelfUpdateDownloadResult.ManifestRejected };
+            }
+            catch (Exception ex) when (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                this.apply(new SelfUpdateUiState {
+                    StatusText = ChillHub.Security.SecurityBlock.Describe(ex),
+                    ButtonEnabled = true,
+                    ButtonContent = "Повторить загрузку",
+                    SecurityBlocked = true,
+                });
+                Logging.Logger.Error(ex, "UpdateWindow.SecurityBlocked");
+                return new SelfUpdateDownload { Result = SelfUpdateDownloadResult.Failed };
             }
             catch (InvalidDataException ex) {
                 // Обычно это несоответствие хэшей (sha256/blake3)
@@ -270,6 +275,26 @@ namespace ChillHub.Core.SelfUpdate {
 
                 return new SelfUpdateDownload { Result = SelfUpdateDownloadResult.Failed };
             }
+        }
+
+        internal static void ReuseDownloadedFiles(DiffPlan plan) {
+            var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in plan.Downloads) {
+                var path = Path.GetFullPath(Path.Combine(plan.LocalRoot, file.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                expected.Add(path);
+                expected.Add(path + ".part");
+            }
+            foreach (var path in Directory.EnumerateFiles(plan.LocalRoot, "*", new EnumerationOptions {
+                RecurseSubdirectories = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+            })) {
+                if (!expected.Contains(Path.GetFullPath(path))) { File.Delete(path); }
+            }
+            plan.Downloads.RemoveAll(file => FileHasher.Matches(
+                Path.Combine(plan.LocalRoot, file.RelativePath.Replace('/', Path.DirectorySeparatorChar)),
+                file.Size, file.Sha256, file.Blake3, out _));
+            plan.TotalDownloadBytes = plan.Downloads.Sum(file => file.Size);
+            plan.TotalFilesToDownload = plan.Downloads.Count;
         }
 
         /// <summary>

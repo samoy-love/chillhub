@@ -36,6 +36,8 @@ namespace ChillHub.Pages {
     using static ChillHub.Core.Home.SyncPlanLog;
 
     public partial class HomePage : Page {
+        private string? securityBlockedDirectory;
+        private async void SecurityExclusions_Click(object sender, RoutedEventArgs e) => await Core.SecuritySetup.OpenAsync(this.securityBlockedDirectory);
         internal bool CanShowMissingGames => this.IsLoaded
             && this.FeedbackOverlay.Visibility != Visibility.Visible && !this.isDeleting;
 
@@ -1265,6 +1267,8 @@ namespace ChillHub.Pages {
         /// Предыдущая загрузка отменяется, новая ждёт её завершения.
         /// </summary>
         private async void GameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
+            this.SecurityExclusionsBtn.Visibility = Visibility.Collapsed;
+            this.securityBlockedDirectory = null;
             var gid = this.GetSelectedGameId();
             this.UpdateDiskFreeText(gid);
 
@@ -2706,6 +2710,8 @@ namespace ChillHub.Pages {
                 // Витрина/нижняя панель отражают позицию ВЫБРАННОЙ игры — если это она,
                 // перерисовываем сразу, а не ждём следующего клика/смены выбора.
                 if (string.Equals(this.GetSelectedGameId(), item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                    this.SecurityExclusionsBtn.Visibility = item.SecurityBlocked ? Visibility.Visible : Visibility.Collapsed;
+                    this.securityBlockedDirectory = item.SecurityDirectory;
                     this.UpdateActionButtonState();
                 }
             });
@@ -2826,6 +2832,8 @@ namespace ChillHub.Pages {
                 }
 
                 if (string.Equals(this.GetSelectedGameId(), item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                    this.SecurityExclusionsBtn.Visibility = item.SecurityBlocked ? Visibility.Visible : Visibility.Collapsed;
+                    this.securityBlockedDirectory = item.SecurityDirectory;
                     this.StatusText.Text = done.Status;
                     this.UpdateActionButtonState();
                 }
@@ -3427,6 +3435,7 @@ namespace ChillHub.Pages {
         /// <returns>Задача установки.</returns>
         private async Task<bool> InstallModsToSteamAsync(
             GameInfo game, string title, string steamDir, bool repair = false) {
+            this.SecurityExclusionsBtn.Visibility = Visibility.Collapsed;
             var view = new Core.Game.SyncProgressView();
             var started = DateTime.UtcNow;
 
@@ -3448,10 +3457,13 @@ namespace ChillHub.Pages {
             try {
                 // Отмены у этой операции нет намеренно: прервать её на середине означает
                 // оставить в чужой установке Steam половину модпака.
+                await Core.SecuritySetup.OfferSteamAsync(steamDir).ConfigureAwait(true);
                 var result = await Core.Mods.ModsService.EnsureAsync(
                     game, steamDir, this.BaseApi, this.sync, progress, CancellationToken.None).ConfigureAwait(true);
 
                 var message = Core.Home.SteamModsInstall.DescribeResult(result, title, repair);
+                this.SecurityExclusionsBtn.Visibility = result.SecurityBlocked ? Visibility.Visible : Visibility.Collapsed;
+                this.securityBlockedDirectory = result.SecurityBlocked ? steamDir : null;
                 if (result.Ok) {
                     // Об успехе говорит всплывашка; строку внизу гасим, чтобы панель ушла.
                     this.StatusText.Text = string.Empty;

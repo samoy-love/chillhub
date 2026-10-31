@@ -584,9 +584,30 @@ if ($AppVersion -and $AppVersion.Trim()) {
     Write-Host "Stamping build version: $v" -ForegroundColor Cyan
 }
 
+function Clear-GeneratedPublishDirectory {
+    param([string]$Path, [string]$AllowedRoot)
+    $full = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetFullPath($AllowedRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if (-not $full.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Каталог публикации оказался вне каталога сборки: $full"
+    }
+    for ($node = [IO.DirectoryInfo]::new($full); $null -ne $node; $node = $node.Parent) {
+        if ($node.Exists -and ($node.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Каталог публикации содержит ссылку: $($node.FullName)"
+        }
+    }
+    if (Test-Path -LiteralPath $full) {
+        Write-Host "Clearing generated publish directory: $full"
+        Remove-Item -LiteralPath $full -Recurse -Force
+    }
+}
+
 if ($Publish) {
     Write-Host "[2/3] Publishing self-contained ($Configuration, $Runtime, SelfContained=$SelfContained)..." -ForegroundColor Cyan
     $sc = if ($SelfContained) { "true" } else { "false" }
+    $ProjectDir = Split-Path -Parent $Csproj
+    $PublishDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows/$Runtime/publish"
+    Clear-GeneratedPublishDirectory -Path $PublishDir -AllowedRoot (Join-Path $ProjectDir 'bin')
     & dotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc @versionStamp
     Assert-NativeSuccess "dotnet publish" $LASTEXITCODE
     # Compute publish output path (informational)
@@ -602,9 +623,44 @@ if ($Publish) {
     $BuildOutputDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows"
 }
 
+# Помощник публикуется с тем же рантаймом. Копируется весь его комплект:
+# будущие зависимости тоже должны приезжать через обычное самообновление.
+# Общие библиотеки обязаны совпадать побайтно, иначе сборка остановится.
+if ($Publish) {
+    $securityHelperProject = Join-Path $ProjectDir '..\ChillHub.SecurityHelper\ChillHub.SecurityHelper.csproj'
+    $securityHelperOutput = Join-Path $ProjectDir "obj/security-helper-publish/$Configuration/$Runtime/$sc"
+    Clear-GeneratedPublishDirectory -Path $securityHelperOutput -AllowedRoot (Join-Path $ProjectDir 'obj/security-helper-publish')
+    & dotnet publish $securityHelperProject -c $Configuration -r $Runtime --self-contained $sc -o $securityHelperOutput @versionStamp
+    Assert-NativeSuccess 'dotnet publish SecurityHelper' $LASTEXITCODE
+    $securityHelperRoot = [IO.Path]::GetFullPath($securityHelperOutput)
+    foreach ($helperFile in Get-ChildItem -LiteralPath $securityHelperRoot -File -Recurse) {
+        $relative = [IO.Path]::GetRelativePath($securityHelperRoot, $helperFile.FullName)
+        $destination = Join-Path $BuildOutputDir $relative
+        if (Test-Path -LiteralPath $destination -PathType Leaf) {
+            if ((Get-FileHash -LiteralPath $helperFile.FullName).Hash -ne (Get-FileHash -LiteralPath $destination).Hash) {
+                throw "Лаунчер и помощник собраны с разными версиями общего файла: $relative"
+            }
+        } else {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            Copy-Item -LiteralPath $helperFile.FullName -Destination $destination
+        }
+    }
+}
+
 # A build that "succeeded" but produced no output directory is a failure too.
 if (-not (Test-Path -LiteralPath $BuildOutputDir)) {
     throw "Build output directory not found at '$BuildOutputDir' even though the build reported success."
+}
+
+# Помощник — обязательная часть установки и каждого самообновления.
+# Неполный пакет останавливает сборку до NSIS и загрузки в админку.
+$securityRequiredFiles = @('ChillHub.SecurityHelper.exe', 'ChillHub.SecurityHelper.dll',
+    'ChillHub.SecurityHelper.deps.json', 'ChillHub.SecurityHelper.runtimeconfig.json',
+    'ChillHub.Security.dll', 'System.Management.dll')
+foreach ($securityFile in $securityRequiredFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $BuildOutputDir $securityFile) -PathType Leaf)) {
+        throw "В сборке отсутствует обязательный компонент настройки защиты: $securityFile"
+    }
 }
 
 # A-AOT. Апдейтер, скопированный сюда транзитивно вместе с ChillHub, self-contained
@@ -624,6 +680,14 @@ if ($PackageZip) {
     $zipOutDir = Join-Path (Split-Path $Installer -Parent) "generated_downloads"
     $zipPath = Join-Path $zipOutDir "ChillHub-launcher-payload.zip"
     New-LauncherPayload -SourceDir $BuildOutputDir -OutZip $zipPath
+    $securityArchive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $zipPath))
+    try {
+        foreach ($securityFile in $securityRequiredFiles) {
+            if ($null -eq $securityArchive.GetEntry($securityFile)) {
+                throw "Компонент настройки защиты не попал в пакет обновления: $securityFile"
+            }
+        }
+    } finally { $securityArchive.Dispose() }
 }
 
 if ($SkipInstaller) {
