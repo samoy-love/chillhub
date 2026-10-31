@@ -2037,6 +2037,8 @@ namespace ChillHub.Pages {
                     this.LaunchBtn1.Visibility = Visibility.Collapsed;
                     this.LaunchBtn2.Visibility = Visibility.Collapsed;
                     this.LaunchMenuBtn.Visibility = Visibility.Collapsed;
+                    this.LaunchAvailabilityText.Visibility = Visibility.Collapsed;
+                    this.LaunchAvailabilityText.Text = string.Empty;
                     return;
                 }
 
@@ -2056,7 +2058,8 @@ namespace ChillHub.Pages {
                 var view = Core.Mods.LaunchButtons.Compute(
                     game?.Mods, playMode, steamAllowed, options,
                     Core.Mods.LaunchChoice.Remembered(gid),
-                    target => Core.Game.RunningGames.StateOf(gid, target));
+                    target => Core.Game.RunningGames.StateOf(gid, target),
+                    installMode: mode == ActionMode.Install);
 
                 this.launchBar = view;
                 this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -2064,6 +2067,8 @@ namespace ChillHub.Pages {
                 this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
                 this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
                 this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
+                this.LaunchAvailabilityText.Text = view.AvailabilityText;
+                this.LaunchAvailabilityText.Visibility = view.AvailabilityText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
                 // Подсказка «что запустится» нужна только той «Играть», которая
                 // открывает меню: у кнопок запуска ответ написан прямо на них, а
