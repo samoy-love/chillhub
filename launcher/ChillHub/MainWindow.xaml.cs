@@ -84,6 +84,10 @@ namespace ChillHub {
 
         public MainWindow() {
             this.InitializeComponent();
+            this.Closed += (_, __) => {
+                this.missingGamesWindowClosed = true;
+                this.missingGamesTimer?.Stop();
+            };
 
             // Размер окна: минимальный по умолчанию, свой — если пользователь его менял
             // (см. WindowSizeMemory). Ставится до показа, чтобы окно не прыгало на старте.
@@ -296,6 +300,12 @@ namespace ChillHub {
         /// Значок уже показан (см. конструктор) — трей живёт независимо от видимости окна.
         /// </summary>
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e) {
+            if (this.missingGamesDialog != null && !this.exitRequested) {
+                e.Cancel = true;
+                this.missingGamesDialog.Close();
+                return;
+            }
+
             this.RememberWindowSize();
             try {
                 if (this.exitRequested || !Core.ConfigService.Current.MinimizeToTray) {
@@ -361,6 +371,10 @@ namespace ChillHub {
             // всегда, и выбор мог смениться, пока окно оставалось на экране.
             t.MenuOpening += (s, e) => t.SetCurrentGame(this.CurrentHome?.SelectedGameTitle);
             t.ExitRequested += (s, e) => {
+                if (this.missingGamesDialog?.IsBusy == true) {
+                    return;
+                }
+
                 this.exitRequested = true;
                 t.Hide();
                 Application.Current.Shutdown();
@@ -581,7 +595,7 @@ namespace ChillHub {
                 precheck,
                 this.IsVisible,
                 this.WindowState == WindowState.Minimized,
-                this.CurrentHome?.HasActiveDownloads == true);
+                this.CurrentHome?.HasActiveDownloads == true || this.missingGamesDialog != null);
             if (ready == null) {
                 Core.Logging.Logger.Info(
                     $"Self-update {precheck.Decision.RemoteVersion} найдено, но показывать сейчас некому — отложено до возврата к окну");

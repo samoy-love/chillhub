@@ -44,6 +44,14 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.7.14",
+                Date = "2026-10-31",
+                Changes = new[] {
+                    "Игры, исчезнувшие из каталога, можно удалить при запуске лаунчера.",
+                    "Обновление списка игр больше не сдвигает содержимое окна.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.7.12",
                 Date = "2026-10-27",
                 Changes = new[] {

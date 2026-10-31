@@ -9,6 +9,7 @@
         PreviewKeyDown="MainWindow_PreviewKeyDown"
         Background="{DynamicResource Brush.Background}">
     <Grid>
+    <Grid x:Name="MainContent">
         <Grid.RowDefinitions>
             <RowDefinition Height="56"/>
             <RowDefinition Height="Auto"/>
@@ -313,5 +314,8 @@
             </Grid>
           </Border>
         </Grid>
+    </Grid>
+        <ContentControl x:Name="MissingGamesHost" Visibility="Collapsed"
+                        HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
     </Grid>
 </Window>
