@@ -511,6 +511,8 @@ namespace ChillHub.Core.Game {
                     ReportProgress = (p, _) => this.RaiseProgress(
                         entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes, p.NetworkBytes, p.FilesDownloaded, p.TotalFiles),
                     Confirm = this.confirm,
+                    SetSecurityBlocked = value => { lock (this.gate) { entry.SecurityBlocked = value; } },
+                    SetSecurityDirectory = value => { lock (this.gate) { entry.SecurityDirectory = value; } },
 
                     // Ошибку установки пишут сюда, а не в SetStatus. Пустой колбэк по
                     // умолчанию глотал её целиком: ни строки для игрока, ни записи в журнале.
@@ -659,6 +661,8 @@ namespace ChillHub.Core.Game {
 
         /// <summary>Внутреннее изменяемое состояние позиции — наружу отдаём только снимки <see cref="QueueItem"/>.</summary>
         private sealed class Entry {
+            internal bool SecurityBlocked { get; set; }
+            internal string? SecurityDirectory { get; set; }
             private readonly Func<long> clock;
 
             internal Entry(string gameId, string title, string iconUrl, QueueTaskKind kind, Func<long> clock) {
@@ -826,7 +830,9 @@ namespace ChillHub.Core.Game {
                     this.NetworkBytes,
                     this.WorkBytesPerSecond,
                     this.FilesDone,
-                    this.FilesTotal);
+                    this.FilesTotal,
+                    this.SecurityBlocked,
+                    this.SecurityDirectory);
         }
     }
 }

@@ -213,6 +213,7 @@ SetDatablockOptimize on
 !insertmacro MUI_PAGE_DIRECTORY
 Page Custom SelectGamesDir_Create SelectGamesDir_Leave
 !insertmacro MUI_PAGE_INSTFILES
+Page Custom SecurityPage_Create SecurityPage_Leave
 ; Показ финальной страницы — момент, когда галочку WebView2 можно спрятать
 ; (см. FinishPageShow): страница уже создана, но ещё не показана.
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
@@ -331,6 +332,28 @@ FunctionEnd
 !insertmacro _ENSURE_APP_CLOSED_FN ""
 !insertmacro _ENSURE_APP_CLOSED_FN "un."
 
+; Не заменяем и не удаляем работающий помощник: он может ждать подтверждения
+; или записывать исключения. В отличие от лаунчера, принудительно его не закрываем.
+!macro _ENSURE_SECURITY_CLOSED_FN UN
+Function ${UN}EnsureSecurityClosed
+  Push $0
+security_retry:
+  IfFileExists "$INSTDIR\ChillHub.SecurityHelper.exe" 0 security_done
+  System::Call 'kernel32::CreateFileW(w "$INSTDIR\ChillHub.SecurityHelper.exe", i ${_CH_GENERIC_WRITE}, i 0, p 0, i ${_CH_OPEN_EXISTING}, i 0, p 0) p .r0'
+  ${If} $0 = -1
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+      "Завершите настройку исключений антивируса, закройте её окно и нажмите «Повторить»." \
+      /SD IDCANCEL IDRETRY security_retry
+    Abort "Прервано: настройка защиты ещё открыта."
+  ${EndIf}
+  System::Call 'kernel32::CloseHandle(p r0)'
+security_done:
+  Pop $0
+FunctionEnd
+!macroend
+!insertmacro _ENSURE_SECURITY_CLOSED_FN ""
+!insertmacro _ENSURE_SECURITY_CLOSED_FN "un."
+
 ; Закрывает запущенный лаунчер: сначала по-хорошему, затем принудительно.
 ;
 ; СНАЧАЛА WM_CLOSE, А НЕ СРАЗУ KILL. Лаунчер на закрытии дописывает config.json
@@ -418,6 +441,7 @@ FunctionEnd
 Section "Install" SecInstall
   ; Занятые файлы — до первой записи на диск, а не посреди распаковки.
   Call EnsureAppClosed
+  Call EnsureSecurityClosed
 
   ; Место на диске — тоже до первой записи. Тихая установка страницу выбора
   ; каталога не проходит, поэтому проверка нужна и здесь, а не только там.
@@ -778,6 +802,13 @@ Section "Uninstall"
   ; Работающий лаунчер не даст удалить свой .exe: без этой проверки удаление
   ; «проходило» с занятыми файлами.
   Call un.EnsureAppClosed
+  Call un.EnsureSecurityClosed
+  IfSilent security_cleanup_done
+  IfFileExists "$INSTDIR\ChillHub.SecurityHelper.exe" 0 security_cleanup_done
+  MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "Открыть удаление исключений антивируса, добавленных Chill Hub?$\r$\nЕсли пропустить этот шаг, исключения останутся." IDNO security_cleanup_done
+  ExecWait '"$INSTDIR\ChillHub.SecurityHelper.exe" --remove'
+security_cleanup_done:
+  Call un.EnsureSecurityClosed
 
   ; Remove Start Menu shortcuts (per-user)
   Delete "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk"
@@ -1123,6 +1154,33 @@ FunctionEnd
 ; $WebView2Present заполняется в .onInit. Контрол не просто прячется, но и
 ; снимается: скрытая, но отмеченная галочка всё равно вызвала бы InstallPrereqs
 ; по кнопке «Готово».
+Function SecurityPage_Create
+  IfSilent security_page_skip
+  nsDialogs::Create 1018
+  Pop $0
+  ${NSD_CreateLabel} 0 0 100% 55u "Если антивирус мешает загрузке, можно настроить исключения для лаунчера, его обновлений и выбранной папки игр.$\r$\n$\r$\nЭто необязательный шаг. Исключения распространяются и на будущие файлы и моды."
+  Pop $0
+  ${NSD_CreateButton} 0 65u 100% 20u "Настроить исключения антивируса"
+  Pop $0
+  ${NSD_OnClick} $0 SecurityPage_Open
+  nsDialogs::Show
+  Return
+security_page_skip:
+  Abort
+FunctionEnd
+
+Function SecurityPage_Open
+  Pop $0
+  IfFileExists "$INSTDIR\ChillHub.SecurityHelper.exe" 0 security_helper_missing
+  ExecWait '"$INSTDIR\ChillHub.SecurityHelper.exe" --games "$GAMES_DIR" --updates "$TEMP\ChillHub\SelfUpdate"'
+  Return
+security_helper_missing:
+  MessageBox MB_OK|MB_ICONEXCLAMATION "Помощник не найден. Настройте исключения вручную или переустановите Chill Hub."
+FunctionEnd
+
+Function SecurityPage_Leave
+FunctionEnd
+
 Function FinishPageShow
   ${If} $WebView2Present == 1
     SendMessage $mui.FinishPage.ShowReadme ${BM_SETCHECK} ${BST_UNCHECKED} 0

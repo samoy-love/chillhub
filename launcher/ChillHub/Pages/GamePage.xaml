@@ -378,6 +378,8 @@
 
                           Style="{DynamicResource Style.Button.GhostNeutral}" Click="ShortcutBtn_Click"/>
 
+                  <Button Name="SecurityExclusionsBtn" Content="Настроить исключения антивируса" Visibility="Collapsed"
+                          MinHeight="36" Margin="0,8,0,0" Style="{DynamicResource Style.Button.GhostNeutral}" Click="SecurityExclusions_Click"/>
                   <Button Name="OpenFolderBtn" Content="Открыть папку игры" Height="36" Margin="0,8,0,0"
 
                           HorizontalAlignment="Stretch"

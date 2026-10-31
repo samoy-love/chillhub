@@ -23,6 +23,8 @@ namespace ChillHub {
     /// состояния диалога.
     /// </content>
     public partial class UpdateWindow : Window {
+        private async void SecurityExclusions_Click(object sender, RoutedEventArgs e) => await Core.SecuritySetup.OpenAsync();
+
         private readonly HttpClient http = HttpClientProvider.Shared;
         private readonly ISyncService sync = new SimpleSyncService();
         private readonly SelfUpdatePaths paths = SelfUpdatePaths.Default;
@@ -107,6 +109,9 @@ namespace ChillHub {
         /// оставляла, например, полосу прогресса как есть.
         /// </summary>
         private void ApplyUiState(SelfUpdateUiState state) {
+            if (state.SecurityBlocked.HasValue) {
+                this.SecurityExclusionsBtn.Visibility = state.SecurityBlocked.Value ? Visibility.Visible : Visibility.Collapsed;
+            }
             if (state.StatusText != null) {
                 this.StatusText.Text = state.StatusText;
             }
@@ -305,6 +310,14 @@ namespace ChillHub {
             }
 
             // Применение (создание скрипта, копирование и перезапуск)
+            this.PrimaryBtn.IsEnabled = false;
+            using var securityLease = await Core.SecuritySetup.PrepareForUpdateAsync();
+            if (securityLease == null) {
+                this.StatusText.Text = Core.SecuritySetup.UpdateBusyMessage;
+                this.PrimaryBtn.IsEnabled = true;
+                this.PrimaryBtn.Content = "Повторить обновление";
+                return;
+            }
             var result = this.applier.Apply(this.pendingTempRoot, this.pendingWorkDir, this.remoteVersion, this.stripPrefix);
             if (result == SelfUpdateApplyResult.Started) {
                 // A14: временный каталог нужен работающему апдейтеру — при закрытии окна его не трогаем.

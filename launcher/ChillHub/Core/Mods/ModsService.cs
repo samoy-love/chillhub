@@ -40,7 +40,8 @@ namespace ChillHub.Core.Mods {
         string Version,
         long Downloaded,
         int Removed,
-        string Message) {
+        string Message,
+        bool SecurityBlocked = false) {
         /// <summary>Успешна ли установка.</summary>
         internal bool Ok => this.Outcome is ModsSyncOutcome.UpToDate or ModsSyncOutcome.Installed or ModsSyncOutcome.NoModpack;
     }
@@ -202,6 +203,11 @@ namespace ChillHub.Core.Mods {
             catch (OperationCanceledException) {
                 Logging.Logger.Info("[mods] установка модпака отменена");
                 throw;
+            }
+            catch (Exception ex) when (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                Logging.Logger.Error(ex, "[mods] security blocked");
+                Metrics.MetricsService.Error(ChillHub.Security.SecurityBlock.MetricCode, game.GameId);
+                return new ModsSyncResult(ModsSyncOutcome.Failed, mods.Version, 0, 0, ChillHub.Security.SecurityBlock.Describe(ex), SecurityBlocked: true);
             }
             catch (ManifestValidationException ex) {
                 // Манифест не прошёл проверку — это отказ сервера, а не сбой сети, и

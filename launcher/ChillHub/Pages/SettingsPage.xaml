@@ -146,6 +146,15 @@
         </StackPanel>
       </Border>
 
+      <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+        <StackPanel>
+          <TextBlock Text="Антивирус" Style="{StaticResource Style.SettingsSection}"/>
+          <Button Content="Настроить исключения антивируса" Click="SecurityExclusions_Click"
+                  Style="{DynamicResource Style.Button.GhostNeutral}" HorizontalAlignment="Left" Padding="12,8"/>
+          <TextBlock Name="SecurityPathHint" Text="Если антивирус блокирует файлы, настройте исключения для лаунчера и выбранной папки игр."
+                     Style="{StaticResource Style.SettingsHint}" TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
       <!-- About / diagnostics section -->
       <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,6">
         <StackPanel>

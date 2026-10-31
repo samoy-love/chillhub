@@ -732,6 +732,8 @@ jobs:
       matrix:
         project:
           - launcher/ChillHub
+          - launcher/ChillHub.Security
+          - launcher/ChillHub.SecurityHelper
           - launcher/tests/ChillHub.Tests
           - updater
           - updater/tests/ManifestPreserveCheck
@@ -925,7 +927,7 @@ jobs:
           # launcher/ChillHub/ChillHub.csproj, launcher/tests/ в установщик не
           # входит и ни одного раздаваемого байта не меняет. Взятый целиком, он
           # требовал релиза клиента ради обновления тестового пакета.
-          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
+          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
             echo "PR не трогает ни launcher/updater, ни триггеры полной выкатки — версия клиента ни при чём"
             exit 0
           fi

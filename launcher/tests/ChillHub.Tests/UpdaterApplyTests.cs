@@ -24,6 +24,25 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class UpdaterApplyTests {
+        [Fact]
+        public async Task ПомощникУстанавливаетсяИЗаменяетсяСледующейВерсией() {
+            using var dir = new TempDir();
+            var names = new[] { "ChillHub.SecurityHelper.exe", "ChillHub.SecurityHelper.dll",
+                "ChillHub.SecurityHelper.deps.json", "ChillHub.SecurityHelper.runtimeconfig.json",
+                "ChillHub.Security.dll", "System.Management.dll" };
+            var files = dir.WriteFile("filelist.txt", string.Join("\r\n", names));
+            foreach (var version in new[] { "1.7.13", "1.7.14" }) {
+                foreach (var name in names) { dir.WriteFile("src/" + name, version + name); }
+                var (exit, ctx, _) = await Apply(dir, request => {
+                    request.Files = files;
+                    request.Version = version;
+                });
+                Assert.Equal(0, exit);
+                Assert.Equal("ok", ctx.Outcome);
+                foreach (var name in names) { Assert.Equal(version + name, File.ReadAllText(dir.PathTo("dst/" + name))); }
+            }
+        }
+
         /// <summary>
         /// Базовый сценарий: файлы из списка встают на место, маркер версии
         /// обновляется, исход — «ok». Если это перестанет работать, обновления

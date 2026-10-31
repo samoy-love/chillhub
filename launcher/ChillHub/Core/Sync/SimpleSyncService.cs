@@ -384,6 +384,9 @@ namespace ChillHub.Core.Sync {
                         // Отмену не глушим: иначе отменённая проверка «нашла бы» повреждённый файл
                         throw;
                     }
+                    catch (Exception ex) when (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                        throw new ChillHub.Security.SecurityBlockedException(rel, ex);
+                    }
                     catch {
                     }
                 }
@@ -909,6 +912,9 @@ namespace ChillHub.Core.Sync {
                                                     // на каждый из без малого тысячи файлов модпака — три с
                                                     // половиной минуты и 2,4 ГБ трафика впустую, чтобы прийти к
                                                     // тому же отказу, который был очевиден на первом файле.
+                                                    if (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                                                        throw new ChillHub.Security.SecurityBlockedException(t.RelativePath, ex);
+                                                    }
                                                     if (IsUnrecoverable(ex)) {
                                                         throw new IOException(
                                                             $"Не удалось проверить {t.RelativePath}: {ExceptionText.Describe(ex)}. " +
@@ -1201,6 +1207,9 @@ namespace ChillHub.Core.Sync {
                 return true;
             }
             catch (Exception ex) {
+                if (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                    throw new ChillHub.Security.SecurityBlockedException(t.RelativePath, ex);
+                }
                 ChillHub.Core.Logging.Logger.Warn(
                     $"Не вышло взять '{t.RelativePath}' из '{t.LocalSource}' ({ex.Message}) — качаем из сети");
                 SafeDeleteFile(partPath);
@@ -1275,6 +1284,9 @@ namespace ChillHub.Core.Sync {
             try {
                 File.Move(partPath, dstPath, overwrite: true);
                 return true;
+            }
+            catch (Exception ex) when (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                throw new ChillHub.Security.SecurityBlockedException(rel, ex);
             }
             catch (IOException) {
             }

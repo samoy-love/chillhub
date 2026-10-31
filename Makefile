@@ -160,6 +160,8 @@ lint-dotnet:
 	@- ( cd launcher/ChillHub && dotnet restore && dotnet build --no-restore -c Debug /p:UseAppHost=false )
 	@echo [lint:dotnet] Code style check (dotnet format) — non-blocking
 	@- ( cd launcher/ChillHub && dotnet format --verbosity minimal )
+	@ ( cd launcher/ChillHub.Security && dotnet format --verify-no-changes --verbosity minimal )
+	@ ( cd launcher/ChillHub.SecurityHelper && dotnet format --verify-no-changes --verbosity minimal )
 
 # ============
 # Local run helpers

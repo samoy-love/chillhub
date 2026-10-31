@@ -92,6 +92,9 @@ namespace ChillHub.Core.Game {
     /// не полезет в модальное окно.
     /// </summary>
     internal sealed class GameSyncUi {
+        internal Action<bool> SetSecurityBlocked { get; set; } = _ => { };
+        internal Action<string?> SetSecurityDirectory { get; set; } = _ => { };
+
         /// <summary>Gets or sets вывод строки состояния.</summary>
         internal Action<string> SetStatus { get; set; } = _ => { };
 
@@ -247,6 +250,8 @@ namespace ChillHub.Core.Game {
         /// </para>
         /// </returns>
         internal async Task<bool> RunAsync(GameSyncRequest request, CancellationToken token) {
+            this.ui.SetSecurityBlocked(false);
+            this.ui.SetSecurityDirectory(null);
             var gid = request.GameId;
             var version = request.Version;
 
@@ -302,6 +307,7 @@ namespace ChillHub.Core.Game {
                         forceRehash: request.Kind == SyncKind.Repair)
                         .ConfigureAwait(true);
                     if (!mods.Ok) {
+                        this.ui.SetSecurityBlocked(mods.SecurityBlocked);
                         this.ui.SetStatus(mods.Message);
 
                         // Об исходе отчитываемся: в отличие от ветки «игра запущена»,
@@ -438,6 +444,13 @@ namespace ChillHub.Core.Game {
                 Report(request, plan, "cancel", opStart);
                 return false;
             }
+            catch (Exception ex) when (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                this.ui.SetSecurityBlocked(true);
+                this.ui.ShowUserError(ChillHub.Security.SecurityBlock.Describe(ex), ex, $"GamePage.StartSyncAsync(gid={gid}, version={version})");
+                this.ui.SetSpeedEta(string.Empty);
+                Report(request, plan, "fail", opStart, ChillHub.Security.SecurityBlock.MetricCode);
+                return false;
+            }
             catch (ManifestValidationException ex) {
                 // Манифест отклонён проверкой структуры: опасный путь, дубликат или
                 // запись без хешей. Файлы игры не тронуты — говорим об этом прямо,
@@ -532,6 +545,8 @@ namespace ChillHub.Core.Game {
             }
 
             this.ui.SetStatus(result.Message);
+            this.ui.SetSecurityBlocked(result.SecurityBlocked);
+            this.ui.SetSecurityDirectory(result.SecurityBlocked ? steam.GameDir : null);
 
             // Без кода ошибки — по той же причине, что и у модпака основной копии:
             // событие error об этом отказе уже ушло из ModsService.

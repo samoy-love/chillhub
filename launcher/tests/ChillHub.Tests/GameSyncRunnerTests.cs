@@ -30,13 +30,31 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class GameSyncRunnerTests {
+        [Fact]
+        public async Task БлокировкаАнтивирусомНеПишетВерсиюИВозвращаетОтдельныйКод() {
+            var probe = new UiProbe();
+            var sync = new FakeSync { OnExecute = () => throw new ChillHub.Security.SecurityBlockedException("blocked.dll", new IOException()) };
+            var runner = NewRunner(sync, probe, out var written);
+            var reports = new List<SyncOutcome>();
+            runner.ReportOutcome = reports.Add;
+
+            Assert.False(await runner.RunAsync(Request(), CancellationToken.None));
+
+            Assert.Empty(written);
+            Assert.True(probe.SecurityBlocked);
+            Assert.Contains("blocked.dll", Assert.Single(probe.Errors).Message);
+            var report = Assert.Single(reports);
+            Assert.Equal("fail", report.Result);
+            Assert.Equal(ChillHub.Security.SecurityBlock.MetricCode, report.ErrorCode);
+        }
+
         /// <summary>Успешная операция пишет маркер версии и говорит «Готово».</summary>
         [Fact]
         public async Task УспехПишетМаркерВерсииИСообщаетГотово() {
             var probe = new UiProbe();
             var runner = NewRunner(new FakeSync(), probe, out var written);
 
-            await runner.RunAsync(Request(), CancellationToken.None);
+            Assert.True(await runner.RunAsync(Request(), CancellationToken.None));
 
             Assert.Equal(("game", "1.2.0"), Assert.Single(written));
             Assert.Equal("Готово.", probe.LastStatus);
@@ -596,6 +614,7 @@ namespace ChillHub.Tests {
 
         /// <summary>Экран страницы игры, заменённый на список того, что на нём написали.</summary>
         private sealed class UiProbe {
+            internal bool SecurityBlocked { get; private set; }
             internal List<string> Statuses { get; } = new();
 
             internal List<ShownError> Errors { get; } = new();
@@ -654,6 +673,7 @@ namespace ChillHub.Tests {
             internal string? LastFilesSize { get; private set; }
 
             internal GameSyncUi ToUi() => new GameSyncUi {
+                SetSecurityBlocked = value => this.SecurityBlocked = value,
                 SetStatus = text => this.Statuses.Add(text),
                 SetSpeedEta = text => this.LastSpeedEta = text,
                 SetFilesSize = text => this.LastFilesSize = text,
