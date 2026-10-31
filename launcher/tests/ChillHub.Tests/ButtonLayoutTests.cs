@@ -99,6 +99,56 @@ namespace ChillHub.Tests {
             }
         });
 
+        [Fact]
+        public void GlyphChangesUpdateDrawingAndClearThePreviousFill() => UiThread.Run(() => {
+            var theme = Theme();
+            var button = new Button { Content = "Действие", Style = (Style)theme["Style.Button.Primary"] };
+            var root = Layout(button, theme);
+            foreach (var (glyph, key) in new[] { ("\uE768", "Play"), ("\uE896", "Download"), ("\uE895", "Refresh"), ("\uE72C", "Refresh"), ("\uE711", "Close"), ("\uE916", "Clock"), ("\uE73E", "Check"), (string.Empty, string.Empty) }) {
+                ButtonIcon.ApplyGlyph(button, glyph);
+                button.Foreground = Brushes.Coral;
+                root.UpdateLayout();
+                var path = Part<System.Windows.Shapes.Path>(button, "ButtonIconPath");
+                Assert.Same(key.Length == 0 ? null : theme["Icon." + key], path.Data);
+                Assert.Same(button.Foreground, path.Stroke);
+                Assert.Same(glyph == "\uE768" ? button.Foreground : null, path.Fill);
+            }
+        });
+
+        [Theory]
+        [InlineData(800)]
+        [InlineData(960)]
+        [InlineData(1200)]
+        public void TwoLineLaunchButtonsFitAndStayInsideTheBanner(double width) => UiThread.Run(() => {
+            var page = HeroLayoutTests.LoadPage();
+            var banner = (Border)page.FindName("HeroBanner");
+            ((Button)page.FindName("ActionBtn")).Visibility = Visibility.Collapsed;
+            ((Button)page.FindName("LaunchMenuBtn")).Visibility = Visibility.Visible;
+            foreach (var text in new[] { "Играть с модами", "Установить моды", "Обновить моды", "Восстановить моды", "Установить игру", "Обновить игру", "Запускается…", "Игра запущена" }) {
+                foreach (var index in new[] { 1, 2 }) {
+                    var button = (Button)page.FindName($"LaunchBtn{index}");
+                    button.Visibility = Visibility.Visible;
+                    ((TextBlock)page.FindName($"LaunchBtn{index}Note")).Text = text;
+                    ((TextBlock)page.FindName($"LaunchBtn{index}Title")).Text = index == 1 ? "Steam" : "Пиратка";
+                    ButtonIcon.ApplyGlyph(button, "\uE768");
+                }
+
+                page.Measure(new Size(width, 720));
+                page.Arrange(new Rect(0, 0, width, 720));
+                page.UpdateLayout();
+                foreach (var index in new[] { 1, 2 }) {
+                    var button = (Button)page.FindName($"LaunchBtn{index}");
+                    var pair = Part<StackPanel>(button, "ButtonContent");
+                    var origin = pair.TransformToAncestor(button).Transform(default);
+                    Assert.InRange(Math.Abs(origin.X - (button.ActualWidth - origin.X - pair.ActualWidth)), 0, 1);
+                    Assert.True(pair.ActualHeight <= button.ActualHeight - 2, text);
+                    var bounds = button.TransformToAncestor(banner).TransformBounds(new Rect(button.RenderSize));
+                    Assert.True(bounds.Left >= 0 && bounds.Right <= banner.ActualWidth + 1, text);
+                    Assert.True(bounds.Top >= 0 && bounds.Bottom <= banner.ActualHeight + 1, text);
+                }
+            }
+        });
+
         private static ResourceDictionary Theme() => (ResourceDictionary)Application.LoadComponent(
             new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative));
 
