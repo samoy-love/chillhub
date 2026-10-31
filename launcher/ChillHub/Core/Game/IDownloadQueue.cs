@@ -107,7 +107,9 @@ namespace ChillHub.Core.Game {
         long NetworkBytes = 0,
         double WorkBytesPerSecond = 0,
         int FilesDone = 0,
-        int FilesTotal = 0);
+        int FilesTotal = 0,
+        bool SecurityBlocked = false,
+        string? SecurityDirectory = null);
 
     /// <summary>
     /// Очередь загрузок игр: то, с чем говорит UI. Реализация — деталь (фаза 1 держит всё

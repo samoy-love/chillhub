@@ -21,6 +21,8 @@ namespace ChillHub.Pages {
     /// кнопки «Сохранить» нет — с ней правки терялись у тех, кто уходил «Назад».
     /// </content>
     public partial class SettingsPage : Page {
+        private async void SecurityExclusions_Click(object sender, RoutedEventArgs e) => await Core.SecuritySetup.OpenAsync();
+
         /// <summary>
         /// Пока страница заполняется из конфига, обработчики контролов молчат — иначе
         /// первое же присвоение ползунку записало бы конфиг обратно на диск. Взведён с
@@ -200,6 +202,7 @@ namespace ChillHub.Pages {
                 this.SpeedLimitValueText.Text = SettingsView.FormatSpeedLimit(speed);
             }
 
+            var previousGamesPath = ConfigService.Current.GamesPath;
             var saved = SettingsActions.Save(new SettingsInput {
                 GamesPathText = this.GamesPathBox.Text,
                 DownloadThreads = this.ThreadsSlider.Value,
@@ -215,6 +218,9 @@ namespace ChillHub.Pages {
                 this.GamesPathBox.Text = SettingsView.Build(ConfigService.Current).GamesPath;
             }
 
+            if (!string.Equals(previousGamesPath, ConfigService.Current.GamesPath, StringComparison.OrdinalIgnoreCase)) {
+                this.SecurityPathHint.Text = "Папка игр изменилась. При необходимости настройте исключения для нового пути; старые автоматически не удаляются.";
+            }
             this.ShowSaved();
         }
 

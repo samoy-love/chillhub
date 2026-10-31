@@ -146,6 +146,9 @@ namespace ChillHub.Core.SelfUpdate {
                 // Отмену не глушим: иначе отменённая проверка «подтвердила» бы битый файл.
                 throw;
             }
+            catch (Exception ex) when (ChillHub.Security.SecurityBlock.IsBlocked(ex)) {
+                throw new ChillHub.Security.SecurityBlockedException(f.Path ?? string.Empty, ex);
+            }
             catch (Exception ex) {
                 // Через Describe, а не по Message: у пропавшей СБОРКИ он пуст, и в
                 // журнале стояло «reason=io_error » — двести семьдесят четыре строки,

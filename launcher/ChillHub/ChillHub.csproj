@@ -32,7 +32,7 @@
       Релиз по-прежнему штампует версию явно (-p:Version), а расхождение с этим
       числом валит сборку установщика — тихо протухнуть оно не может.
     -->
-    <Version>1.7.17</Version>
+    <Version>1.7.18</Version>
 
     <!--
       ЯЗЫКИ РЕСУРСНЫХ СБОРОК РАНТАЙМА. Self-contained публикация WPF без этого
@@ -55,6 +55,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\updater\ChillHub.Updater.csproj" />
+    <ProjectReference Include="..\ChillHub.Security\ChillHub.Security.csproj" />
+    <ProjectReference Include="..\ChillHub.SecurityHelper\ChillHub.SecurityHelper.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <Target Name="CopyUpdater" AfterTargets="Build">
     <PropertyGroup>
@@ -63,6 +65,13 @@
     </PropertyGroup>
     <Message Text="Copying ChillHub.Updater.exe from '$(UpdaterExeSrc)' to '$(UpdaterExeDst)'" Importance="low" />
     <Copy SourceFiles="$(UpdaterExeSrc)" DestinationFiles="$(UpdaterExeDst)" SkipUnchangedFiles="true" Condition="Exists('$(UpdaterExeSrc)')" />
+  </Target>
+  <Target Name="CopySecurityHelper" AfterTargets="Build">
+    <ItemGroup>
+      <SecurityHelperFiles Include="$(MSBuildProjectDirectory)\..\ChillHub.SecurityHelper\bin\$(Configuration)\net8.0-windows\$(RuntimeIdentifier)\**\*"
+                           Exclude="$(MSBuildProjectDirectory)\..\ChillHub.SecurityHelper\bin\$(Configuration)\net8.0-windows\$(RuntimeIdentifier)\win-*\**;$(MSBuildProjectDirectory)\..\ChillHub.SecurityHelper\bin\$(Configuration)\net8.0-windows\$(RuntimeIdentifier)\publish\**" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SecurityHelperFiles)" DestinationFiles="@(SecurityHelperFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
   <ItemGroup>
     <!-- Ensure WPF can load the icon via pack URI (Icon=\"Assets/app.ico\") -->

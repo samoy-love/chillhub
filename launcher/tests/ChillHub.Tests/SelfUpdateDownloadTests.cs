@@ -27,6 +27,24 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class SelfUpdateDownloadTests {
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ПомощникПриходитВпервыеИОбновляетсяПовторно(bool installed) {
+            using var stand = new SelfUpdateStand();
+            var files = new[] { "ChillHub.SecurityHelper.exe", "ChillHub.SecurityHelper.dll",
+                "ChillHub.SecurityHelper.deps.json", "ChillHub.SecurityHelper.runtimeconfig.json",
+                "ChillHub.Security.dll", "System.Management.dll" };
+            if (installed) {
+                foreach (var file in files) { stand.Install.WriteFile(file, "previous version"); }
+            }
+            var manifest = SelfUpdateManifest.Of(files.Select(file => SelfUpdateManifest.Different(file, size: 42)).ToArray());
+            var downloader = NewDownloader(stand, new FakeSync(), out _);
+            var plan = downloader.BuildSelfUpdatePlan(manifest, string.Empty, stand.Temp.Root, "https://example.test/content");
+            Assert.Equal(files, plan.Downloads.Select(file => file.RelativePath));
+            Assert.Empty(downloader.BuildDeleteList(manifest, string.Empty));
+        }
+
         /// <summary>В план попадают только реально изменившиеся файлы, а не весь манифест.</summary>
         [Fact]
         public void ВПланПопадаютТолькоИзменившиесяФайлы() {
@@ -254,8 +272,8 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Каталог сессии чистится целиком перед загрузкой: нулевые файлы от прошлой
-        /// оборванной попытки нельзя выдавать за скачанный пакет.
+        /// Посторонние остатки удаляются; готовые файлы и .part из текущего плана
+        /// сохраняются для повторной попытки с проверкой целостности.
         /// </summary>
         [Fact]
         public async Task ОстаткиПрошлойПопыткиУдаляются() {

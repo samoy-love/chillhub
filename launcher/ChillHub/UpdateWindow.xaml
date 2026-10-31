@@ -89,6 +89,8 @@
            загрузкой. Видимостью управляет ApplyUiState. -->
       <ProgressBar x:Name="Progress" Height="14" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"
                    Visibility="Collapsed" Style="{DynamicResource Style.ProgressBar.Rounded}"/>
+      <Button x:Name="SecurityExclusionsBtn" Content="Настроить исключения антивируса" Visibility="Collapsed"
+              Click="SecurityExclusions_Click" Style="{DynamicResource Style.Button.GhostNeutral}" Padding="12,8" Margin="0,0,0,8"/>
       <StackPanel x:Name="DevPanel">
         <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="{DynamicResource Radius.S}" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
           <TextBlock Text="Для разработки можно пропустить проверку. Отметьте флаг ниже и нажмите 'Продолжить'."

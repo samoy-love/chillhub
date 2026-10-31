@@ -1646,6 +1646,8 @@
             <!-- Строка пустая, пока работы нет: словом «Готово» панель отчитывалась о
                  работе, которой не было, и сама же оставалась из-за него на экране. -->
             <TextBlock Name="StatusText" Text="" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis"/>
+            <Button Name="SecurityExclusionsBtn" Content="Настроить исключения антивируса" Visibility="Collapsed"
+                    Click="SecurityExclusions_Click" HorizontalAlignment="Left" Margin="0,6,0,0" Style="{DynamicResource Style.Button.GhostNeutral}"/>
             <ProgressBar Name="UpdateProgress" Height="4" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0"
                          Style="{StaticResource Style.ProgressBar.Rounded}"/>
             <TextBlock Name="SpeedEtaText" Text="" Foreground="{DynamicResource Brush.TextSecondary}" FontSize="11" Margin="0,6,0,0"/>

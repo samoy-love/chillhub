@@ -762,6 +762,15 @@ jobs:
         # that introduced it. Reproduce locally by running `dotnet format`
         # (write mode) in this directory and committing the result.
         run: dotnet format --verify-no-changes --verbosity minimal
+      # Новые компоненты входят в существующую обязательную проверку лаунчера:
+      # список защищающих main задач остаётся прежним, охват растёт.
+      - name: Security components code style
+        if: matrix.project == 'launcher/ChillHub'
+        env:
+          EnableWindowsTargeting: 'true'
+        run: |
+          dotnet format launcher/ChillHub.Security --verify-no-changes --verbosity minimal
+          dotnet format launcher/ChillHub.SecurityHelper --verify-no-changes --verbosity minimal
 
   installer-windows:
     name: Installer (NSIS)
@@ -925,7 +934,7 @@ jobs:
           # launcher/ChillHub/ChillHub.csproj, launcher/tests/ в установщик не
           # входит и ни одного раздаваемого байта не меняет. Взятый целиком, он
           # требовал релиза клиента ради обновления тестового пакета.
-          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
+          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
             echo "PR не трогает ни launcher/updater, ни триггеры полной выкатки — версия клиента ни при чём"
             exit 0
           fi
