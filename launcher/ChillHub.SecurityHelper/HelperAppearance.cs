@@ -18,7 +18,7 @@ namespace ChillHub.SecurityHelper {
         }
 
         internal static Border Card(UIElement content) {
-            var card = new Border { Child = content, Padding = new Thickness(18), Margin = new Thickness(0, 0, 0, 14) };
+            var card = new Border { Child = content, Padding = new Thickness(16), Margin = new Thickness(0, 0, 0, 12) };
             card.SetResourceReference(FrameworkElement.StyleProperty, "Style.Card");
             return card;
         }
@@ -30,7 +30,7 @@ namespace ChillHub.SecurityHelper {
         }
 
         internal static bool Confirm(string[] paths, bool removing) {
-            var window = new Window { Width = 660, MaxHeight = 760, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize };
+            var window = new Window { Width = 660, MaxHeight = Math.Min(760, SystemParameters.WorkArea.Height - 48), SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize };
             Apply(window, "подтверждение настройки защиты");
             var content = new StackPanel { Margin = new Thickness(24) };
             window.Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -40,8 +40,8 @@ namespace ChillHub.SecurityHelper {
             content.Children.Add(description);
             content.Children.Add(Card(Text(string.Join("\n\n", paths), "Brush.Text")));
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            var cancel = new Button { Content = "Отмена", IsCancel = true, IsDefault = true, Padding = new Thickness(18, 10, 18, 10), Margin = new Thickness(0, 0, 10, 0) };
-            var confirm = new Button { Content = removing ? "Удалить исключения" : "Добавить исключения", Padding = new Thickness(18, 10, 18, 10) };
+            var cancel = new Button { Content = "Отмена", MinWidth = 110, MinHeight = 38, IsCancel = true, IsDefault = true, Padding = new Thickness(18, 10, 18, 10), Margin = new Thickness(0, 0, 10, 0) };
+            var confirm = new Button { Content = removing ? "Удалить исключения" : "Добавить исключения", MinWidth = 180, MinHeight = 38, Padding = new Thickness(18, 10, 18, 10) };
             confirm.SetResourceReference(FrameworkElement.StyleProperty, "Style.Button.Primary");
             confirm.Click += (_, _) => window.DialogResult = true;
             buttons.Children.Add(cancel); buttons.Children.Add(confirm); content.Children.Add(buttons);

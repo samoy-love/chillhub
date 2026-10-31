@@ -782,6 +782,50 @@
     <Setter Property="TextWrapping" Value="NoWrap"/>
   </Style>
 
+  <!-- Скрытые подробности: те же поверхности, фокус и радиусы, что у кнопок. -->
+  <Style x:Key="Style.Expander.Compact" TargetType="Expander">
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Expander">
+          <StackPanel>
+            <ToggleButton x:Name="Toggle" HorizontalAlignment="Left" MinHeight="32"
+                          Foreground="{TemplateBinding Foreground}"
+                          FocusVisualStyle="{StaticResource Style.FocusVisual}"
+                          IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+              <ToggleButton.Template>
+                <ControlTemplate TargetType="ToggleButton">
+                  <Border x:Name="HeaderBorder" Background="Transparent" Padding="4,6,8,6"
+                          CornerRadius="{StaticResource Radius.M}">
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock x:Name="Arrow" Text="›" Width="18" Foreground="{TemplateBinding Foreground}"/>
+                      <ContentPresenter VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Border>
+                  <ControlTemplate.Triggers>
+                    <Trigger Property="IsChecked" Value="True">
+                      <Setter TargetName="Arrow" Property="Text" Value="⌄"/>
+                    </Trigger>
+                    <Trigger Property="IsMouseOver" Value="True">
+                      <Setter TargetName="HeaderBorder" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+                    </Trigger>
+                  </ControlTemplate.Triggers>
+                </ControlTemplate>
+              </ToggleButton.Template>
+              <ContentPresenter ContentSource="Header"/>
+            </ToggleButton>
+            <ContentPresenter x:Name="Body" Visibility="Collapsed"/>
+          </StackPanel>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsExpanded" Value="True">
+              <Setter TargetName="Body" Property="Visibility" Value="Visible"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- TextBox / ComboBox / ListBox -->
   <Style TargetType="TextBox">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>

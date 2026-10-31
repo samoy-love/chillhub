@@ -732,8 +732,6 @@ jobs:
       matrix:
         project:
           - launcher/ChillHub
-          - launcher/ChillHub.Security
-          - launcher/ChillHub.SecurityHelper
           - launcher/tests/ChillHub.Tests
           - updater
           - updater/tests/ManifestPreserveCheck
@@ -764,6 +762,15 @@ jobs:
         # that introduced it. Reproduce locally by running `dotnet format`
         # (write mode) in this directory and committing the result.
         run: dotnet format --verify-no-changes --verbosity minimal
+      # Новые компоненты входят в существующую обязательную проверку лаунчера:
+      # список защищающих main задач остаётся прежним, охват растёт.
+      - name: Security components code style
+        if: matrix.project == 'launcher/ChillHub'
+        env:
+          EnableWindowsTargeting: 'true'
+        run: |
+          dotnet format launcher/ChillHub.Security --verify-no-changes --verbosity minimal
+          dotnet format launcher/ChillHub.SecurityHelper --verify-no-changes --verbosity minimal
 
   installer-windows:
     name: Installer (NSIS)
