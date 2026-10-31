@@ -338,6 +338,9 @@ namespace ChillHub.Pages {
 
             this.InitializeComponent();
 
+            this.FeedbackButtonText.Text = FeedbackText.Button;
+            this.FeedbackBtn.ToolTip = FeedbackText.ButtonHint;
+
             // Самообновление обрабатывается отдельным окном UpdateWindow до показа MainWindow
             if (startServices) {
                 _ = this.StartupAsync();

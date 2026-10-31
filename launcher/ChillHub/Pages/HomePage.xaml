@@ -990,9 +990,8 @@
                     Background="Transparent"
                     BorderBrush="{DynamicResource Brush.Border}"
                     BorderThickness="1"
-                    Foreground="{DynamicResource Brush.TextSecondary}"
-                    ToolTip="Поделиться идеей или сообщить о проблеме">
-              <TextBlock Text="Поделиться идеей" FontSize="12" HorizontalAlignment="Center"/>
+                    Foreground="{DynamicResource Brush.TextSecondary}">
+              <TextBlock x:Name="FeedbackButtonText" FontSize="12" HorizontalAlignment="Center"/>
             </Button>
           </StackPanel>
         </Grid>
