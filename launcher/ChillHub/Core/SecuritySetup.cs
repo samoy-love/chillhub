@@ -46,7 +46,7 @@ namespace ChillHub.Core {
             }
             catch (Exception ex) {
                 Logging.Logger.Warn("SecuritySetup: " + ex.Message);
-                MessageBox.Show(ex.Message, "Исключения антивируса", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(ex is FileNotFoundException ? "Помощник отсутствует. Переустановите Chill Hub." : SecuritySetupText.OpenFailed, "Исключения антивируса", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -62,7 +62,7 @@ namespace ChillHub.Core {
                     }
                 });
                 if (!offer) { return; }
-                if (MessageBox.Show("Моды будут установлены в папку игры Steam:\n" + path + "\n\nОткрыть настройку исключений антивируса? Этот шаг можно пропустить.", "Установка модов", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes) {
+                if (MessageBox.Show("Для модов Steam можно отдельно настроить антивирус. Открыть настройку сейчас?", "Установка модов", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes) {
                     await OpenAsync(path).ConfigureAwait(true);
                 }
             }
