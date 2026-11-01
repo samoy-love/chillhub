@@ -232,6 +232,8 @@
          поводы: первое закрывается кнопкой, второе пересборкой. */
       staged: isStaged(String(built.version || ''), String(r.active || '')),
       behind: updates.some((u) => u && !u.deprecated),
+      checking: Boolean(r.checking),
+      updateError: String(r.updateError || ''),
       deprecated: updates.some((u) => u && u.deprecated),
       latest: String((updates[0] && updates[0].latest) || ''),
       latestAt: '',
