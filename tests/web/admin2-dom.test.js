@@ -135,6 +135,20 @@ test('холодная проверка не прячет сборки и сам
   }
 });
 
+test('кнопка обновления перечитывает закончившуюся ошибкой проверку', async (t) => {
+  const response = { gameId: 'repo', updateError: 'Не удалось проверить обновления модов',
+    items: [{ version: 'Team-Pack-1.0.0', displayName: 'Мой пакет' }] };
+  const { window, calls } = await boot({ 'mods/list': response });
+  t.after(() => window.close());
+  assert.match(window.document.body.textContent, /Не удалось проверить обновления модов/);
+  response.updateError = '';
+  response.updates = [{ version: 'Team-Pack-1.0.0', namespace: 'Team', name: 'Pack', latest: '3.0.0' }];
+  const before = calls.filter((c) => c.url.includes('mods/list')).length;
+  window.document.querySelector('[data-refresh]').click();
+  assert.ok(await until(() => /3\.0\.0/.test(window.document.body.textContent)), 'панель сохранила старую ошибку');
+  assert.ok(calls.filter((c) => c.url.includes('mods/list')).length > before, 'нового запроса не было');
+});
+
 /** Ждёт, пока в журнале появится запрос, подходящий под условие. */
 async function until(fn, tries = 60) {
   for (let i = 0; i < tries; i++) {
