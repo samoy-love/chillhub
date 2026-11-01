@@ -131,6 +131,9 @@ func (h *Handlers) modsSummaryCached(ctx context.Context, force, wait bool) []Mo
 		// готовое из кеша пакетов: иначе «обновить» отвечало бы тем же
 		// снимком, ради обхода которого его и нажали.
 		h.pkgs.forget()
+		h.sum.mu.Lock()
+		h.sum.last = nil
+		h.sum.mu.Unlock()
 	}
 	if !force {
 		h.sum.mu.Lock()

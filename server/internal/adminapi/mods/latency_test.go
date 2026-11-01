@@ -30,10 +30,21 @@ func TestColdPanelDoesNotWaitForThunderstore(t *testing.T) {
 		}
 	}()
 	h.builder.Client = NewClient(srv.Client()).WithBases(srv.URL, srv.URL).WithInterval(time.Millisecond)
+	// A forced refresh must also invalidate the assembled summary: otherwise
+	// the next poll would return that old summary and stop checking early.
+	h.sum.last = []ModsGameSummary{{GameID: "lethal-company", Latest: "old"}}
+	h.sum.at = time.Now()
 
-	for _, handler := range []http.HandlerFunc{h.SummaryHandler, h.List} {
+	for _, tc := range []struct {
+		handler http.HandlerFunc
+		query   string
+	}{
+		{h.SummaryHandler, "force=1"},
+		{h.List, "gameId=lethal-company"},
+		{h.SummaryHandler, ""},
+	} {
 		done := make(chan *httptest.ResponseRecorder, 1)
-		go func() { done <- doGet(t, handler, "gameId=lethal-company") }()
+		go func() { done <- doGet(t, tc.handler, tc.query) }()
 		select {
 		case res := <-done:
 			var state struct {
