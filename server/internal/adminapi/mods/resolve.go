@@ -71,14 +71,14 @@ func (r *Resolution) TotalPackages() int { return len(r.Packages) }
 // Two kinds of package are dropped from the tree on top of that; resolveFrom
 // explains both.
 func (c *Client) Resolve(ctx context.Context, eco *Ecosystem, root string) (*Resolution, error) {
-	return c.resolveFrom(ctx, eco, []string{root}, nil, nil)
+	return c.resolveFrom(ctx, eco, []string{root}, nil, nil, "")
 }
 
 // ResolveList walks the tree of an explicit list of pinned packages. This is
 // how an imported r2modman profile is turned into a modpack: the profile names
 // every mod it installed, but not the libraries those mods pull in.
 func (c *Client) ResolveList(ctx context.Context, eco *Ecosystem, roots []string) (*Resolution, error) {
-	return c.resolveFrom(ctx, eco, roots, nil, nil)
+	return c.resolveFrom(ctx, eco, roots, nil, nil, "")
 }
 
 // ResolveProgress is called once per package version read, with the running
@@ -94,16 +94,16 @@ type ResolveProgress func(fetched int, dependency string)
 // progress callback that minute reaches the operator as a frozen panel — which
 // is exactly how the first version of this was reported as a hang.
 func (c *Client) ResolveListWith(ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress) (*Resolution, error) {
-	return c.resolveFrom(ctx, eco, roots, prog, nil)
+	return c.resolveFrom(ctx, eco, roots, prog, nil, "")
 }
 
 // ResolveListWithIndex is ResolveListWith that answers from a community index
-// first. Anything the index does not hold — a dependency published in another
-// community — is still fetched one by one.
+// first. Missing versions of a listed package are fetched individually.
+// Builders must use ResolveListInCommunity to retain the community on failure.
 func (c *Client) ResolveListWithIndex(
 	ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress, idx *CommunityIndex,
 ) (*Resolution, error) {
-	return c.resolveFrom(ctx, eco, roots, prog, idx)
+	return c.resolveFrom(ctx, eco, roots, prog, idx, idx.Community())
 }
 
 // ЧТО ИМЕННО НЕ ПОПАДАЕТ В ДЕРЕВО И ОТКУДА ЭТО ИЗВЕСТНО.
@@ -130,7 +130,7 @@ func (c *Client) ResolveListWithIndex(
 // выпавший из сборки без следа, — ровно тот случай, ради которого заведено
 // поле Missing.
 func (c *Client) resolveFrom(
-	ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress, idx *CommunityIndex,
+	ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress, idx *CommunityIndex, community string,
 ) (*Resolution, error) {
 	if len(roots) == 0 {
 		return nil, errors.New("mods: nothing to resolve")
@@ -152,9 +152,8 @@ func (c *Client) resolveFrom(
 	// Чужой пакет уходит вместе со своим поддеревом: раз его самого в сборке
 	// нет, то и то, что нужно было ему одному, в ней не нужно.
 	//
-	// Корни исключены: их назвал оператор. Правило целиком включается только
-	// когда индекс есть, — без него список сообщества неизвестен, и отбирать
-	// не по чему.
+	// Корни исключены: их назвал оператор. Без индекса принадлежность каждой
+	// зависимости проверяется отдельной карточкой пакета в этом сообществе.
 	confine := idx != nil && idx.Len() > 0
 
 	var walked int
@@ -171,7 +170,11 @@ func (c *Client) resolveFrom(
 			frontier = kept
 		}
 
-		fetched, missing, err := c.fetchLevel(ctx, frontier, prog, &walked, idx)
+		fallbackCommunity := ""
+		if !confine && depth > 0 {
+			fallbackCommunity = community
+		}
+		fetched, missing, foreign, err := c.fetchLevel(ctx, frontier, prog, &walked, idx, fallbackCommunity)
 		if err != nil {
 			return nil, err
 		}
@@ -179,6 +182,7 @@ func (c *Client) resolveFrom(
 			return nil, ctx.Err()
 		}
 		res.Missing = append(res.Missing, missing...)
+		res.Foreign = append(res.Foreign, foreign...)
 
 		var next []string
 		for _, v := range fetched {
@@ -263,12 +267,13 @@ func dedupeDeps(deps []string, seen map[string]bool) []string {
 // Measured, not hypothetical: resolving LethalReloaded without pacing lost 59
 // of 151 packages to transient errors.
 func (c *Client) fetchLevel(
-	ctx context.Context, deps []string, prog ResolveProgress, walked *int, idx *CommunityIndex,
-) ([]*PackageVersion, []string, error) {
+	ctx context.Context, deps []string, prog ResolveProgress, walked *int, idx *CommunityIndex, community string,
+) ([]*PackageVersion, []string, []string, error) {
 	type slot struct {
-		v   *PackageVersion
-		dep string
-		err error
+		v       *PackageVersion
+		dep     string
+		err     error
+		foreign bool
 	}
 	results := make([]slot, len(deps))
 
@@ -301,8 +306,13 @@ func (c *Client) fetchLevel(
 		wg.Add(1)
 		go func(i int, dep string) {
 			defer wg.Done()
-			v, err := c.GetDependency(ctx, dep)
-			results[i] = slot{v: v, dep: dep, err: err}
+			if community != "" {
+				v, foreign, err := c.getCommunityDependency(ctx, community, dep)
+				results[i] = slot{v: v, dep: dep, err: err, foreign: foreign}
+			} else {
+				v, err := c.GetDependency(ctx, dep)
+				results[i] = slot{v: v, dep: dep, err: err}
+			}
 			if prog == nil {
 				return
 			}
@@ -317,15 +327,18 @@ func (c *Client) fetchLevel(
 
 	var out []*PackageVersion
 	var missing []string
+	var foreign []string
 	for _, r := range results {
 		switch {
+		case r.foreign:
+			foreign = append(foreign, r.dep)
 		case r.err == nil && r.v != nil:
 			out = append(out, r.v)
 		case errors.Is(r.err, ErrNotFound):
 			missing = append(missing, r.dep)
 		case r.err != nil:
-			return nil, nil, fmt.Errorf("mods: resolving %s: %w", r.dep, r.err)
+			return nil, nil, nil, fmt.Errorf("mods: resolving %s: %w", r.dep, r.err)
 		}
 	}
-	return out, missing, nil
+	return out, missing, foreign, nil
 }

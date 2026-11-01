@@ -43,7 +43,8 @@ type fakeStore struct {
 	// community — полные имена версий, которые издаёт сообщество игры. Пусто
 	// (обычный случай в этих тестах) — списка нет вовсе, и сборка идёт прежним
 	// путём, по одному пакету через общий API.
-	community map[string]bool
+	community   map[string]bool
+	indexStatus int
 
 	// cdnDenied повторяет настоящую поломку: имя объекта в хранилище не всегда
 	// выводится из полного имени пакета, и угаданный адрес отвечает 403.
@@ -155,17 +156,17 @@ func newFakeStore(t *testing.T) *fakeStore {
 		}})
 	})
 	mux.HandleFunc("/api/cyberstorm/listing/", func(w http.ResponseWriter, r *http.Request) {
-		fs.lastListing = r.URL.Query().Encode()
-		_ = json.NewEncoder(w).Encode(CatalogPage{
-			Count:   1,
-			Results: []CatalogEntry{{Namespace: "Team", Name: "Pack", Downloads: 100}},
-		})
+		fs.serveListing(t, w, r)
 	})
 
 	// Список пакетов сообщества: тот самый ответ, по которому резолвер решает,
 	// издаёт ли игра пакет вообще. Пока никто не назвал состав сообщества, его
-	// нет — и это ровно тот случай, когда правило «чужого не берём» выключено.
+	// нет — принадлежность проверяется по отдельным карточкам сообщества.
 	mux.HandleFunc("/c/", func(w http.ResponseWriter, r *http.Request) {
+		if fs.indexStatus != 0 {
+			w.WriteHeader(fs.indexStatus)
+			return
+		}
 		if serveIndexLinks(w, r) {
 			return
 		}
@@ -224,6 +225,37 @@ func newFakeStore(t *testing.T) *fakeStore {
 	fs.baseURL = fs.URL
 	t.Cleanup(fs.Close)
 	return fs
+}
+
+func (fs *fakeStore) serveListing(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/cyberstorm/listing/"), "/"), "/")
+	if len(parts) == 3 {
+		if len(fs.community) > 0 {
+			found := false
+			for full := range fs.community {
+				ns, name, _, _ := SplitDependency(full)
+				found = found || (ns == parts[1] && name == parts[2])
+			}
+			if !found {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		// With no explicit listing, fixtures assume all named packages
+		// belong here; their pinned versions can still be missing.
+		if err := json.NewEncoder(w).Encode(communityListingIdentity{parts[0], parts[1], parts[2]}); err != nil {
+			t.Error(err)
+		}
+		return
+	}
+	fs.lastListing = r.URL.Query().Encode()
+	if err := json.NewEncoder(w).Encode(CatalogPage{
+		Count:   1,
+		Results: []CatalogEntry{{Namespace: "Team", Name: "Pack", Downloads: 100}},
+	}); err != nil {
+		t.Error(err)
+	}
 }
 
 // count увеличивает счётчик под замком: скачивание идёт в несколько потоков.

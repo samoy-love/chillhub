@@ -338,7 +338,7 @@ func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Pla
 		}
 	}
 
-	res, err := b.Client.ResolveListWithIndex(ctx, eco, roots, prog, idx)
+	res, err := b.Client.ResolveListInCommunity(ctx, eco, roots, prog, req.EcosystemGame, idx)
 	if err != nil {
 		return nil, err
 	}
