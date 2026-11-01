@@ -73,7 +73,10 @@ func newResolveEnv(t *testing.T, versions map[string][]string, community string)
 		})
 	})
 	mux.HandleFunc("/c/", func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/api/v1/package/") {
+		if serveIndexLinks(w, r) {
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/package-listing-chunk/") {
 			http.NotFound(w, r)
 			return
 		}

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// communityListing is the shape of /c/{slug}/api/v1/package/, cut to the fields
+// communityListing is the shape of /c/{slug}/api/v1/package-listing-chunk/, cut to the fields
 // that matter: two packages, one of them owned by a team whose name contains a
 // hyphen.
 const communityListing = `[
@@ -31,7 +31,10 @@ func indexServer(t *testing.T, body string, status int) (*Client, *int) {
 	t.Helper()
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/api/v1/package/") {
+		if serveIndexLinks(w, r) {
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/package-listing-chunk/") {
 			http.NotFound(w, r)
 			return
 		}

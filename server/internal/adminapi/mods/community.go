@@ -1,67 +1,27 @@
 package mods
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 )
 
-// ОДИН ЗАПРОС ВМЕСТО ПОЛУТОРА СОТЕН.
-//
-// Разбор состава модпака — это обход дерева зависимостей, и до сих пор каждый
-// его узел стоил отдельного запроса к API. Клиент держит себя примерно на трёх
-// запросах в секунду (иначе Thunderstore отвечает 429), поэтому LethalReloaded
-// со своими 149 зависимостями разбирался около пятидесяти секунд, а следом ещё
-// столько же уходило на опрос размеров архивов.
-//
-// У Thunderstore есть адрес, отдающий ВСЕ пакеты сообщества разом:
-//
-//	https://thunderstore.io/c/{slug}/api/v1/package/
-//
-// Для lethal-company это 34.5 МБ, 50 568 пакетов, 191 915 версий — и приходит
-// оно за секунду. В каждой версии лежит ровно то, ради чего делались все те
-// запросы: список зависимостей, адрес архива и его размер. Проверено на живом
-// модпаке: 149 прямых зависимостей из 149 нашлись в этом ответе.
-//
-// ЭТО ЖЕ ЧИНИТ И РАЗБОР ИМЁН. В строке «swuff-star-ConfigurableCrafting-1.0.0»
-// нельзя угадать, где кончается пространство имён и начинается имя мода:
-// дефисы есть и там, и там. Индекс избавляет от догадки вовсе — он найден по
-// полному имени версии, а пространство имён и имя лежат в нём отдельными
-// полями.
-//
-// Индекс НЕ обязателен: чего в нём нет (зависимость из другого сообщества),
-// то по-прежнему спрашивается поштучно. Поэтому его неудача — не отказ сборки,
-// а возврат к прежней скорости.
-
+// The community endpoint redirects to a gzip blob listing chunk URLs. Each
+// chunk contains the former v1 package array. A failed chunk must never leave
+// a partial index in the cache: the resolver uses it to exclude foreign mods.
 const (
-	// maxCommunityIndexBytes bounds the listing AFTER decompression.
-	//
-	// Мера, а не догадка: lethal-company приезжает по сети как 34.5 МБ gzip и
-	// разворачивается в 327 МБ JSON. Прежний потолок в 256 МБ резал поток
-	// посередине, и разбор падал с «unexpected EOF» — то есть индекс не работал
-	// вовсе на самом большом сообществе, ради которого и затевался.
-	//
-	// Гигабайт оставлен не «на всякий случай»: он останавливает бесконечный
-	// поток, а не большой ответ. Само тело при этом не держится в памяти —
-	// декодер идёт по нему потоком.
 	maxCommunityIndexBytes = 1 << 30
-
-	// communityIndexTTL is how long a built index is reused.
-	//
-	// Версии на Thunderstore неизменны, меняется только состав: между сборками
-	// список может пополниться, и через час его стоит перечитать. Внутри одной
-	// сессии оператора — «собрать, посмотреть дифф, собрать соседний пак» —
-	// перечитывать 327 МБ на каждую сборку незачем.
-	communityIndexTTL = time.Hour
-
-	// communityIndexTimeout bounds the whole download. It is one request, but a
-	// big one, and the default request timeout is sized for small documents.
-	communityIndexTimeout = 3 * time.Minute
+	maxCommunityChunkBytes = 64 << 20
+	maxCommunityLinksBytes = 1 << 20
+	maxCommunityChunks     = 2048
+	communityIndexTTL      = time.Hour
+	communityIndexTimeout  = 3 * time.Minute
 )
 
 // IndexedVersion is what the community listing knows about one published
@@ -167,11 +127,8 @@ type communityPackage struct {
 	} `json:"versions"`
 }
 
-// FetchCommunityIndex downloads a community's whole package listing.
-//
-// The body is decoded as a stream rather than read into memory first: at 34 MB
-// the difference between "one buffer" and "one buffer plus the parsed result"
-// is real, and there is no reason to hold the raw bytes at all.
+// FetchCommunityIndex reads every chunk before publishing the new index.
+// Limits apply after decompression, both per chunk and across the whole index.
 func (c *Client) FetchCommunityIndex(ctx context.Context, community string) (*CommunityIndex, error) {
 	if !safeCommunity(community) {
 		return nil, fmt.Errorf("mods: unsafe community slug %q", community)
@@ -179,51 +136,58 @@ func (c *Client) FetchCommunityIndex(ctx context.Context, community string) (*Co
 	if idx := c.cachedIndex(community); idx != nil {
 		return idx, nil
 	}
-
-	release, err := c.acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	reqCtx, cancel := context.WithTimeout(ctx, communityIndexTimeout)
+	ctx, cancel := context.WithTimeout(ctx, communityIndexTimeout)
 	defer cancel()
-
-	url := fmt.Sprintf("%s/c/%s/api/v1/package/", c.apiBase, community)
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	endpoint := fmt.Sprintf("%s/c/%s/api/v1/package-listing-index/", c.apiBase, community)
+	data, err := c.fetchIndexBlob(ctx, endpoint, maxCommunityLinksBytes)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
+	var links []string
+	if err := json.Unmarshal(data, &links); err != nil {
+		return nil, fmt.Errorf("mods: decode index links: %w", err)
+	}
+	if len(links) == 0 || len(links) > maxCommunityChunks {
+		return nil, fmt.Errorf("mods: invalid index chunk count: %d", len(links))
+	}
+	// Validate the complete list before following even its first URL.
+	seen := make(map[string]bool, len(links))
+	for _, link := range links {
+		if !c.allowedIndexURL(link) || seen[link] {
+			return nil, fmt.Errorf("mods: invalid or duplicate index chunk URL %q", link)
+		}
+		seen[link] = true
+	}
+	idx := &CommunityIndex{community: community, versions: make(map[string]IndexedVersion, 1<<16), packages: make(map[string]bool, 1<<13)}
+	remaining := int64(maxCommunityIndexBytes)
+	for _, link := range links {
+		data, err := c.fetchIndexBlob(ctx, link, min(int64(maxCommunityChunkBytes), remaining))
+		if err != nil {
+			return nil, err
+		}
+		remaining -= int64(len(data))
+		if err := idx.readChunk(data); err != nil {
+			return nil, fmt.Errorf("mods: community index %s: %w", community, err)
+		}
+	}
+	log.Printf("[mods] индекс сообщества %s: %d частей, %d пакетов, %d версий", community, len(links), len(idx.packages), len(idx.versions))
+	c.rememberIndex(idx)
+	return idx, nil
+}
 
-	res, err := c.http.Do(req)
+func (i *CommunityIndex) readChunk(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	token, err := dec.Token()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer func() { _ = res.Body.Close() }()
-
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("mods: community index %s: unexpected status %d", community, res.StatusCode)
-	}
-
-	idx := &CommunityIndex{
-		community: community,
-		versions:  make(map[string]IndexedVersion, 1<<16),
-		packages:  make(map[string]bool, 1<<13),
-	}
-	dec := json.NewDecoder(io.LimitReader(res.Body, maxCommunityIndexBytes))
-
-	// Открывающая скобка массива читается отдельно, дальше пакеты идут по
-	// одному: держать в памяти сразу пятьдесят тысяч разобранных пакетов
-	// незачем, нужны только их версии.
-	if _, err := dec.Token(); err != nil {
-		return nil, fmt.Errorf("mods: community index %s: %w", community, err)
+	if token != json.Delim('[') {
+		return errors.New("mods: index chunk must be an array")
 	}
 	for dec.More() {
 		var p communityPackage
 		if err := dec.Decode(&p); err != nil {
-			return nil, fmt.Errorf("mods: community index %s: %w", community, err)
+			return err
 		}
 		for _, v := range p.Versions {
 			if v.FullName == "" {
@@ -237,23 +201,22 @@ func (c *Client) FetchCommunityIndex(ctx context.Context, community string) (*Co
 			if name == "" {
 				name = p.Name
 			}
-			idx.versions[strings.ToLower(v.FullName)] = IndexedVersion{
-				Namespace:    ns,
-				Name:         name,
-				Version:      v.VersionNum,
-				FullName:     v.FullName,
-				Dependencies: v.Dependencies,
-				DownloadURL:  v.DownloadURL,
-				FileSize:     v.FileSize,
-			}
-			idx.packages[PackageKey(ns, name)] = true
+			i.versions[strings.ToLower(v.FullName)] = IndexedVersion{Namespace: ns, Name: name, Version: v.VersionNum, FullName: v.FullName, Dependencies: v.Dependencies, DownloadURL: v.DownloadURL, FileSize: v.FileSize}
+			i.packages[PackageKey(ns, name)] = true
 		}
 	}
-
-	log.Printf("[mods] индекс сообщества %s: %d пакетов, %d версий",
-		community, len(idx.packages), len(idx.versions))
-	c.rememberIndex(idx)
-	return idx, nil
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	// Reading to EOF also rejects a truncated final bracket or trailing JSON.
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("mods: trailing index data: %w", err)
+		}
+		return errors.New("mods: trailing index data")
+	}
+	return nil
 }
 
 // cachedIndex returns a still-fresh index for the community, or nil.
