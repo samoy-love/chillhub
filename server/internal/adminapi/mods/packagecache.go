@@ -2,6 +2,7 @@ package mods
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -34,10 +35,11 @@ type packageCache struct {
 
 // packageEntry — ответ про один пакет: готовый либо ещё едущий.
 type packageEntry struct {
-	done chan struct{} // закрывается, когда ответ получен
-	at   time.Time
-	pkg  *Package
-	err  error
+	done      chan struct{} // закрывается, когда ответ получен
+	at        time.Time
+	pkg       *Package
+	err       error
+	keepError bool
 
 	// renewing — за спиной уже едет обновление этого ответа. Без него
 	// каждый читатель протухшего ответа заводил бы своё, и на пяти играх
@@ -73,6 +75,14 @@ const fetchTimeout = 2 * time.Minute
 // так что следующее открытие панели пометки уже покажет.
 const thunderstoreWait = 5 * time.Second
 
+var errPackageChecking = errors.New("проверяем обновления")
+
+// peek starts one bounded lookup and returns immediately, including on a cold
+// cache. HTTP readers must never join the Thunderstore rate-limiter queue.
+func (c *packageCache) peek(ctx context.Context, cl *Client, ns, name string) (*Package, error) {
+	return c.read(ctx, cl, ns, name, false)
+}
+
 // pkg returns the package document, from cache when there is one.
 //
 // ЖДЁМ THUNDERSTORE ТОЛЬКО ТОГДА, КОГДА НЕ ЗНАЕМ НИЧЕГО. Протухший ответ
@@ -84,13 +94,17 @@ const thunderstoreWait = 5 * time.Second
 // секунда» никого не касается: обновления модпаков выходят не чаще
 // нескольких раз в неделю.
 //
-// Ошибку не кешируем: отказ Thunderstore — состояние на секунды, и запомнить
-// его на десять минут значит показывать «состояние неизвестно» всё это время
-// после одной моргнувшей сети.
+// Блокирующие читатели повторяют отказ сразу. Для HTTP-опроса peek ошибка
+// остаётся на минуту: следующий опрос должен увидеть отказ и закончиться,
+// а не начать новую проверку, которая снова ответит «проверяем».
 //
 // ctx ограничивает ожидание, а не сам запрос: читатель, у которого кончилось
 // время, уходит без ответа, а запрос доезжает и остаётся в кеше (fetch).
 func (c *packageCache) pkg(ctx context.Context, cl *Client, ns, name string) (*Package, error) {
+	return c.read(ctx, cl, ns, name, true)
+}
+
+func (c *packageCache) read(ctx context.Context, cl *Client, ns, name string, wait bool) (*Package, error) {
 	key := PackageKey(ns, name)
 
 	c.mu.Lock()
@@ -98,6 +112,12 @@ func (c *packageCache) pkg(ctx context.Context, cl *Client, ns, name string) (*P
 		c.rows = map[string]*packageEntry{}
 	}
 	e := c.rows[key]
+	// Give polling readers time to see a failed check instead of turning
+	// every poll into another cold lookup. Successful answers retain their TTL.
+	if e != nil && e.err != nil && time.Since(e.at) >= time.Minute {
+		delete(c.rows, key)
+		e = nil
+	}
 	if e == nil {
 		e = &packageEntry{done: make(chan struct{})}
 		c.rows[key] = e
@@ -107,13 +127,15 @@ func (c *packageCache) pkg(ctx context.Context, cl *Client, ns, name string) (*P
 		//nolint:gosec,contextcheck // контекст запроса здесь был бы ошибкой, а не упущением: он кончается раньше, чем Thunderstore успевает ответить
 		go c.fetch(cl, ns, name, key, e)
 	}
+	if !wait {
+		e.keepError = true
+	}
 
 	select {
 	case <-e.done:
-		// В таблице лежат только удачные ответы: неудачный fetch убирает
-		// сам, до того как закрыть done.
-		stale := time.Since(e.at) >= packageTTL
-		pkg := e.pkg
+		// HTTP-читатель получает и готовый ответ, и сохранённую ошибку.
+		stale := e.err == nil && time.Since(e.at) >= packageTTL
+		pkg, err := e.pkg, e.err
 		if stale && !e.renewing {
 			e.renewing = true
 			// Свой контекст, а не запроса: тот отменяется, как только
@@ -123,10 +145,13 @@ func (c *packageCache) pkg(ctx context.Context, cl *Client, ns, name string) (*P
 			go c.renew(cl, ns, name, e)
 		}
 		c.mu.Unlock()
-		return pkg, nil
+		return pkg, err
 	default:
 	}
 	c.mu.Unlock()
+	if !wait {
+		return nil, errPackageChecking
+	}
 
 	// Запрос уже идёт: ждём его, а не заводим второй.
 	select {
@@ -149,7 +174,7 @@ func (c *packageCache) fetch(cl *Client, ns, name, key string, e *packageEntry) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e.pkg, e.err, e.at = pkg, err, time.Now()
-	if err != nil && c.rows[key] == e {
+	if err != nil && !e.keepError && c.rows[key] == e {
 		delete(c.rows, key)
 	}
 	close(e.done)

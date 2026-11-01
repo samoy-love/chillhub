@@ -600,16 +600,9 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 		"community": cfg.Community,
 	}
 
-	// Update check: один ответ на пакет, общий со сводкой и переживающий
-	// запрос (packagecache.go). Своими запросами это стоило 320 мс на игру —
-	// столько клиент держит между обращениями к Thunderstore, — и раздел
-	// сборок открывался тем дольше, чем больше игр с модами.
-	//
-	// Ждём не дольше thunderstoreWait: не дождались — список уходит без
-	// пометок об обновлениях, а не висит, пока лежит чужой сайт.
-	ctx, cancel := context.WithTimeout(r.Context(), thunderstoreWait)
-	defer cancel()
-	out["updates"] = h.updateChecks(ctx, entry.GameID, items)
+	// Local versions are ready immediately. The browser polls only while a
+	// shared, bounded Thunderstore check is still running.
+	out["updates"], out["checking"], out["updateError"] = h.updateChecks(r.Context(), entry.GameID, items)
 
 	adminutil.WriteJSON(w, out)
 }
@@ -623,9 +616,11 @@ type updateCheck struct {
 	Deprecated bool   `json:"deprecated"`
 }
 
-func (h *Handlers) updateChecks(ctx context.Context, gid string, items []VersionInfo) []updateCheck {
+func (h *Handlers) updateChecks(ctx context.Context, gid string, items []VersionInfo) ([]updateCheck, bool, string) {
 	seen := map[string]bool{}
 	var out []updateCheck
+	checking := false
+	checkError := ""
 	for _, it := range items {
 		if ctx.Err() != nil {
 			break
@@ -640,9 +635,14 @@ func (h *Handlers) updateChecks(ctx context.Context, gid string, items []Version
 		}
 		seen[PackageKey(ns, name)] = true
 
-		p, err := h.pkgs.pkg(ctx, h.builder.Client, ns, name)
+		p, err := h.pkgs.peek(ctx, h.builder.Client, ns, name)
 		if err != nil {
-			log.Printf("[mods] update check %s-%s: %v", ns, name, err)
+			if errors.Is(err, errPackageChecking) {
+				checking = true
+			} else {
+				checkError = "Не удалось проверить обновления модов"
+				log.Printf("[mods] update check %s-%s: %v", ns, name, err)
+			}
 			continue
 		}
 		if p.Latest.VersionNumber != version || p.IsDeprecated {
@@ -652,7 +652,7 @@ func (h *Handlers) updateChecks(ctx context.Context, gid string, items []Version
 			})
 		}
 	}
-	return out
+	return out, checking, checkError
 }
 
 // Activate makes a built version the one launchers receive (POST).

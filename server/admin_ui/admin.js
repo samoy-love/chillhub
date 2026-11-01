@@ -201,7 +201,11 @@
               )
               .join('')}</ul>
              <p class="faint">Пересборка тянет до 1,8 ГБ и идёт до двадцати минут. Запускать имеет смысл, когда есть время досмотреть журнал.</p>`
-          : '<p>Все сборки собраны из последних версий. Устаревших пакетов нет.</p>';
+          : D.packs.some((p) => p.checking)
+            ? '<p>Проверяем обновления модов. Сборки уже доступны.</p>'
+            : D.packs.some((p) => p.updateError)
+              ? '<p>Не удалось проверить обновления модов. Попробуйте обновить панель через минуту.</p>'
+              : '<p>Все сборки собраны из последних версий. Устаревших пакетов нет.</p>';
 
         const watch = (href, k, v, s, tone) => `
           <a class="attn-item" href="${href}" ${tone ? `data-tone="${tone}"` : ''}>
@@ -420,7 +424,7 @@
             <div>
               <span class="k">На Thunderstore</span>
               <span class="v mono">${esc(p.latest || '—')}</span>
-              <span class="k">${esc(p.latestAt || 'дата не приходит с Thunderstore')}</span>
+              <span class="k">${esc(p.checking ? 'Проверяем обновления' : p.updateError || p.latestAt || 'дата не приходит с Thunderstore')}</span>
             </div>
             <div class="push"></div>
             <button class="btn btn--text" type="button" data-act="versions" data-args='{"gameId":"${esc(p.gameId)}","title":"${esc(p.title)}"}'>Все версии</button>
@@ -2957,7 +2961,9 @@
   async function refresh(stale, redraw) {
     await store.invalidate(stale);
     D = await collect();
+    updateWaiting();
     if (redraw !== false) { route(); }
+    pollModChecks();
   }
 
   /* ---------- Навигация ---------- */
@@ -3641,14 +3647,21 @@
 
   /* ---------- Шапка ---------- */
 
-  function topbar() {
+  function updateWaiting() {
     const L = D.launcher;
     const behind = D.packs.filter((p) => p.behind || p.deprecated).length;
     const waiting = (L.pending ? 1 : 0) + behind;
 
     const w = $('[data-waiting]');
     w.className = `badge badge--${waiting ? 'accent' : 'ok'}`;
-    $('[data-waiting-text]').textContent = waiting ? `${waiting} ждёт решения` : 'решений нет';
+    $('[data-waiting-text]').textContent = waiting ? `${waiting} ждёт решения`
+      : D.packs.some((p) => p.checking) ? 'проверяем обновления'
+        : D.packs.some((p) => p.updateError) ? 'обновления не проверены' : 'решений нет';
+
+  }
+
+  function topbar() {
+    updateWaiting();
 
     const m = $('[data-maint]');
     m.className = `badge badge--${D.maint.on ? 'bad' : 'ok'}`;
@@ -3696,6 +3709,21 @@
      когда сервер не отвечает вовсе, — и панель тогда об этом говорит, а
      не выдаёт снимок за прод. */
   const store = window.CH2Store.createStore(window.CH2Sections.LOADERS, { api: API });
+
+  // Only unfinished checks are polled. Server-side lookups have a finite
+  // timeout and report failures explicitly, so an outage ends this loop too.
+  let modCheckTimer;
+  function pollModChecks() {
+    clearTimeout(modCheckTimer);
+    if (!D.packs.some((p) => p.checking)) return;
+    modCheckTimer = setTimeout(async () => {
+      await refresh(['packs', 'overview'], false);
+      // Do not replace a form while the operator is typing into it.
+      const section = (location.hash.slice(1) || 'overview').split('?')[0];
+      if (['overview', 'packs'].includes(section) && !main.contains(document.activeElement)
+          && !$$('[role="dialog"]').some((el) => !el.closest('[hidden]'))) route();
+    }, 2000);
+  }
 
   /* Ответ реестра без разбора. Неудача — пустой список, а не падение:
      без него нельзя только править игру, всё остальное работает. */
@@ -3766,7 +3794,9 @@
       }
     }
 
+    if (again) await store.invalidate(store.names);
     D = await collect();
+    if (again) updateWaiting();
     if (!again) {
       topbar();
       palette();
@@ -3776,6 +3806,7 @@
       window.addEventListener('hashchange', route);
     }
     route();
+    pollModChecks();
 
     const h = store.health();
     if (again) {

@@ -70,10 +70,11 @@ function readBody(init) {
 }
 
 /** Поднимает панель в jsdom и отдаёт окно вместе с журналом запросов. */
-async function boot(overrides) {
+async function boot(overrides, configureWindow) {
   const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/admin/ui/' });
   const { window } = dom;
+  if (configureWindow) configureWindow(window);
 
   const calls = [];
   const fixtures = Object.assign(serverFixtures(), overrides || {});
@@ -111,6 +112,43 @@ async function boot(overrides) {
   for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 0));
   return { window, calls, dom };
 }
+
+test('холодная проверка не прячет сборки и сама показывает готовый результат', async (t) => {
+  for (const failed of [false, true]) {
+    const pending = [];
+    const response = { gameId: 'repo', checking: true, active: 'Team-Pack-1.0.0',
+      items: [{ version: 'Team-Pack-1.0.0', displayName: 'Мой пакет', packages: 17 }] };
+    const { window } = await boot({ 'mods/list': response }, (w) => {
+      const schedule = w.setTimeout.bind(w);
+      w.setTimeout = (fn, ms, ...args) => ms === 2000 ? pending.push(fn) : schedule(fn, ms, ...args);
+    });
+    t.after(() => window.close());
+    assert.match(window.document.body.textContent, /Проверяем обновления модов/);
+    assert.doesNotMatch(window.document.body.textContent, /Все сборки собраны из последних версий/);
+    assert.strictEqual(pending.length, 1, 'проверка должна перезапроситься');
+    response.checking = false;
+    if (failed) response.updateError = 'Не удалось проверить обновления модов';
+    else response.updates = [{ version: 'Team-Pack-1.0.0', namespace: 'Team', name: 'Pack', latest: '2.0.0' }];
+    await pending.shift()();
+    assert.strictEqual(pending.length, 0, 'готовая/упавшая проверка не должна опрашиваться вечно');
+    assert.match(window.document.body.textContent, failed ? /Не удалось проверить обновления модов/ : /2\.0\.0/);
+  }
+});
+
+test('кнопка обновления перечитывает закончившуюся ошибкой проверку', async (t) => {
+  const response = { gameId: 'repo', updateError: 'Не удалось проверить обновления модов',
+    items: [{ version: 'Team-Pack-1.0.0', displayName: 'Мой пакет' }] };
+  const { window, calls } = await boot({ 'mods/list': response });
+  t.after(() => window.close());
+  assert.match(window.document.body.textContent, /Не удалось проверить обновления модов/);
+  response.updateError = '';
+  response.updates = [{ version: 'Team-Pack-1.0.0', namespace: 'Team', name: 'Pack', latest: '3.0.0' }];
+  const before = calls.filter((c) => c.url.includes('mods/list')).length;
+  window.document.querySelector('[data-refresh]').click();
+  assert.ok(await until(() => /3\.0\.0/.test(window.document.body.textContent)), 'панель сохранила старую ошибку');
+  assert.strictEqual(window.document.querySelector('[data-waiting-text]').textContent, '2 ждёт решения');
+  assert.ok(calls.filter((c) => c.url.includes('mods/list')).length > before, 'нового запроса не было');
+});
 
 /** Ждёт, пока в журнале появится запрос, подходящий под условие. */
 async function until(fn, tries = 60) {

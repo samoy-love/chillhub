@@ -67,7 +67,8 @@ type ModsGameSummary struct {
 
 	// Error — почему состояние неизвестно: сеть, отказ Thunderstore, источник не
 	// с Thunderstore. Пустая строка — проверка прошла.
-	Error string `json:"error,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Checking bool   `json:"checking,omitempty"`
 }
 
 // Summary is the whole answer.
@@ -75,6 +76,7 @@ type Summary struct {
 	Launcher LauncherSummary   `json:"launcher"`
 	Mods     []ModsGameSummary `json:"mods"`
 	Pending  int               `json:"pending"`
+	Checking bool              `json:"checking,omitempty"`
 }
 
 // summaryCache keeps the Thunderstore half of the answer for summaryTTL.
@@ -94,10 +96,14 @@ func (h *Handlers) SummaryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "1"
-	adminutil.WriteJSON(w, h.summary(r.Context(), force))
+	adminutil.WriteJSON(w, h.summaryWith(r.Context(), force, false))
 }
 
 func (h *Handlers) summary(ctx context.Context, force bool) *Summary {
+	return h.summaryWith(ctx, force, true)
+}
+
+func (h *Handlers) summaryWith(ctx context.Context, force, wait bool) *Summary {
 	// КЕШИРУЕТСЯ ТОЛЬКО ТО, ЧТО ХОДИТ В СЕТЬ.
 	//
 	// Половина про лаунчер — это два чтения с диска, и держать её десять минут
@@ -105,11 +111,12 @@ func (h *Handlers) summary(ctx context.Context, force bool) *Summary {
 	// панель ещё треть часа показывает прежнюю самую свежую версию. Раньше
 	// кешировался весь ответ целиком, и «загрузил — не вижу» было штатным
 	// поведением.
-	out := &Summary{Launcher: h.launcherSummary(), Mods: h.modsSummaryCached(ctx, force)}
+	out := &Summary{Launcher: h.launcherSummary(), Mods: h.modsSummaryCached(ctx, force, wait)}
 	if out.Launcher.Pending {
 		out.Pending++
 	}
 	for _, m := range out.Mods {
+		out.Checking = out.Checking || m.Checking
 		if m.Behind || m.Deprecated {
 			out.Pending++
 		}
@@ -118,12 +125,15 @@ func (h *Handlers) summary(ctx context.Context, force bool) *Summary {
 }
 
 // modsSummaryCached keeps the Thunderstore half for summaryTTL.
-func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGameSummary {
+func (h *Handlers) modsSummaryCached(ctx context.Context, force, wait bool) []ModsGameSummary {
 	if force {
 		// Настойчивый запрос обязан дойти до Thunderstore, а не взять
 		// готовое из кеша пакетов: иначе «обновить» отвечало бы тем же
 		// снимком, ради обхода которого его и нажали.
 		h.pkgs.forget()
+		h.sum.mu.Lock()
+		h.sum.last = nil
+		h.sum.mu.Unlock()
 	}
 	if !force {
 		h.sum.mu.Lock()
@@ -138,7 +148,7 @@ func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGame
 	// Панель не ждёт Thunderstore дольше thunderstoreWait — см. там.
 	ctx, cancel := context.WithTimeout(ctx, thunderstoreWait)
 	defer cancel()
-	mods := h.modsSummary(ctx)
+	mods := h.modsSummaryWith(ctx, wait)
 
 	// Неполную сводку не запоминаем. Ответ, которого не дождались, доезжает
 	// в кеш пакетов за спиной, и следующая загрузка панели возьмёт его
@@ -156,7 +166,7 @@ func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGame
 // complete reports whether every game's state is known.
 func complete(mods []ModsGameSummary) bool {
 	for _, m := range mods {
-		if m.Error != "" {
+		if m.Error != "" || m.Checking {
 			return false
 		}
 	}
@@ -186,6 +196,10 @@ func (h *Handlers) launcherSummary() LauncherSummary {
 // Пустой срез, а не nil: в JSON это [] вместо null, и читающему не приходится
 // гадать, «моды не проверялись» или «игр с модами нет».
 func (h *Handlers) modsSummary(ctx context.Context) []ModsGameSummary {
+	return h.modsSummaryWith(ctx, true)
+}
+
+func (h *Handlers) modsSummaryWith(ctx context.Context, wait bool) []ModsGameSummary {
 	out := []ModsGameSummary{}
 	entries, err := h.games.All()
 	if err != nil {
@@ -202,11 +216,15 @@ func (h *Handlers) modsSummary(ctx context.Context) []ModsGameSummary {
 		}
 
 		row := ModsGameSummary{GameID: g.GameID, Title: g.Title, Active: active}
-		st, err := h.packStatus(ctx, g.GameID, active)
+		st, err := h.packStatus(ctx, g.GameID, active, wait)
 		if err != nil {
 			// Причина едет игроку панели, а не только в лог: «состояние
 			// неизвестно» и «всё свежо» — разные новости.
-			row.Error = err.Error()
+			if errors.Is(err, errPackageChecking) {
+				row.Checking = true
+			} else {
+				row.Error = err.Error()
+			}
 			out = append(out, row)
 			continue
 		}
@@ -234,7 +252,7 @@ type packState struct {
 // Отдельно от updateChecks: та отвечает на вопрос «что в таблице версий стоит
 // пересобрать» и молчит про свежее, а сводке нужно состояние КАЖДОЙ игры,
 // включая «всё в порядке».
-func (h *Handlers) packStatus(ctx context.Context, gid, version string) (packState, error) {
+func (h *Handlers) packStatus(ctx context.Context, gid, version string, wait bool) (packState, error) {
 	src, err := h.builder.ReadSource(gid, version)
 	if err != nil {
 		return packState{}, fmt.Errorf("нет записи об источнике сборки: %w", err)
@@ -248,7 +266,11 @@ func (h *Handlers) packStatus(ctx context.Context, gid, version string) (packSta
 		return packState{}, fmt.Errorf("имя версии %q не разбирается на пакет и номер", version)
 	}
 
-	p, err := h.pkgs.pkg(ctx, h.builder.Client, ns, name)
+	lookup := h.pkgs.peek
+	if wait {
+		lookup = h.pkgs.pkg
+	}
+	p, err := lookup(ctx, h.builder.Client, ns, name)
 	if err != nil {
 		return packState{}, fmt.Errorf("не удалось спросить Thunderstore про %s-%s: %w", ns, name, err)
 	}
