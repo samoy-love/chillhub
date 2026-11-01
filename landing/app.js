@@ -685,6 +685,45 @@
 
   /* ---------- Мелочи ---------- */
 
+  function screenshotViewer() {
+    const trigger = $('[data-launcher-preview]');
+    const dialog = $('.screenshot-viewer');
+    if (!trigger || !dialog || typeof dialog.showModal !== 'function') return;
+    const stage = $('.screenshot-stage', dialog);
+    const image = $('[data-screenshot-image]', dialog);
+    const zoom = $('[data-screenshot-zoom]', dialog);
+    let backdropPress = false;
+
+    const setZoom = (expanded) => {
+      dialog.classList.toggle('is-expanded', expanded);
+      zoom.setAttribute('aria-pressed', String(expanded));
+      zoom.textContent = expanded ? 'Вместить в экран' : 'Исходный размер';
+      stage.scrollTop = 0;
+      stage.scrollLeft = 0;
+    };
+    trigger.addEventListener('click', (event) => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      image.src = $('img', trigger).currentSrc || $('img', trigger).src;
+      setZoom(false);
+      dialog.showModal();
+      document.documentElement.classList.add('screenshot-open');
+    });
+    zoom.addEventListener('click', () => setZoom(!dialog.classList.contains('is-expanded')));
+    image.addEventListener('click', () => setZoom(!dialog.classList.contains('is-expanded')));
+    $('[data-screenshot-close]', dialog).addEventListener('click', () => dialog.close());
+    stage.addEventListener('pointerdown', (event) => { backdropPress = event.target === stage; });
+    stage.addEventListener('click', (event) => {
+      if (backdropPress && event.target === stage) dialog.close();
+      backdropPress = false;
+    });
+    dialog.addEventListener('close', () => {
+      document.documentElement.classList.remove('screenshot-open');
+      setZoom(false);
+      trigger.focus({ preventScroll: true });
+    });
+  }
+
   function skeletons() {
     $$('img.skeleton').forEach((img) => {
       const done = () => img.classList.add('loaded');
@@ -749,6 +788,7 @@
   slots();
   wish();
   skeletons();
+  screenshotViewer();
   imageFallback();
   copyHash();
   year();
