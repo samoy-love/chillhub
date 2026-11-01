@@ -40,6 +40,14 @@ async function boot(t, overrides, opts) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://launcher.samoy.love/v2/' });
   const { window } = dom;
 
+  if (opts && opts.dialog) {
+    window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    window.HTMLDialogElement.prototype.close = function () {
+      this.open = false;
+      this.dispatchEvent(new window.Event('close'));
+    };
+  }
+
   const calls = [];
   const table = Object.assign(fixtures(), overrides || {});
 
@@ -533,6 +541,57 @@ test('чужая схема в адресе значка не проходит �
   await until(() => window.document.querySelector('[data-games] .game'));
   const html = window.document.querySelector('[data-games]').innerHTML;
   assert.ok(!/script:/.test(html), 'схема прошла через табуляцию');
+});
+
+test('скриншот открывается целиком, увеличивается и возвращает фокус после закрытия', async (t) => {
+  const { window } = await boot(t, {}, { dialog: true, calm: true });
+  const doc = window.document;
+  const trigger = doc.querySelector('[data-launcher-preview]');
+  const dialog = doc.querySelector('.screenshot-viewer');
+  const zoom = doc.querySelector('[data-screenshot-zoom]');
+  trigger.click();
+  assert.ok(dialog.open);
+  assert.ok(doc.documentElement.classList.contains('screenshot-open'));
+  assert.equal(doc.querySelector('[data-screenshot-image]').src, trigger.querySelector('img').src);
+  zoom.click();
+  assert.equal(zoom.getAttribute('aria-pressed'), 'true');
+  assert.ok(dialog.classList.contains('is-expanded'));
+  doc.querySelector('[data-screenshot-close]').click();
+  assert.ok(!dialog.open);
+  assert.ok(!doc.documentElement.classList.contains('screenshot-open'));
+  assert.equal(doc.activeElement, trigger);
+  trigger.click();
+  assert.equal(zoom.getAttribute('aria-pressed'), 'false');
+});
+
+test('снимок закрывается по фону, но не после перетаскивания картинки', async (t) => {
+  const { window } = await boot(t, {}, { dialog: true, calm: true });
+  const doc = window.document;
+  const dialog = doc.querySelector('.screenshot-viewer');
+  const stage = doc.querySelector('.screenshot-stage');
+  doc.querySelector('[data-launcher-preview]').click();
+  doc.querySelector('[data-screenshot-image]').dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  stage.click();
+  assert.ok(dialog.open);
+  stage.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  stage.click();
+  assert.ok(!dialog.open);
+});
+
+test('без поддержки диалога и при Ctrl+клике остаётся ссылка на исходный снимок', async (t) => {
+  for (const supported of [false, true]) {
+    const { window } = await boot(t, {}, { dialog: supported, calm: true });
+    const trigger = window.document.querySelector('[data-launcher-preview]');
+    const event = new window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: supported });
+    // Не запускаем навигацию jsdom, проверяем обработчик до default action.
+    trigger.addEventListener('click', (e) => {
+      assert.ok(!e.defaultPrevented);
+      e.preventDefault();
+    });
+    trigger.dispatchEvent(event);
+    assert.equal(trigger.href, trigger.querySelector('img').src);
+    assert.ok(!window.document.querySelector('.screenshot-viewer').open);
+  }
 });
 
 test('кавычка и скобка в адресе значка не проходят', async (t) => {
