@@ -465,6 +465,37 @@ test('устаревший пакет — не то же самое, что вы
   assert.strictEqual(row.behind, false, 'устаревший посчитали за отставший');
 });
 
+for (const deprecated of [false, true]) {
+  for (const latest of ['10.0.0', '10.1.0', '']) {
+    test(`обновление Eclipsed Shores: latest=${latest}, deprecated=${deprecated}`, () => {
+      const version = 'Smxrez-Eclipsed_Shores-10.0.0';
+      const row = S.packRow({
+        active: version,
+        items: [{ version }],
+        updates: [{ version, namespace: 'Smxrez', name: 'Eclipsed_Shores', latest, deprecated }],
+      });
+      assert.strictEqual(row.behind, latest === '10.1.0');
+      assert.strictEqual(row.deprecated, deprecated);
+      assert.strictEqual(row.staged, false);
+    });
+  }
+}
+
+test('обновление прежнего модпака не предлагает пересобирать текущий', () => {
+  const row = S.packRow({
+    active: 'New-Pack-1.0.0',
+    items: [
+      { version: 'New-Pack-1.0.0', packageUrl: 'https://thunderstore.io/c/repo/p/New/Pack/' },
+      { version: 'Old-Pack-1.0.0' },
+    ],
+    updates: [{ version: 'Old-Pack-1.0.0', namespace: 'Old', name: 'Pack', latest: '2.0.0', deprecated: true }],
+  });
+  assert.strictEqual(row.behind, false);
+  assert.strictEqual(row.deprecated, false);
+  assert.strictEqual(row.latest, '');
+  assert.strictEqual(row.namespace, 'New');
+});
+
 test('игра без единой сборки не роняет строку', () => {
   const row = S.packRow({ gameId: 'fresh', items: [] }, { gameId: 'fresh', title: 'Свежая' });
   assert.strictEqual(row.built, '');
