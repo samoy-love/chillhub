@@ -206,7 +206,10 @@
     const list = items(r);
     const g = game || {};
     const built = list[0] || {};
-    const updates = Array.isArray(r.updates) ? r.updates : [];
+    // Сервер проверяет и прежние модпаки из истории. Их обновления не
+    // относятся к текущей сборке и не должны подменять выбранный пакет.
+    const updates = (Array.isArray(r.updates) ? r.updates : [])
+      .filter((u) => u && (!u.version || u.version === built.version));
     const pack = packIdentity(updates, built);
 
     return {
@@ -231,7 +234,13 @@
       /* «Собрано, но не отдано» и «Thunderstore ушёл вперёд» — разные
          поводы: первое закрывается кнопкой, второе пересборкой. */
       staged: isStaged(String(built.version || ''), String(r.active || '')),
-      behind: updates.some((u) => u && !u.deprecated),
+      // В updates попадает и просто deprecated-пакет той же версии.
+      // Пометка автора не снимается пересборкой; сравниваем сами версии.
+      behind: updates.some((u) => {
+        if (!u.latest) return false;
+        const latest = u.namespace && u.name ? u.namespace + '-' + u.name + '-' + u.latest : u.latest;
+        return String(u.version || built.version || '') !== latest;
+      }),
       checking: Boolean(r.checking),
       updateError: String(r.updateError || ''),
       deprecated: updates.some((u) => u && u.deprecated),

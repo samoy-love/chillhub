@@ -1289,6 +1289,29 @@ test('акцент на экране один: подсвечено то, что
   assert.ok(accented.length <= 1, 'акцентных кнопок сборки больше одной: ' + accented.length);
 });
 
+for (const latest of ['10.0.0', '10.1.0']) {
+  test(`устаревший Eclipsed Shores: кнопка обновления только для новой версии ${latest}`, async (t) => {
+    const version = 'Smxrez-Eclipsed_Shores-10.0.0';
+    const { window, calls } = await boot({
+      'mods/list': {
+        gameId: 'repo', active: version,
+        items: [{ version, displayName: 'Eclipsed Shores', kind: 'thunderstore' }],
+        updates: [{ version, namespace: 'Smxrez', name: 'Eclipsed_Shores', latest, deprecated: true }],
+      },
+    });
+    t.after(() => window.close());
+    window.location.hash = '#packs';
+    await until(() => window.document.querySelector('.handoff'));
+    await settle();
+    const update = window.document.querySelector('.handoff [data-act="build"]');
+    assert.strictEqual(Boolean(update), latest !== '10.0.0');
+    if (update) assert.strictEqual(update.textContent.trim(), 'Собрать ' + latest);
+    assert.match(window.document.querySelector('.note--bad').textContent, /объявлен автором устаревшим/);
+    assert.ok(window.document.querySelector('[data-act="build"]'), 'ручная сборка должна остаться доступна');
+    assert.ok(!calls.some((c) => c.url.includes('mods/build')), 'открытие страницы запустило сборку');
+  });
+}
+
 /* ---------- Заливка из карточки игры и из сборок модов ---------- */
 
 /* Подсовывает файл вместо диалога выбора: в jsdom его не открыть. Куски

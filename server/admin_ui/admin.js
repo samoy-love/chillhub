@@ -395,7 +395,7 @@
         }
 
         const p = packOf(game);
-        const stale = p.behind || p.deprecated;
+        const stale = p.behind;
         const staged = p.staged;
 
         const tabs = D.packs
@@ -436,7 +436,7 @@
 
           ${
             p.deprecated
-              ? `<div class="note note--bad">Модпак <code>${esc(p.pack)}</code> объявлен автором устаревшим. Пересборка возьмёт последнюю доступную версию, но стоит подобрать замену.</div>`
+              ? `<div class="note note--bad">Модпак <code>${esc(p.pack)}</code> объявлен автором устаревшим. Пересборка не снимет эту пометку. Подберите замену в каталоге Thunderstore.</div>`
               : ''
           }
 
