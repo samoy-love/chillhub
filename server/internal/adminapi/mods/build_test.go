@@ -166,7 +166,10 @@ func newFakeStore(t *testing.T) *fakeStore {
 	// издаёт ли игра пакет вообще. Пока никто не назвал состав сообщества, его
 	// нет — и это ровно тот случай, когда правило «чужого не берём» выключено.
 	mux.HandleFunc("/c/", func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/api/v1/package/") || len(fs.community) == 0 {
+		if serveIndexLinks(w, r) {
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/package-listing-chunk/") || len(fs.community) == 0 {
 			http.NotFound(w, r)
 			return
 		}
