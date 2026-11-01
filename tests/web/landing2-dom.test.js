@@ -594,6 +594,68 @@ test('без поддержки диалога и при Ctrl+клике ост�
   }
 });
 
+test('увеличенный снимок перемещается мышью и не уменьшается после перетаскивания', async (t) => {
+  const { window } = await boot(t, {}, { dialog: true, calm: true });
+  const doc = window.document;
+  const dialog = doc.querySelector('.screenshot-viewer');
+  const stage = doc.querySelector('.screenshot-stage');
+  const image = doc.querySelector('[data-screenshot-image]');
+  image.setPointerCapture = () => {};
+  const pointer = (type, x, y, pointerType = 'mouse') => {
+    const event = new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+    Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: pointerType } });
+    image.dispatchEvent(event);
+  };
+  doc.querySelector('[data-launcher-preview]').click();
+  doc.querySelector('[data-screenshot-zoom]').click();
+  pointer('pointerdown', 500, 400);
+  pointer('pointermove', 200, 150);
+  pointer('pointerup', 200, 150);
+  image.click();
+  assert.equal(stage.scrollLeft, 300);
+  assert.equal(stage.scrollTop, 250);
+  assert.ok(dialog.classList.contains('is-expanded'));
+  assert.ok(!dialog.classList.contains('is-panning'));
+  assert.ok(dialog.open);
+  // Сенсорную прокрутку обрабатывает браузер, а обычный клик всё ещё уменьшает снимок.
+  pointer('pointerdown', 200, 150, 'touch');
+  pointer('pointermove', 100, 50, 'touch');
+  pointer('pointercancel', 100, 50, 'touch');
+  assert.equal(stage.scrollLeft, 300);
+  pointer('pointerdown', 200, 150);
+  pointer('pointerup', 200, 150);
+  image.click();
+  assert.ok(!dialog.classList.contains('is-expanded'));
+});
+
+test('кнопка исходного размера скрыта, когда снимок уже помещается без уменьшения', async (t) => {
+  const { window } = await boot(t, {}, { dialog: true, calm: true });
+  const doc = window.document;
+  const stage = doc.querySelector('.screenshot-stage');
+  const image = doc.querySelector('[data-screenshot-image]');
+  const zoom = doc.querySelector('[data-screenshot-zoom]');
+  stage.style.padding = '12px';
+  Object.defineProperties(image, { naturalWidth: { value: 1457 }, naturalHeight: { value: 1125 } });
+  let width = 1920;
+  let height = 1200;
+  Object.defineProperties(stage, { clientWidth: { get: () => width }, clientHeight: { get: () => height } });
+  doc.querySelector('[data-launcher-preview]').click();
+  assert.ok(zoom.hidden);
+  image.click();
+  assert.ok(!doc.querySelector('.screenshot-viewer').classList.contains('is-expanded'));
+  width = 390;
+  height = 750;
+  window.dispatchEvent(new window.Event('resize'));
+  assert.ok(!zoom.hidden);
+  zoom.click();
+  assert.ok(doc.querySelector('.screenshot-viewer').classList.contains('is-expanded'));
+  width = 1920;
+  height = 1200;
+  window.dispatchEvent(new window.Event('resize'));
+  assert.ok(zoom.hidden);
+  assert.ok(!doc.querySelector('.screenshot-viewer').classList.contains('is-expanded'));
+});
+
 test('кавычка и скобка в адресе значка не проходят', async (t) => {
   // Тот же адрес однажды уедет и в url(): там кавычка закрывает
   // выражение и дописывает чужое правило
