@@ -3,6 +3,7 @@ package mods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -101,7 +102,7 @@ func TestPollingReportsFailureInsteadOfRestartingForever(t *testing.T) {
 		t.Fatal("lookup did not finish")
 	}
 	for range 3 {
-		if _, err := cache.peek(context.Background(), cl, "Team", "Pack"); err == nil || err == errPackageChecking {
+		if _, err := cache.peek(context.Background(), cl, "Team", "Pack"); err == nil || errors.Is(err, errPackageChecking) {
 			t.Fatalf("failed lookup hidden as pending/success: %v", err)
 		}
 	}
@@ -111,7 +112,7 @@ func TestPollingReportsFailureInsteadOfRestartingForever(t *testing.T) {
 	cache.mu.Lock()
 	e.at = time.Now().Add(-2 * time.Minute)
 	cache.mu.Unlock()
-	if _, err := cache.peek(context.Background(), cl, "Team", "Pack"); err != errPackageChecking {
+	if _, err := cache.peek(context.Background(), cl, "Team", "Pack"); !errors.Is(err, errPackageChecking) {
 		t.Fatalf("expired failure did not retry: %v", err)
 	}
 	// Let the bounded background request finish before closing the test server.
