@@ -146,6 +146,7 @@ test('кнопка обновления перечитывает закончи�
   const before = calls.filter((c) => c.url.includes('mods/list')).length;
   window.document.querySelector('[data-refresh]').click();
   assert.ok(await until(() => /3\.0\.0/.test(window.document.body.textContent)), 'панель сохранила старую ошибку');
+  assert.strictEqual(window.document.querySelector('[data-waiting-text]').textContent, '2 ждёт решения');
   assert.ok(calls.filter((c) => c.url.includes('mods/list')).length > before, 'нового запроса не было');
 });
 

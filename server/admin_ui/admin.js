@@ -3796,6 +3796,7 @@
 
     if (again) await store.invalidate(store.names);
     D = await collect();
+    if (again) updateWaiting();
     if (!again) {
       topbar();
       palette();
