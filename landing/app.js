@@ -693,6 +693,8 @@
     const image = $('[data-screenshot-image]', dialog);
     const zoom = $('[data-screenshot-zoom]', dialog);
     let backdropPress = false;
+    let pan = null;
+    let dragged = false;
 
     const setZoom = (expanded) => {
       dialog.classList.toggle('is-expanded', expanded);
@@ -701,6 +703,16 @@
       stage.scrollTop = 0;
       stage.scrollLeft = 0;
     };
+    const updateZoom = () => {
+      if (!dialog.open || !image.naturalWidth) return;
+      const style = window.getComputedStyle(stage);
+      const width = stage.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const height = stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      const fits = image.naturalWidth <= width && image.naturalHeight <= height;
+      zoom.hidden = fits;
+      dialog.classList.toggle('is-natural-size', fits);
+      if (fits) setZoom(false);
+    };
     trigger.addEventListener('click', (event) => {
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
@@ -708,16 +720,49 @@
       setZoom(false);
       dialog.showModal();
       document.documentElement.classList.add('screenshot-open');
+      updateZoom();
     });
+    image.addEventListener('load', updateZoom);
+    window.addEventListener('resize', updateZoom);
+    if (typeof window.ResizeObserver === 'function') new window.ResizeObserver(updateZoom).observe(stage);
     zoom.addEventListener('click', () => setZoom(!dialog.classList.contains('is-expanded')));
-    image.addEventListener('click', () => setZoom(!dialog.classList.contains('is-expanded')));
+    image.addEventListener('click', () => {
+      if (!dragged && !zoom.hidden) setZoom(!dialog.classList.contains('is-expanded'));
+      dragged = false;
+    });
+    image.addEventListener('dragstart', (event) => event.preventDefault());
     $('[data-screenshot-close]', dialog).addEventListener('click', () => dialog.close());
-    stage.addEventListener('pointerdown', (event) => { backdropPress = event.target === stage; });
+    stage.addEventListener('pointerdown', (event) => {
+      dragged = false;
+      backdropPress = event.target === stage;
+      if (event.target !== image || event.pointerType !== 'mouse' || event.button !== 0 ||
+          !dialog.classList.contains('is-expanded')) return;
+      pan = { id: event.pointerId, x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop };
+      image.setPointerCapture(event.pointerId);
+    });
+    stage.addEventListener('pointermove', (event) => {
+      if (!pan || event.pointerId !== pan.id) return;
+      const dx = event.clientX - pan.x;
+      const dy = event.clientY - pan.y;
+      if (Math.hypot(dx, dy) > 4) dragged = true;
+      if (!dragged) return;
+      dialog.classList.add('is-panning');
+      stage.scrollLeft = pan.left - dx;
+      stage.scrollTop = pan.top - dy;
+    });
+    const endPan = () => {
+      pan = null;
+      dialog.classList.remove('is-panning');
+    };
+    image.addEventListener('lostpointercapture', endPan);
+    stage.addEventListener('pointerup', endPan);
+    stage.addEventListener('pointercancel', endPan);
     stage.addEventListener('click', (event) => {
       if (backdropPress && event.target === stage) dialog.close();
       backdropPress = false;
     });
     dialog.addEventListener('close', () => {
+      endPan();
       document.documentElement.classList.remove('screenshot-open');
       setZoom(false);
       trigger.focus({ preventScroll: true });

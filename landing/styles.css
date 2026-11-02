@@ -564,13 +564,17 @@ html.screenshot-open { overflow: hidden; }
   object-fit: contain;
   margin: auto;
   cursor: zoom-in;
+  user-select: none;
 }
 
 .screenshot-viewer.is-expanded img {
   max-width: none;
   max-height: none;
-  cursor: zoom-out;
+  cursor: grab;
 }
+
+.screenshot-viewer.is-panning img { cursor: grabbing; }
+.screenshot-viewer.is-natural-size img { cursor: default; }
 
 @media (width < 480px) {
   .screenshot-toolbar span { width: 100%; font-size: 0.875rem; }
