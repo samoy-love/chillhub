@@ -46,7 +46,7 @@
     <SatelliteResourceLanguages>en;ru</SatelliteResourceLanguages>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Markdig" Version="1.5.0" />
+    <PackageReference Include="Markdig" Version="1.6.0" />
     <PackageReference Include="Blake3" Version="3.0.2" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
     <!-- Roslyn analyzers (will trigger the SDK/newer analyzers warning as requested) -->
