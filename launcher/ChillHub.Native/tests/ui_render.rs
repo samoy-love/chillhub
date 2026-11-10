@@ -1235,6 +1235,7 @@ fn real_ui_headless_layout_and_actions() {
     setup.show().unwrap();
     for (name, removing, busy, done, error) in [
         ("setup-install", false, false, false, false),
+        ("setup-downgrade", false, false, false, false),
         ("setup-progress", false, true, false, false),
         ("setup-error", false, false, false, true),
         ("setup-finished", false, false, true, false),
@@ -1245,13 +1246,33 @@ fn real_ui_headless_layout_and_actions() {
         setup.set_busy(busy);
         setup.set_done(done);
         setup.set_error(error);
-        setup.set_message(if error {"Операция не завершена: файл занят. Закройте лаунчер и повторите установку. Ваши игры сохранятся."} else {""}.into());
+        setup.set_downgrade_from(
+            if name == "setup-downgrade" {
+                "9.0.0"
+            } else {
+                ""
+            }
+            .into(),
+        );
+        setup.set_message(if error {"Операция не завершена: файл занят. Закройте лаунчер и повторите установку. Ваши игры сохранятся."} else if busy {"Подготавливаем файлы. Это может занять несколько минут."} else if done {"Операция завершена."} else {""}.into());
         for (w, he, scale) in [(560, 480, 1.0), (740, 690, 1.5), (740, 690, 2.0)] {
             resize(setup.window(), w, he, scale);
             settle();
             let snapshot = setup.window().take_snapshot().unwrap();
             assert_eq!(snapshot.width(), (w as f32 * scale) as u32);
             if h.qa {
+                if busy {
+                    let progress =
+                        ElementHandle::find_by_element_id(&setup, "SetupWindow::setup-progress")
+                            .next()
+                            .expect("setup progress");
+                    let p = progress.absolute_position();
+                    let s = progress.size();
+                    assert!(
+                        p.y >= 90.0 && p.y + s.height < he as f32 - 120.0,
+                        "setup progress must stay visible at {w}x{he}"
+                    );
+                }
                 if error {
                     let status =
                         ElementHandle::find_by_element_id(&setup, "SetupWindow::status-copy")
