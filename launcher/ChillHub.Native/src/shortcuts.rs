@@ -436,7 +436,26 @@ mod tests {
         assert_eq!(link.file_name().unwrap(), "Игра_ тест (Chill Hub).lnk");
         let original = fs::read(&link).unwrap();
         fs::write(desktop.join("note.txt"), b"keep").unwrap();
-        assert_eq!(create_at(&desktop, &launcher, &request).unwrap(), link);
+        let repeat = create_at(&desktop, &launcher, &request).unwrap_or_else(|error| {
+            let input = serde_json::to_vec(&serde_json::json!({"path":link})).unwrap();
+            let readback = crate::security::powershell(
+                r#"
+$r=[Console]::In.ReadToEnd()|ConvertFrom-Json
+$s=New-Object -ComObject WScript.Shell
+$l=$s.CreateShortcut([string]$r.path)
+@{path=[string]$r.path;exists=[IO.File]::Exists([string]$r.path);target=[string]$l.TargetPath;arguments=[string]$l.Arguments;working=[string]$l.WorkingDirectory;icon=[string]$l.IconLocation;inputEncoding=[Console]::InputEncoding.WebName;outputEncoding=[Console]::OutputEncoding.WebName;defaultEncoding=[Text.Encoding]::Default.WebName}|ConvertTo-Json -Compress
+"#,
+                Some(&input),
+            );
+            let links = read_links(std::slice::from_ref(&link));
+            panic!(
+                "{error}; expected link={link:?}, launcher={launcher:?}, launcher identity={:?}, exe={:?}, exe identity={:?}; parsed={links:?}; COM={readback:?}",
+                path_key(&launcher),
+                request.exe_path,
+                request.exe_path.as_ref().and_then(|path| path_key(path)),
+            );
+        });
+        assert_eq!(repeat, link);
         let short_launcher = crate::paths::short_test_path(&launcher);
         let short_exe = crate::paths::short_test_path(request.exe_path.as_ref().unwrap());
         let alias_request = ShortcutRequest {
