@@ -1,0 +1,381 @@
+{
+  "schemaVersion": 1,
+  "baseline": "14154a29dbab381b6c7dd314e3de9a898615a16e",
+  "baselineVersion": "1.7.20",
+  "nativeProject": "launcher/ChillHub.Native",
+  "releasePolicy": "Automated tests establish isolated behaviour. Pending manual checks and intentional legacy omissions must be reviewed before changing the production installer default.",
+  "checks": [
+    {
+      "id": "launch-four-targets",
+      "scope": "Steam/local × modded/plain, no launch during installation",
+      "original": [
+        "launcher/ChillHub/Core/Mods/ModsService.cs"
+      ],
+      "tests": [
+        "launch::tests::four_plans_are_read_only_and_pick_correct_executables",
+        "launch::tests::mods_only_and_plain_only_have_correct_supported_targets",
+        "published_game_and_modpack_install_become_real_launch_options"
+      ]
+    },
+    {
+      "id": "launch-incomplete-and-exe",
+      "scope": "Actual executable and .updating guard; revision/loader state",
+      "original": [
+        "launcher/ChillHub/Core/Home/GameLocalState.cs"
+      ],
+      "tests": [
+        "launch::tests::absent_exe_and_unfinished_update_cannot_be_launched",
+        "launch::tests::rebuilt_revision_requires_update_and_broken_loader_repair"
+      ]
+    },
+    {
+      "id": "steam-discovery",
+      "scope": "Old/new library VDF, appmanifest, nested SteamFolder",
+      "original": [
+        "launcher/ChillHub/Core/Mods/SteamLocator.cs",
+        "launcher/ChillHub/Core/Mods/VdfParser.cs"
+      ],
+      "tests": [
+        "launch::tests::steam_discovers_legacy_and_modern_libraries_and_nested_game",
+        "launch::tests::malformed_vdf_is_bounded_and_rejected"
+      ]
+    },
+    {
+      "id": "plain-modded-isolation",
+      "scope": "Doorstop state and restore after process exit",
+      "original": [
+        "launcher/ChillHub/Core/Mods/DoorstopConfig.cs"
+      ],
+      "tests": [
+        "launch::tests::doorstop_preserves_comments_and_rejects_missing_key",
+        "playtime::tests::finish_is_idempotent_and_disables_mods"
+      ]
+    },
+    {
+      "id": "config-migration",
+      "scope": "Roaming PascalCase config; migrate legacy only if absent; retain unknown fields; no source deletion",
+      "original": [
+        "launcher/ChillHub/Core/Config.cs"
+      ],
+      "tests": [
+        "config::tests::migrates_pascal_case_without_deleting_old_or_unknown_fields",
+        "config::tests::corrupt_backup_is_exact_and_roundtrip_preserves_all_settings"
+      ]
+    },
+    {
+      "id": "settings",
+      "scope": "GamesPath, threads, speed, tray, API endpoint, window state, chosen launch target",
+      "original": [
+        "launcher/ChillHub/Core/Settings/SettingsActions.cs",
+        "launcher/ChillHub/Core/Config.cs"
+      ],
+      "tests": [
+        "config::tests::corrupt_backup_is_exact_and_roundtrip_preserves_all_settings",
+        "config::tests::api_endpoint_rejects_insecure_remote"
+      ]
+    },
+    {
+      "id": "playtime",
+      "scope": "Legacy and per-target buckets, PID creation identity, idempotent session finalization",
+      "original": [
+        "launcher/ChillHub/Core/Game/PlaytimeStore.cs"
+      ],
+      "tests": [
+        "playtime::tests::preserves_legacy_and_variant_buckets",
+        "playtime::tests::pid_reuse_does_not_match",
+        "playtime::tests::finish_is_idempotent_and_disables_mods"
+      ]
+    },
+    {
+      "id": "shortcut-path-safety",
+      "scope": "Existing --game/--exe shortcut compatibility and new deep-link validation",
+      "original": [
+        "launcher/ChillHub/Core/Home/GameLocalState.cs"
+      ],
+      "tests": [
+        "launch::tests::shortcut_rejects_path_escape_and_uri_command_injection"
+      ]
+    },
+    {
+      "id": "offline-catalog",
+      "scope": "Native enhancement: cached metadata survives offline; servers cannot share caches",
+      "original": [
+        "launcher/ChillHub/Pages/HomePage.xaml.cs"
+      ],
+      "tests": [
+        "net::tests::catalogs_from_different_servers_never_share_cache",
+        "net::tests::invalid_catalog_ids_never_become_paths",
+        "library_is_cached_per_origin_and_still_available_during_outage"
+      ]
+    },
+    {
+      "id": "transfer-integrity",
+      "scope": "Hash validation, resumable partials, safe range fallback, interrupted writes",
+      "original": [
+        "launcher/ChillHub/Core/Sync/IntegrityChecker.cs"
+      ],
+      "tests": [
+        "repairs_corrupted_file_and_writes_version_only_after_hashes_match",
+        "wrong_content_range_never_promotes_or_deletes_existing_files",
+        "interrupted_response_resumes_from_written_prefix",
+        "corrupted_download_does_not_replace_old_file_or_advance_version"
+      ]
+    },
+    {
+      "id": "transfer-queue",
+      "scope": "Pause/resume/cancel, persisted queue, game-before-modpack dependency",
+      "original": [
+        "launcher/ChillHub/Core/Game/DownloadQueue.cs"
+      ],
+      "tests": [
+        "cancellation_preserves_partial_and_next_run_resumes",
+        "pause_stops_disk_progress_until_resume",
+        "persistent_queue_pauses_restored_work_and_resumes_partial",
+        "modpack_dependency_runs_only_after_successful_game_install",
+        "failed_or_missing_dependency_keeps_mods_paused_even_after_resume"
+      ]
+    },
+    {
+      "id": "transfer-cleanup",
+      "scope": "Consent before foreign-file cleanup; manifest-owned mods; verified donors",
+      "original": [
+        "launcher/ChillHub/Core/Game/GameSyncRunner.cs"
+      ],
+      "tests": [
+        "cleanup_requires_confirmation_and_preserves_foreign_and_service_files",
+        "modpack_cleanup_owns_only_previous_manifest_and_uses_verified_donor"
+      ]
+    },
+    {
+      "id": "transfer-boundaries",
+      "scope": "Traversal, links and insufficient space fail without modifying other files",
+      "original": [
+        "launcher/ChillHub/Core/Sync/IntegrityChecker.cs"
+      ],
+      "tests": [
+        "traversal_manifest_fails_before_any_write",
+        "hardlinked_partial_cannot_truncate_file_outside_game",
+        "insufficient_space_fails_before_update_marker"
+      ]
+    },
+    {
+      "id": "delete-game",
+      "scope": "Only confirmed game directory; block active transfer and paths outside library",
+      "original": [
+        "launcher/ChillHub/Core/Home/GameFiles.cs"
+      ],
+      "tests": [
+        "service::tests::delete_removes_only_the_confirmed_game",
+        "service::tests::delete_refuses_an_active_transfer_and_outside_root"
+      ]
+    },
+    {
+      "id": "maintenance",
+      "scope": "Server flags independently block play/install/update",
+      "original": [
+        "launcher/ChillHub/Core/Home/HomeDialogs.cs"
+      ],
+      "tests": [
+        "service::tests::maintenance_blocks_only_named_operations",
+        "maintenance_blocks_install_before_queue_or_game_files_change"
+      ]
+    },
+    {
+      "id": "self-update-transaction",
+      "scope": "Separate updater, hashes, exact preservation, rollback and interrupted recovery",
+      "original": [
+        "updater/UpdatePreserve.cs"
+      ],
+      "tests": [
+        "update::tests::transaction_preserves_configuration_and_commits_marker",
+        "update::tests::corrupted_payload_never_touches_installation",
+        "update::tests::recovery_restores_original_and_removes_new_file",
+        "update::tests::error_after_file_replacement_rolls_back_all_files"
+      ]
+    },
+    {
+      "id": "security-consent",
+      "scope": "Narrow paths, explicit confirmation/UAC, remove only app-owned exclusions",
+      "original": [
+        "docs/security-exclusions.md"
+      ],
+      "tests": [
+        "security::tests::broad_and_nonexistent_paths_are_rejected",
+        "security::tests::entire_steam_library_is_rejected",
+        "security::tests::change_script_never_interpolates_data_or_disables_protection",
+        "security::tests::journal_tracks_only_entries_added_by_this_application",
+        "security::tests::stale_game_exclusion_can_be_removed_without_recreating_directory"
+      ]
+    },
+    {
+      "id": "feedback-and-diagnostics",
+      "scope": "Persistent feedback retry, bounded log rotation and anonymous metrics shape",
+      "original": [
+        "launcher/ChillHub/Core/Diagnostics.cs"
+      ],
+      "tests": [
+        "feedback::tests::invalid_message_is_not_saved_or_sent",
+        "diagnostics::tests::diagnostics_rotate_without_growing_forever",
+        "diagnostics::tests::metrics_schema_has_no_user_machine_or_path_fields",
+        "feedback_distinguishes_rejection_rate_limit_and_saved_offline_queue"
+      ]
+    },
+    {
+      "id": "launcher-changelog",
+      "scope": "Existing launcher release history and bounded player-facing entries",
+      "original": [
+        "launcher/ChillHub/Core/Changelog/ChangelogData.cs"
+      ],
+      "tests": [
+        "changelog::tests::current_release_is_first_and_player_changes_are_bounded"
+      ]
+    },
+    {
+      "id": "existing-install-adoption",
+      "scope": "Reuse files in configured GamesPath/gameId; verify before writing version. Original has no confirmed arbitrary-folder import UI.",
+      "original": [
+        "launcher/ChillHub/Core/Home/GameLocalState.cs",
+        "launcher/ChillHub/Core/Game/GameState.cs"
+      ],
+      "tests": [
+        "repairs_corrupted_file_and_writes_version_only_after_hashes_match"
+      ],
+      "manual": "pending: use copied C# installation fixtures with missing/old/current markers; confirm reuse and player prompts"
+    },
+    {
+      "id": "games-path-change",
+      "scope": "Original changes library root and creates directory; does not move game files",
+      "original": [
+        "launcher/ChillHub/Core/Settings/SettingsActions.cs"
+      ],
+      "tests": [
+        "config::tests::corrupt_backup_is_exact_and_roundtrip_preserves_all_settings"
+      ],
+      "manual": "pending: save new root, restart, preserve old game directory without claiming relocation"
+    },
+    {
+      "id": "game-build-versions",
+      "scope": "Original loads /api/games/{id}/builds; install falls back to highest version when latest absent. Current XAML has no build selection control.",
+      "original": [
+        "launcher/ChillHub/Core/Game/GameBuildsLoader.cs",
+        "launcher/ChillHub/Pages/GamePage.xaml.cs"
+      ],
+      "tests": [
+        "net::tests::game_build_order_matches_legacy_numeric_segments",
+        "missing_latest_uses_highest_safe_build_and_caches_normalized_metadata",
+        "unresolved_build_fallback_keeps_previous_offline_cache_and_other_games",
+        "build_filename_reserved_url_characters_are_encoded_as_path_data",
+        "explicitly_selected_older_version_stays_playable_and_verification_keeps_the_pin",
+        "controller_tests::controller_installs_real_queue_preserves_draft_and_saves_isolated_settings"
+      ],
+      "manual": "pending: visually review installed/latest version labels in native Windows window; fallback, pin, and manage default are covered by local and headless tests"
+    },
+    {
+      "id": "native-shell",
+      "scope": "Single-instance/shortcut activation, tray, restore size/DPI, keyboard and screen-reader access",
+      "original": [
+        "launcher/ChillHub/Core/SingleInstance.cs",
+        "launcher/ChillHub/MainWindow.xaml.cs"
+      ],
+      "tests": [],
+      "manual": "pending: Windows integration including Russian input, multi-monitor DPI, keyboard, tray and cold shortcut"
+    },
+    {
+      "id": "media",
+      "scope": "Screenshots, local/remote trailer sound, seek, resize, close and stop child player",
+      "original": [
+        "launcher/ChillHub/Core/Game/GalleryClient.cs"
+      ],
+      "tests": [],
+      "manual": "pending: actual packaged media and GPU decoder; no FPS guarantee from unit tests"
+    },
+    {
+      "id": "installer-migration",
+      "scope": "Per-user same install path; Roaming config preserved; games separate; three native exe resources; no .NET runtime; optional installed WebView2 is loaded only when a YouTube video opens",
+      "original": [
+        "scripts/installer.nsi",
+        "scripts/build-installer.ps1"
+      ],
+      "tests": [],
+      "packageCheck": true,
+      "manual": "pending: disposable Windows profile install/upgrade/rollback/uninstall including old shortcuts and optional helper consent"
+    },
+    {
+      "id": "real-game-smoke",
+      "scope": "Actual Steam/local modded/plain game startup and playtime completion",
+      "original": [
+        "launcher/ChillHub/Core/Mods/ModsService.cs"
+      ],
+      "tests": [],
+      "manual": "pending: explicit user-authorized game runs; dry-run fixtures do not establish real game compatibility"
+    },
+    {
+      "id": "news-removal",
+      "scope": "Game/launcher news feeds removed by user request; descriptions/media/instructions/mod list replace them",
+      "original": [
+        "launcher/ChillHub/Core/Game/GameChangelogLoader.cs"
+      ],
+      "tests": [],
+      "disposition": "intentional-user-request"
+    },
+    {
+      "id": "karaoke-header",
+      "scope": "Original is animated lyric text, not an audio music player. Omitted from Native to avoid decorative idle animation; omission requires product review.",
+      "original": [
+        "launcher/ChillHub/Core/Shell/KaraokePresenter.cs",
+        "launcher/ChillHub/MainWindow.xaml"
+      ],
+      "tests": [],
+      "disposition": "intentional-legacy-omission"
+    },
+    {
+      "id": "controller-callback-flow",
+      "scope": "Headless real event loop: catalog/install callbacks, game-before-modpack queue, ready-to-play UI, filters, repeated reload preserving settings draft, isolated persisted preferences; no real game or native window",
+      "original": [
+        "launcher/ChillHub/Pages/HomePage.xaml.cs"
+      ],
+      "tests": [
+        "controller_tests::controller_installs_real_queue_preserves_draft_and_saves_isolated_settings"
+      ]
+    },
+    {
+      "id": "helper-local-errors",
+      "scope": "Updater/security worker failures become visible, controls unlock, actual bounded local session logs are retained; no timer polling on static helper windows",
+      "original": [
+        "updater/UpdateLog.cs",
+        "launcher/ChillHub.SecurityHelper/HelperDiagnostics.cs"
+      ],
+      "tests": [
+        "helper_runtime::tests::helper_log_is_local_bounded_and_preserves_unrelated_files",
+        "helper_runtime::tests::worker_panic_becomes_a_reported_error",
+        "tests::update_failure_unlocks_window_and_points_to_actual_log",
+        "tests::security_results_keep_errors_visible_and_allow_close_without_changes"
+      ]
+    },
+    {
+      "id": "official-youtube-embed",
+      "scope": "New requested feature: official iframe only, HTTPS application identity/Referer, author restrictions respected, lazy WebView2 load, external navigation blocked and close cancels pending initialization",
+      "original": [],
+      "tests": [
+        "web_video::tests::only_real_youtube_video_links_are_accepted",
+        "web_video::tests::player_uses_official_api_and_first_party_identity_without_fallback_bypass",
+        "web_video::tests::playback_messages_recover_loading_but_keep_owner_restrictions_visible",
+        "web_video::tests::recoverable_browser_subprocess_exits_do_not_hide_the_player"
+      ],
+      "manual": "pending: real packaged YouTube playback, author-denied video, missing runtime fallback, Escape/focus, close-before-ready and browser-process exit after closing; unit tests do not establish these native behaviours"
+    },
+    {
+      "id": "automatic-error-reports",
+      "scope": "Durable report outbox, legacy quota3/180s, deduplication, private-path redaction, origin binding and loopback-only test opt-in",
+      "original": [
+        "launcher/ChillHub/Core/ErrorReporter.cs"
+      ],
+      "tests": [
+        "diagnostics::tests::auto_error_reports_use_server_schema_and_redact_private_paths",
+        "diagnostics::tests::auto_error_quota_persists_and_failed_delivery_refunds",
+        "diagnostics::tests::auto_error_legacy_quota_and_outbox_origin_are_respected",
+        "diagnostics::tests::error_reports_and_metrics_test_optin_cannot_send_to_production"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+/target/
+/dist/
+/benchmark/results/
+/build-output.log
+/runtime-*.log
+/benchmark/baselines/
+/test-output.log
+
+# The repository-wide **/bin/ rule is for build outputs, not Rust entrypoints.
+!/src/bin/
+!/src/bin/*.rs

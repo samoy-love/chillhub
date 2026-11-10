@@ -34,3 +34,6 @@ bin/*  text eol=lf
 *.zip binary
 *.exe binary
 *.dll binary
+
+# Preserve the upstream license text verbatim, including its whitespace.
+/launcher/ChillHub.Native/runtime/web-video/LICENSE-Microsoft-WebView2.txt -whitespace

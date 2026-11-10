@@ -152,7 +152,14 @@ Var DesktopShortcut_State
 
 ; Output installer
 Name "${APP_TITLE}"
-OutFile "generated_downloads\ChillHub-Setup.exe"
+!ifdef NATIVE_CLIENT
+  !ifndef NATIVE_OUTPUT
+    !error "NATIVE_OUTPUT is required for the explicit native build entrypoint"
+  !endif
+  OutFile "${NATIVE_OUTPUT}"
+!else
+  OutFile "generated_downloads\ChillHub-Setup.exe"
+!endif
 
 ; Per-user installation (no admin)
 RequestExecutionLevel user
@@ -197,7 +204,11 @@ SetDatablockOptimize on
 
 ; Finish page settings: show prerequisites first, then run app
 !define MUI_FINISHPAGE_SHOWREADME
+!ifdef NATIVE_CLIENT
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Установить компонент для видео YouTube (нужен интернет)"
+!else
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "Доустановить WebView2 (нужен для показа новостей)"
+!endif
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION InstallPrereqs
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Запустить ${APP_TITLE}"
@@ -651,9 +662,14 @@ Section "Install" SecInstall
 
   ; Prepare prerequisite installers in $PLUGINSDIR for optional install on Finish
   SetOutPath "$PLUGINSDIR\Redist"
-  ; Use non-fatal includes so build continues if prereqs are not present
-  ; NSIS will emit a warning if the file is missing and continue
+!ifdef NATIVE_CLIENT
+  ; Native release always contains the verified bootstrapper, never the full runtime.
+  File "Redist\${PREREQ_WEBVIEW2}"
+!else
+  ; Only legacy non-release CI may continue without the download.
+  ; Release build-installer.ps1 requires it before invoking NSIS.
   File /nonfatal "Redist\${PREREQ_WEBVIEW2}"
+!endif
 
 SectionEnd
 
@@ -1188,9 +1204,13 @@ FunctionEnd
 Function DetectWebView2
   StrCpy $WebView2Present 0
   ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
-  StrCmp $0 "" 0 found
+  StrCmp $0 "" machine_native 0
+  StrCmp $0 "0.0.0.0" machine_native found
+machine_native:
   ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
-  StrCmp $0 "" 0 found
+  StrCmp $0 "" current_user 0
+  StrCmp $0 "0.0.0.0" current_user found
+current_user:
   ReadRegStr $0 HKCU "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
   StrCmp $0 "" done found
 found:
@@ -1201,15 +1221,26 @@ done:
 FunctionEnd
 
 Function InstallPrereqs
-  ; Единственная оставшаяся зависимость — WebView2 Runtime. Инсталлятор .NET
-  ; больше не нужен: сборка self-contained несёт рантайм внутри себя.
+  ; Only the explicit Finish-page checkbox calls this function. The ordinary
+  ; user process requests a per-user runtime; no runas/elevation is performed.
   StrCpy $PrereqsRan 1
   Call DetectWebView2
   StrCmp $WebView2Present 1 skip 0
   StrCpy $1 "$PLUGINSDIR\Redist\${PREREQ_WEBVIEW2}"
-  IfFileExists "$1" 0 skip
-    ; Bootstrapper сам решает, что качать; //silent /install проходит без окон.
-    ExecWait '"$1" /silent /install'
+  IfFileExists "$1" 0 prereq_failed
+    ClearErrors
+    ExecWait '"$1" /silent /install' $2
+    IfErrors prereq_failed
+    DetailPrint "WebView2 bootstrapper exit code: $2"
+    Call DetectWebView2
+    StrCmp $WebView2Present 1 skip prereq_failed
+prereq_failed:
+  DetailPrint "WebView2 Runtime is not available after optional setup."
+!ifdef NATIVE_CLIENT
+  MessageBox MB_OK|MB_ICONEXCLAMATION "Не удалось установить компонент для видео YouTube. Игры будут работать, а видео пока можно открыть в браузере. Подключитесь к интернету и повторите установку Chill Hub, чтобы добавить компонент." /SD IDOK
+!else
+  MessageBox MB_OK|MB_ICONEXCLAMATION "Не удалось установить компонент для новостей. Игры будут работать. Подключитесь к интернету и повторите установку Chill Hub, чтобы добавить компонент." /SD IDOK
+!endif
 skip:
   ; If user asked to run app, do it now after prereqs
   StrCmp $LaunchAfterFlag 1 0 +2

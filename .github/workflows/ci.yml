@@ -21,6 +21,7 @@ name: CI
 #   golangci-lint            v2.15.0
 #   govulncheck              v1.9.0
 #   Go toolchain             taken from server/go.mod (single source of truth)
+#   Rust toolchain           1.99.1 (Native, Windows MSVC)
 # ---------------------------------------------------------------------------
 
 # И16: минимальные права для GITHUB_TOKEN.
@@ -84,6 +85,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       dotnet: ${{ steps.f.outputs.dotnet }}
+      native: ${{ steps.f.outputs.native }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,6 +102,7 @@ jobs:
           if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             echo "базы для сравнения нет (ручной запуск?) — считаем, что задето всё"
             echo "dotnet=true" >> "$GITHUB_OUTPUT"
+            echo "native=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -113,6 +116,12 @@ jobs:
           else
             echo "dotnet=false" >> "$GITHUB_OUTPUT"
             echo "→ клиент не задет: сборка и установщик пропускаются"
+          fi
+
+          if echo "$FILES" | grep -qE '^(launcher/ChillHub\.Native/|scripts/(native-|ensure-webview2-bootstrapper\.ps1$|app\.ico$|installer\.nsi$|ci/ensure-native-rust\.ps1$)|\.github/workflows/ci\.yml$|\.gitattributes$|\.editorconfig$)'; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native=false" >> "$GITHUB_OUTPUT"
           fi
 
   # Соглашение из CLAUDE.md, проверяемое машиной.
@@ -781,7 +790,7 @@ jobs:
     # чужой код до неё физически не доедет даже при ошибочном одобрении:
     # для форка выражение вычисляется в windows-latest.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # setup-dotnet нет по той же причине, что и в dotnet-lint выше:
@@ -812,8 +821,8 @@ jobs:
       - name: Build installer
         shell: pwsh
         # No secrets required: scripts/installer.nsi does not sign the output and
-        # pulls the optional .NET/WebView2 redistributables with `File /nonfatal`,
-        # so a runner without scripts/Redist/ still produces a working setup.exe.
+        # validates the official WebView2 bootstrapper; only this non-release
+        # legacy build may omit it after a download failure. .NET is self-contained.
         #
         # -AppVersion обязателен (Б8): installer.nsi больше не имеет молчаливого
         # дефолта версии. Здесь ЗАВЕДОМО нерелизное значение 0.0.0-ci — этот
@@ -850,6 +859,29 @@ jobs:
       - name: Smoke-проверка установщика
         shell: pwsh
         run: ./scripts/ci/smoke-installer.ps1 -ExpectedVersion 0.0.0-ci
+      # Native проходит тот же обязательный check, не меняя имён branch protection.
+      # C# сборка и настоящий installer smoke выше остаются без изменений.
+      - name: Подготовить закреплённый Rust для Native
+        if: needs.changes.result != 'success' || needs.changes.outputs.native == 'true'
+        shell: pwsh
+        run: ./scripts/ci/ensure-native-rust.ps1
+      - name: Native — формат, Clippy, тесты и три Release-приложения
+        if: needs.changes.result != 'success' || needs.changes.outputs.native == 'true'
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/native-ci-target
+        run: ./scripts/native-ci.ps1 -ValidationOnly
+      - name: Сохранить журналы и снимки Native
+        if: always() && (needs.changes.result != 'success' || needs.changes.outputs.native == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
+        with:
+          name: native-windows-validation
+          path: |
+            launcher/ChillHub.Native/dist/ci-tests.log
+            launcher/ChillHub.Native/dist/qa-renders
+            launcher/ChillHub.Native/dist/build-info.json
+            launcher/ChillHub.Native/dist/helper-runtime-deps.txt
+          retention-days: 7
       # Сам установщик артефактом не выкладывается: его никто не скачивал, а
       # полсотни мегабайт на каждый прогон за девяносто дней хранения съели
       # общую квоту артефактов организации, и 21.09.2026 CI упал во всех
@@ -934,7 +966,7 @@ jobs:
           # launcher/ChillHub/ChillHub.csproj, launcher/tests/ в установщик не
           # входит и ни одного раздаваемого байта не меняет. Взятый целиком, он
           # требовал релиза клиента ради обновления тестового пакета.
-          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
+          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|ensure-webview2-bootstrapper\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
             echo "PR не трогает ни launcher/updater, ни триггеры полной выкатки — версия клиента ни при чём"
             exit 0
           fi

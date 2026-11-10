@@ -695,76 +695,8 @@ if ($SkipInstaller) {
     return
 }
 
-# WebView2 Evergreen Bootstrapper.
-#
-# scripts/Redist/ лежит в .gitignore, и CI его ничем не наполнял: из-за
-# `File /nonfatal` в installer.nsi сборка молча проходила БЕЗ зависимостей, и
-# установщик, который выкладывается на сайт, не содержал ни .NET, ни WebView2.
-# Пользователь получал лаунчер, который не запускается, без единой подсказки.
-#
-# Bootstrapper весит ~2 МБ (офлайн-пакет — 183 МБ), поэтому его дешевле забирать
-# на каждой сборке, чем держать в репозитории. Если сети нет — не валимся:
-# установщик соберётся без него, ровно как раньше, но об этом будет сказано вслух.
-function Ensure-WebView2Bootstrapper {
-    param(
-        [Parameter(Mandatory = $true)][string]$RedistDir,
-        # ОТСУТСТВИЕ ЗАВИСИМОСТИ В РЕЛИЗЕ — ОШИБКА, А НЕ ПРЕДУПРЕЖДЕНИЕ.
-        #
-        # Здесь был только Write-Warning, а в installer.nsi — `File /nonfatal`.
-        # Вдвоём это ровно та комбинация, из-за которой однажды уже выложили
-        # установщик без зависимостей вообще: сеть моргнула на раннере, сборка
-        # прошла зелёной, файл уехал на сайт, и у тех, у кого WebView2 нет,
-        # молча не открываются новости. Предупреждение в логе УСПЕШНОЙ сборки
-        # не читает никто — на то оно и успешная.
-        #
-        # Для нерелизных сборок (0.0.0-ci, локальная проверка «собирается ли»)
-        # остаётся предупреждение: там артефакт никуда не публикуется, и ронять
-        # проверку из-за сети незачем.
-        [switch]$Required
-    )
-
-    $target = Join-Path $RedistDir 'MicrosoftEdgeWebview2Setup.exe'
-    if (Test-Path -LiteralPath $target) {
-        $mb = [math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
-        Write-Host "WebView2 bootstrapper: уже на месте ($mb МБ)" -ForegroundColor Cyan
-        return
-    }
-
-    New-Item -ItemType Directory -Force -Path $RedistDir | Out-Null
-    # Официальный вечный редирект Microsoft на актуальный bootstrapper.
-    $url = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
-    try {
-        Write-Host "WebView2 bootstrapper: качаю..." -ForegroundColor Cyan
-        $tmp = "$target.tmp"
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 120
-        # Проверяем, что приехал исполняемый файл, а не страница-заглушка:
-        # HTML вместо .exe молча превратился бы в неработающую зависимость.
-        $head = [System.IO.File]::ReadAllBytes($tmp)[0..1]
-        if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
-            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-            throw "по ссылке пришёл не исполняемый файл (нет сигнатуры MZ)"
-        }
-        Move-Item -LiteralPath $tmp -Destination $target -Force
-        $mb = [math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
-        Write-Host "WebView2 bootstrapper: готов ($mb МБ)" -ForegroundColor Green
-    }
-    catch {
-        if ($Required) {
-            throw @"
-WebView2 bootstrapper не скачан: $($_.Exception.Message)
-
-Это РЕЛИЗНАЯ сборка, а без bootstrapper'а установщик выложится без
-зависимости: у всех, у кого нет WebView2 Runtime (в основном Windows 10 без
-свежего Edge), в лаунчере молча не откроются новости.
-
-Как чинить: повторить сборку, когда сеть доступна, либо положить файл руками в
-$RedistDir (официальная ссылка: https://go.microsoft.com/fwlink/p/?LinkId=2124703).
-"@
-        }
-        Write-Warning "WebView2 bootstrapper не скачан: $($_.Exception.Message)"
-        Write-Warning "Сборка нерелизная — продолжаю без него. На машине без WebView2 не откроются новости."
-    }
-}
+# Both installers use the same official bootstrapper and validate Microsoft Authenticode.
+. (Join-Path $PSScriptRoot 'ensure-webview2-bootstrapper.ps1')
 
 # Резолвим версию ДО поиска makensis и до подготовки зависимостей: если версии
 # нет, падать надо сразу, а не после того, как найден компилятор и созданы
@@ -773,7 +705,7 @@ $RedistDir (официальная ссылка: https://go.microsoft.com/fwlink
 $resolvedVersion = Resolve-AppVersion -Explicit $AppVersion -BuildOutputDir $BuildOutputDir
 $isReleaseBuild = -not ($resolvedVersion -like '0.0.0*')
 
-Ensure-WebView2Bootstrapper -RedistDir (Join-Path (Split-Path $Installer -Parent) 'Redist') -Required:$isReleaseBuild
+$null = Ensure-WebView2Bootstrapper -RedistDir (Join-Path (Split-Path $Installer -Parent) 'Redist') -Required:$isReleaseBuild
 
 $makensis = Find-Makensis -ExplicitPath $MakensisPath
 # Resolve to full path and ensure string type
