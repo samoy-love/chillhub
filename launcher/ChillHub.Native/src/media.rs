@@ -22,33 +22,33 @@ struct Validators {
     payload_hash: String,
 }
 
-fn validators(path: &Path) -> Validators {
-    let load = || {
-        let file = fs::File::open(path.with_extension("meta")).ok()?;
-        if file.metadata().ok()?.len() > 8192 {
-            return None;
-        }
-        let mut bytes = Vec::new();
-        file.take(8193).read_to_end(&mut bytes).ok()?;
-        if bytes.len() > 8192 {
-            return None;
-        }
-        let metadata: Validators = serde_json::from_slice(&bytes).ok()?;
-        // Bind validators to the actual cached bytes. A failed sidecar write
-        // after replacing the image must not validate unrelated older content.
-        let file = fs::File::open(path).ok()?;
-        if file.metadata().ok()?.len() > MAX_IMAGE_BYTES {
-            return None;
-        }
-        bytes.clear();
-        file.take(MAX_IMAGE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        (bytes.len() as u64 <= MAX_IMAGE_BYTES
-            && metadata.payload_hash == blake3::hash(&bytes).to_hex().as_str())
-        .then_some(metadata)
-    };
-    load().unwrap_or_default()
+fn validators(path: &Path) -> Result<Validators, std::io::Error> {
+    let invalid = |message| std::io::Error::new(std::io::ErrorKind::InvalidData, message);
+    let file = fs::File::open(path.with_extension("meta"))?;
+    if file.metadata()?.len() > 8192 {
+        return Err(invalid("Image metadata exceeds the size limit"));
+    }
+    let mut bytes = Vec::new();
+    file.take(8193).read_to_end(&mut bytes)?;
+    if bytes.len() > 8192 {
+        return Err(invalid("Image metadata exceeds the size limit"));
+    }
+    let metadata: Validators = serde_json::from_slice(&bytes)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    // Bind validators to the actual cached bytes. A failed sidecar write
+    // after replacing the image must not validate unrelated older content.
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_IMAGE_BYTES {
+        return Err(invalid("Cached image exceeds the size limit"));
+    }
+    bytes.clear();
+    file.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_IMAGE_BYTES
+        || metadata.payload_hash != blake3::hash(&bytes).to_hex().as_str()
+    {
+        return Err(invalid("Image metadata does not match the cached payload"));
+    }
+    Ok(metadata)
 }
 
 fn client() -> Result<&'static reqwest::blocking::Client, String> {
@@ -154,7 +154,14 @@ pub fn image_path(
     let path = url::Url::parse(&address).ok().map(|u| u.path().to_owned());
     let mut last_error = "Не удалось получить изображение".to_string();
     let validators = if cached {
-        validators(&output)
+        validators(&output).unwrap_or_else(|error| {
+            api.event(
+                "image.cache_metadata_read_error",
+                serde_json::json!({"path": path,
+                "error": error.to_string(), "osCode": error.raw_os_error()}),
+            );
+            Validators::default()
+        })
     } else {
         Validators::default()
     };
@@ -246,8 +253,15 @@ pub fn image_path(
                     payload_hash: blake3::hash(&bytes).to_hex().to_string(),
                     ..received_validators
                 };
-                if let Ok(metadata) = serde_json::to_vec(&received_validators) {
-                    let _ = atomic_write(&output.with_extension("meta"), &metadata);
+                if let Err(error) = serde_json::to_vec(&received_validators)
+                    .map_err(std::io::Error::other)
+                    .and_then(|metadata| atomic_write(&output.with_extension("meta"), &metadata))
+                {
+                    api.event(
+                        "image.cache_metadata_write_error",
+                        serde_json::json!({"path": path,
+                        "error": error.to_string(), "osCode": error.raw_os_error()}),
+                    );
                 }
                 api.event(
                     "image.download",
@@ -358,6 +372,9 @@ pub fn trim_cache(cache: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     const FISH_ICON: &[u8] = include_bytes!("../tests/fixtures/how-to-fish-icon.png");
+    // A fixture starts listening before its URL acquires a striped lock. Allow
+    // another URL's bounded two-attempt HTTP operation (2 x 10s) to finish first.
+    const SERVER_WAIT: Duration = Duration::from_secs(30);
 
     fn image_server(statuses: Vec<u16>) -> (ApiClient, std::thread::JoinHandle<()>) {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -365,7 +382,7 @@ mod tests {
         let worker = std::thread::spawn(move || {
             for status in statuses {
                 let request = server
-                    .recv_timeout(Duration::from_secs(5))
+                    .recv_timeout(SERVER_WAIT)
                     .unwrap()
                     .expect("expected image request");
                 request
@@ -443,17 +460,17 @@ mod tests {
         let api = ApiClient::new(&format!("http://{}", server.server_addr())).unwrap();
         let output = stale_image(&api, temp.path());
         let worker = std::thread::spawn(move || {
-            let request = server
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
+            let request = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
             let response = tiny_http::Response::new(
                 tiny_http::StatusCode(200),
                 vec![],
                 std::io::Cursor::new(Vec::<u8>::new()),
                 Some(MAX_IMAGE_BYTES as usize + 1),
                 None,
-            );
+            )
+            // tiny_http defaults to chunked above 32KiB. This fixture must
+            // advertise Content-Length so the client rejects it before the body.
+            .with_chunked_threshold(usize::MAX);
             let _ = request.respond(response);
         });
         assert_eq!(
@@ -539,12 +556,11 @@ mod tests {
     fn stale_image_is_revalidated_without_downloading_it_again() {
         let temp = tempfile::tempdir().unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-        let api = ApiClient::new(&format!("http://{}", server.server_addr())).unwrap();
+        let api = ApiClient::new(&format!("http://{}", server.server_addr()))
+            .unwrap()
+            .with_diagnostics(temp.path().join("profile"));
         let worker = std::thread::spawn(move || {
-            let first = server
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
+            let first = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
             assert!(
                 first
                     .headers()
@@ -557,10 +573,7 @@ mod tests {
                         .with_header(tiny_http::Header::from_bytes("ETag", "\"fish-v1\"").unwrap()),
                 )
                 .unwrap();
-            let second = server
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
+            let second = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
             assert!(
                 second
                     .headers()
@@ -570,6 +583,23 @@ mod tests {
             second.respond(tiny_http::Response::empty(304)).unwrap();
         });
         let path = image_path("/fish.png", temp.path(), temp.path(), &api).unwrap();
+        let metadata_bytes = fs::read(path.with_extension("meta")).unwrap_or_else(|error| {
+            panic!(
+                "Image validators were not persisted after 200: {error}; diagnostics: {}",
+                fs::read_to_string(temp.path().join("profile/logs/launcher.log"))
+                    .unwrap_or_default()
+            )
+        });
+        let metadata: Validators = serde_json::from_slice(&metadata_bytes).unwrap();
+        assert_eq!(metadata.etag.as_deref(), Some("\"fish-v1\""));
+        assert_eq!(
+            metadata.payload_hash,
+            blake3::hash(FISH_ICON).to_hex().as_str()
+        );
+        assert_eq!(
+            validators(&path).unwrap().etag.as_deref(),
+            Some("\"fish-v1\"")
+        );
         stale_image(&api, temp.path());
         assert_eq!(
             image_path("/fish.png", temp.path(), temp.path(), &api).unwrap(),
