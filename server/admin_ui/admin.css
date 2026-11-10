@@ -1080,6 +1080,12 @@ input[type="datetime-local"], input[type="date"] { color-scheme: inherit; }
 
 /* ---------- Узкий экран ---------- */
 
+@media (width < 1050px) {
+  .search { min-width: 0; }
+  .search .lbl { display: none; }
+  .search kbd { white-space: nowrap; }
+}
+
 @media (width < 900px) {
   /* КОЛОНКА НЕ РАСТЯГИВАЕТСЯ ПОД СОДЕРЖИМОЕ.
      У `1fr` нижняя граница — самый широкий неразрывный кусок внутри, и
@@ -1302,3 +1308,14 @@ input[type="datetime-local"], input[type="date"] { color-scheme: inherit; }
   textarea { font-size: 16px; }
   .check input { width: 18px; height: 18px; }
 }
+
+.presentation-row {
+  min-width: 0;
+  margin: 0;
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r2, 8px);
+}
+
+.presentation-row legend { padding: 0 var(--s2); font-weight: 600; }
+.presentation-row .field + .field { margin-top: var(--s3); }

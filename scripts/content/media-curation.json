@@ -1,0 +1,11 @@
+{
+  "over-the-hill":{"screenshots":[{"index":0,"caption":"Поездка по горной долине"},{"index":1,"caption":"Осеннее бездорожье"},{"index":2,"caption":"Маршрут у озера"}]},
+  "bombanana":{"screenshots":[{"index":0,"caption":"Три роли у одной бомбы"},{"index":1,"caption":"Обезвреживание на ощупь"},{"index":2,"caption":"Подсказки и обратный отсчёт"}]},
+  "lethal-company":{"screenshots":[{"index":0,"caption":"Связь с командой"},{"index":1,"caption":"Поиск добычи внутри комплекса"},{"index":2,"caption":"Опасности снаружи"}]},
+  "farfarwest":{"screenshots":[{"index":4,"caption":"Команда роботов-ковбоев"},{"index":12,"caption":"Сражение с необычным боссом"},{"index":18,"caption":"Оружие и магия в одном бою"}]},
+  "how-to-fish":{"screenshots":[{"index":0,"caption":"Исследование острова"},{"index":1,"caption":"Необычный улов"},{"index":2,"caption":"Рыбалка с друзьями"}]},
+  "repo":{"screenshots":[{"index":0,"caption":"Неожиданная встреча"},{"index":1,"caption":"Добыча в опасном доме"},{"index":2,"caption":"Угроза за каждым углом"}]},
+  "drive-beyond-horizons":{"screenshots":[{"index":5,"caption":"Дорога за горизонт"},{"index":1,"caption":"Обслуживание автомобиля"},{"index":8,"caption":"Остановка в пути"}]},
+  "peak":{"screenshots":[{"index":0,"caption":"Путь к вершине"},{"index":1,"caption":"Восхождение по верёвке"},{"index":2,"caption":"Начало путешествия"}]},
+  "machine-party":{"screenshots":[{"index":0,"caption":"Испытания для компании"},{"index":1,"caption":"Опасные правила раунда"},{"index":2,"caption":"Ваш соперник"}]}
+}

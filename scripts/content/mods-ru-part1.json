@@ -1,0 +1,805 @@
+{
+  "250ya-PeakRunSettingsFix-1.0.0": {
+    "russianName": "Исправление загрузки сохранений",
+    "description": "Исправляет неработающую кнопку «Продолжить», если в сохранении остались настройки удалённых или обновлённых модов. Неизвестные настройки пропускаются.",
+    "category": "Исправления"
+  },
+  "347956-JPOGTrex-1.1.6": {
+    "russianName": "Тираннозавр JPOG",
+    "description": "Добавляет тираннозавра из Jurassic Park: Operation Genesis. Он появляется снаружи, замечает движение игроков в поле зрения и начинает преследование.",
+    "category": "Контент",
+    "source": "https://thunderstore.io/api/experimental/package/347956/JPOGTrex/1.1.6/readme/"
+  },
+  "45x_Dev-45x_Anime_Models-1.5.1": {
+    "russianName": "Аниме-модели 45x",
+    "description": "Добавляет аниме-модели для Lethal Company с оптимизированными моделями и шейдером в аниме-стиле.",
+    "category": "Косметика"
+  },
+  "4902-No_Console_Spam-1.8.1": {
+    "russianName": "Меньше повторов в журнале",
+    "description": "Ограничивает частоту сообщений, которые моды записывают в журнал каждый кадр.",
+    "category": "Исправления"
+  },
+  "AddzeeyMods-CrumpHats-1.2.0": {
+    "russianName": "Шляпы Crump",
+    "description": "Добавляет шляпы, связанные с сообществом Crump и дружественными сообществами.",
+    "category": "Косметика"
+  },
+  "AiAeT-BetterPeakVoiceFix-1.1.4": {
+    "russianName": "Исправление голосовой связи",
+    "description": "Автоматически восстанавливает голосовое соединение, синхронизирует его с хостом и показывает состояние связи на экране.",
+    "category": "Исправления"
+  },
+  "AiAeT-ModConfigEnhance-1.0.2": {
+    "russianName": "Улучшенные настройки модов",
+    "description": "Дополняет ModConfig деревом разделов, панелью описания, инструментами перевода и языковыми файлами.",
+    "category": "Интерфейс"
+  },
+  "AiAeT-PeakSpectatorMode-1.2.0": {
+    "russianName": "Улучшенное наблюдение",
+    "description": "Добавляет свободную камеру по F3, переключение игроков по Q/E, плавное следование, подписи с высотой и силуэты сквозь стены.",
+    "category": "Удобство"
+  },
+  "AinaVT-LethalConfig-1.4.6": {
+    "russianName": "Настройки модов в игре",
+    "description": "Позволяет менять настройки модов прямо в игре. Предоставляет другим модам средства добавления собственных пунктов меню.",
+    "category": "Интерфейс"
+  },
+  "Alice-DungeonGenerationPlus-1.5.1": {
+    "russianName": "Расширение генерации подземелий",
+    "description": "Библиотека для расширения совместимости модов с генерацией подземелий Lethal Company.",
+    "category": "Зависимости"
+  },
+  "Altaks-PeakAchiever-0.3.0": {
+    "russianName": "Отслеживание значков",
+    "description": "Позволяет закрепить значки в меню паузы и во время восхождения следить за условиями их получения: прогрессом, таймерами и нужными предметами.",
+    "category": "Интерфейс"
+  },
+  "an0nymooose-Fair_SnowStorm_Winds-1.0.6": {
+    "russianName": "Укрытие от снежного ветра",
+    "description": "Защищает от ветра, когда перед персонажем действительно есть препятствие.",
+    "category": "Геймплей"
+  },
+  "AntlerShed-EnemySkinRegistry-1.5.1": {
+    "russianName": "Совместимость обликов врагов",
+    "description": "Обеспечивает совместимость пользовательских обликов врагов между модами.",
+    "category": "Зависимости"
+  },
+  "AriIcedT-Aris_Custom_Cosmetics-1.1.0": {
+    "russianName": "Косметика Ari",
+    "description": "Добавляет авторские косметические предметы от AriIcedT.",
+    "category": "Косметика"
+  },
+  "AriIcedT-MinecraftStrongholdLevel-1.14.0": {
+    "russianName": "Крепость из Minecraft",
+    "description": "Добавляет карту крепости Minecraft с авторскими особенностями.",
+    "category": "Контент"
+  },
+  "AriIcedT-YippeeDuckEnemy-1.0.2": {
+    "russianName": "Утка «Yippee»",
+    "description": "Добавляет отдельного врага — утку «Yippee». Обычную утку не заменяет.",
+    "category": "Контент"
+  },
+  "asdfmovie402-MoreAscents-1.5.1": {
+    "russianName": "Новые уровни восхождения",
+    "description": "Добавляет ещё девять уровней восхождения.",
+    "category": "Геймплей"
+  },
+  "Aspect-BetterSprayPaint_v80Fix-1.0.3": {
+    "russianName": "Исправление краски для v80",
+    "description": "Адаптирует мод BetterSprayPaint к версии v80.",
+    "category": "Исправления"
+  },
+  "ASTeam-LethalReloaded-2.3.1": {
+    "russianName": "Сборка Lethal Reloaded",
+    "description": "Сборка для v81: автор заявляет 161 мод, более 60 лун и более 20 врагов с упором на производительность и баланс.",
+    "category": "Сборка"
+  },
+  "ASTeam-Racist_Hoarding_Bugs_Updated-1.0.0": {
+    "russianName": "Обновлённые звуки жуков",
+    "description": "Переносит Racist Hoarding Bugs на loaforcsSoundAPI. По описанию автора, оскорбительная лексика не используется.",
+    "category": "Звук"
+  },
+  "AtomicStudio-Atomics_Cosmetics_PEAK-1.0.3": {
+    "russianName": "Наряды горничных",
+    "description": "Добавляет восемь нарядов горничных разных цветов.",
+    "category": "Косметика"
+  },
+  "AtomicStudio-Better_Kick-0.1.3": {
+    "russianName": "Пинки в обычном забеге",
+    "description": "Позволяет пинать друзей в обычных забегах клавишей V.",
+    "category": "Геймплей"
+  },
+  "AtomicStudio-Colored_Marshmallows-0.1.0": {
+    "russianName": "Разноцветный зефир",
+    "description": "Добавляет три новых варианта зефира.",
+    "category": "Контент"
+  },
+  "AtomicStudio-Dance_To_Stay_Warm-1.0.0": {
+    "russianName": "Танцы согревают",
+    "description": "Уменьшает эффект холода во время эмоций Dance и Shimmy. Силу эффекта можно настроить.",
+    "category": "Геймплей"
+  },
+  "AtomicStudio-Fishydex-0.1.2": {
+    "russianName": "Подсказки для рыбалки",
+    "description": "Показывает, какая приманка нужна для рыбы, и позволяет переключать варианты drip.",
+    "category": "Удобство"
+  },
+  "AtomicStudio-Moved_Magnet_Switch-1.5.0": {
+    "russianName": "Перенос переключателя магнита",
+    "description": "Перемещает переключатель магнита, чтобы за ним не приходилось идти в заднюю часть корабля.",
+    "category": "Удобство"
+  },
+  "AtomicStudio-Moved_Voice_Indicator-0.1.1": {
+    "russianName": "Положение индикатора голоса",
+    "description": "Позволяет изменить положение индикатора голосовой связи в настройках.",
+    "category": "Интерфейс"
+  },
+  "AtomicStudio-Stackable_Items-0.1.5": {
+    "russianName": "Предметы в стопках",
+    "description": "Складывает одинаковые предметы в одну ячейку инвентаря.",
+    "category": "Удобство"
+  },
+  "AudioKnight-StarlancerAIFix-3.13.2": {
+    "russianName": "Исправление поведения врагов",
+    "description": "Выбирает поведение врагов для помещений или улицы по месту их появления и корректирует связанные действия.",
+    "category": "Исправления"
+  },
+  "Ayzax-Ultrawide_HUD-1.0.1": {
+    "russianName": "Интерфейс для широких экранов",
+    "description": "Позволяет настроить расположение элементов интерфейса на сверхшироких мониторах.",
+    "category": "Интерфейс"
+  },
+  "Azumatt-BetterSwimming-1.0.3": {
+    "russianName": "Удобное плавание",
+    "description": "Заменяет частые нажатия прыжка удержанием кнопки. Настраивает плавание на месте, ныряние и плавучесть с учётом волн.",
+    "category": "Геймплей"
+  },
+  "Azumatt-ChumBucket-1.1.0": {
+    "russianName": "Ведро для продажи рыбы",
+    "description": "Добавляет переносное ведро: складывайте в него улов и продавайте всё сразу одной кнопкой.",
+    "category": "Удобство"
+  },
+  "Azumatt-SeaLegs-1.0.2": {
+    "russianName": "Тело от первого лица",
+    "description": "Показывает собственные ноги, торс, руки и предмет в руках при виде от первого лица.",
+    "category": "Косметика"
+  },
+  "Bananegame-PeakImposter-1.0.4": {
+    "russianName": "Режим предателя в PEAK",
+    "description": "Добавляет скрытого предателя с ритуальным кинжалом, шерифа, защитную фазу, задержки действий и перераспределение ролей у костра.",
+    "category": "Геймплей"
+  },
+  "Beaniebe-Beanie_Lib-1.0.9": {
+    "russianName": "Библиотека Beanie",
+    "description": "Содержит вспомогательные сценарии для модов Beaniebe.",
+    "category": "Зависимости"
+  },
+  "Beaniebe-Beanies_Pocket_Rooms-1.0.2": {
+    "russianName": "Карманные комнаты корабля",
+    "description": "Добавляет набор авторских карманных комнат для корабля.",
+    "category": "Контент"
+  },
+  "Beaniebe-Deeproot_Garden-1.1.8": {
+    "russianName": "Сад Deeproot",
+    "description": "Добавляет уровень-сад в стиле оригинальной игры.",
+    "category": "Контент"
+  },
+  "Bengimi-BensCosmetics-1.5.5": {
+    "russianName": "Косметика Ben",
+    "description": "Добавляет коллекцию моделей автора и его друзей.",
+    "category": "Косметика"
+  },
+  "BepInEx-BepInExPack_PEAK-5.4.75301": {
+    "russianName": "Основа модов PEAK",
+    "description": "Предварительно настроенный пакет BepInEx для PEAK, необходимый другим модам.",
+    "category": "Зависимости"
+  },
+  "BepInEx-BepInExPack-5.4.2305": {
+    "russianName": "Основа модов BepInEx",
+    "description": "Предварительно настроенный пакет BepInEx для игр на Unity Mono, необходимый другим модам.",
+    "category": "Зависимости"
+  },
+  "BlueAmulet-CosmeticResync-1.0.0": {
+    "russianName": "Сохранение внешнего вида",
+    "description": "Сохраняет выбранный внешний вид при добавлении или удалении косметических модов.",
+    "category": "Исправления"
+  },
+  "Bob123-Haunted_Harpist-1.3.24": {
+    "russianName": "Призраки Haunted Harpist",
+    "description": "Добавляет несколько призрачных врагов.",
+    "category": "Контент"
+  },
+  "BobaRat-BobasHats-1.1.5": {
+    "russianName": "Шляпы Boba",
+    "description": "Добавляет новые шляпы для PEAK.",
+    "category": "Косметика"
+  },
+  "Bobbie-NAudio-2.2.2": {
+    "russianName": "Звуковая библиотека NAudio",
+    "description": "Библиотека для работы со звуком и MIDI в .NET. Используется другими модами.",
+    "category": "Зависимости"
+  },
+  "BOJIWE6H1K-BalloonMerger-1.1.0": {
+    "russianName": "Объединение воздушных шаров",
+    "description": "Объединяет три одиночных шара в связку по клавише V и экономит место в инвентаре. По описанию автора, работает на стороне игрока на любом сервере.",
+    "category": "Удобство"
+  },
+  "BOJIWE6H1K-BetterAmuletUI-1.0.0": {
+    "russianName": "Расход амулетов на экране",
+    "description": "Показывает меняющийся расход окаменения для всех амулетов.",
+    "category": "Интерфейс"
+  },
+  "BOJIWE6H1K-RescueClawItemPull-1.0.1": {
+    "russianName": "Притягивание спасательной клешнёй",
+    "description": "Исправляет подсветку спасательной клешни сквозь стены и добавляет притягивание предметов, включая рюкзаки и прикреплённые вещи.",
+    "category": "Исправления"
+  },
+  "Bouncing-CapybaraDance-1.0.3": {
+    "russianName": "Танцующие капибары",
+    "description": "Заставляет капибар танцевать.",
+    "category": "Косметика"
+  },
+  "boxofbiscuits97-ItemStats-0.6.1": {
+    "russianName": "Характеристики предмета",
+    "description": "Показывает характеристики выбранного предмета в инвентаре.",
+    "category": "Интерфейс"
+  },
+  "boxofbiscuits97-PushMod-1.1.0": {
+    "russianName": "Толкание друзей",
+    "description": "Позволяет толкать друзей клавишей F.",
+    "category": "Геймплей"
+  },
+  "BULLETBOT-KeybindLib-1.0.6": {
+    "russianName": "Библиотека горячих клавиш",
+    "description": "Позволяет другим модам добавлять свои назначения клавиш в настройки управления.",
+    "category": "Зависимости"
+  },
+  "BULLETBOT-MoreUpgrades-1.7.3": {
+    "russianName": "Дополнительные улучшения",
+    "description": "Добавляет новые предметы улучшения с подробными настройками.",
+    "category": "Контент"
+  },
+  "BULLETBOT-ScaleInCart-1.2.3": {
+    "russianName": "Размер предметов в тележке",
+    "description": "Меняет размер ценностей и других предметов в тележке, включая добавленные модами. Поведение настраивается.",
+    "category": "Удобство"
+  },
+  "BunyaPineTree-ModelReplacementAPI-2.4.20": {
+    "russianName": "Библиотека замены моделей",
+    "description": "Предоставляет другим модам средства для замены моделей.",
+    "category": "Зависимости"
+  },
+  "Bushcranks_Solo_Projects-Bushcranks_Hats-1.1.1": {
+    "russianName": "Шляпы Bushcrank",
+    "description": "Добавляет шляпы по персонажам друзей автора и другие небольшие украшения.",
+    "category": "Косметика"
+  },
+  "BustaB-BustaCosmetics-1.1.1": {
+    "russianName": "Косметика Busta",
+    "description": "Добавляет косметику по персонажам друзей автора.",
+    "category": "Косметика"
+  },
+  "ButterPacks-SnailCo_Cosmetics-1.2.0": {
+    "russianName": "Косметика SnailCo",
+    "description": "Добавляет набор косметических предметов SnailCo.",
+    "category": "Косметика"
+  },
+  "ButteryStancakes-BarberFixes-1.3.1": {
+    "russianName": "Исправления цирюльников",
+    "description": "Исправляет ошибки врагов-цирюльников и позволяет вернуть их появление из прежних версий игры.",
+    "category": "Исправления"
+  },
+  "ButteryStancakes-ButteRyBalance-0.7.2": {
+    "russianName": "Настраиваемый баланс",
+    "description": "Меняет баланс нескольких игровых механик. Настройки задаёт хост, изменения синхронизируются между игроками.",
+    "category": "Геймплей"
+  },
+  "ButteryStancakes-ButteryFixes-1.17.23": {
+    "russianName": "Исправления оригинальной игры",
+    "description": "Исправляет множество ошибок игровых механик оригинальной игры.",
+    "category": "Исправления"
+  },
+  "ButteryStancakes-EnemySoundFixes-1.9.21": {
+    "russianName": "Исправления звуков врагов",
+    "description": "Исправляет пропадающие звуковые эффекты и случаи, когда они воспроизводятся не вовремя.",
+    "category": "Исправления"
+  },
+  "ButteryStancakes-JetpackFixes-1.6.3": {
+    "russianName": "Исправления реактивного ранца",
+    "description": "Исправляет ошибки реактивного ранца, включая случайные взрывы и падения из-за тюльпановых змей.",
+    "category": "Исправления"
+  },
+  "ButteryStancakes-MaskFixes-1.6.3": {
+    "russianName": "Исправления масок",
+    "description": "Исправляет ошибки предметов-масок и врагов в масках.",
+    "category": "Исправления"
+  },
+  "ButteryStancakes-Scout_Cookies_Randomizer-1.0.0": {
+    "russianName": "Разные скаутские печенья",
+    "description": "Случайно выбирает для коробок печенья один из двух вариантов: обычное мятное печенье или неиспользовавшиеся ванильные вафли.",
+    "category": "Косметика"
+  },
+  "ButteryStancakes-SpawnCycleFixes-1.2.3": {
+    "russianName": "Исправления появления врагов",
+    "description": "Исправляет ошибки цикла появления врагов, делая его более последовательным и предсказуемым.",
+    "category": "Исправления"
+  },
+  "Cabinet_crew-TheCabinet-1.12.1": {
+    "russianName": "Монстр The Cabinet",
+    "description": "Добавляет отдельное существо, которое скрывается среди мебели, особенно в особняках. Его взаимодействия предлагается открывать во время игры.",
+    "category": "Контент",
+    "source": "https://thunderstore.io/api/experimental/package/Cabinet_crew/TheCabinet/1.12.1/readme/"
+  },
+  "catcraze777-Split_Stats_Speedrunning_Timer-1.4.0": {
+    "russianName": "Таймер скоростного прохождения",
+    "description": "Автоматически отслеживает забеги и дополнительные показатели во время скоростного прохождения.",
+    "category": "Интерфейс"
+  },
+  "Ccode_lang-SirenHead-2.0.7": {
+    "russianName": "Сиреноголовый",
+    "description": "Добавляет в Lethal Company Сиреноголового — персонажа Тревора Хендерсона.",
+    "category": "Контент"
+  },
+  "chouja-DisableClientSideTimeout-1.0.2": {
+    "russianName": "Отключение проверки тайм-аута",
+    "description": "Отключает проверки тайм-аута Photon на стороне игрока.",
+    "category": "Исправления"
+  },
+  "chrispavs-HardcoreParkour-0.2.5": {
+    "russianName": "Сальто в воздухе",
+    "description": "Позволяет делать сальто по клавише F в воздухе. Успешное приземление восстанавливает выносливость.",
+    "category": "Геймплей"
+  },
+  "chuxiaaaa-LoadingInfo-1.1.4": {
+    "russianName": "Кто ещё загружается",
+    "description": "Показывает игроков, которые ещё не закончили загрузку.",
+    "category": "Интерфейс"
+  },
+  "clancker1223-Peak_Fortress_2_Hat_Pack-1.4.5": {
+    "russianName": "Шляпы из Team Fortress 2",
+    "description": "Добавляет несколько шляп из Team Fortress 2.",
+    "category": "Косметика"
+  },
+  "Clementinise-ZoomyEyes-1.1.0": {
+    "russianName": "Приближение и зрачки",
+    "description": "Позволяет настроить размер зрачков и приближать изображение. Изменения зрачков видны другим игрокам и синхронизируются.",
+    "category": "Косметика"
+  },
+  "CMax-HideVersion-0.1.1": {
+    "russianName": "Прозрачность номера версии",
+    "description": "Позволяет изменить прозрачность надписи с версией игры.",
+    "category": "Интерфейс"
+  },
+  "coderCleric-Poltergeist-1.2.12": {
+    "russianName": "Призрак после смерти",
+    "description": "Даёт погибшим игрокам свободную камеру и возможность взаимодействовать с окружением в роли призрака.",
+    "category": "Геймплей"
+  },
+  "ColtG5-LegoGnomes-1.0.2": {
+    "russianName": "Гномы со звуком LEGO",
+    "description": "Воспроизводит звук рассыпающихся деталей LEGO при смерти гнома.",
+    "category": "Звук"
+  },
+  "Continuum-PeakClawStallFix-1.0.2": {
+    "russianName": "Исправление спасательной клешни",
+    "description": "Исправляет сбои клешни на границе дальности: повторно проверяет недавно доступную поверхность, чтобы притягивание не зависало.",
+    "category": "Исправления"
+  },
+  "coolteamname-peakReconnect-1.0.2": {
+    "russianName": "Быстрое переподключение",
+    "description": "Переподключает к последнему серверу по настраиваемой клавише или кнопке контроллера.",
+    "category": "Удобство"
+  },
+  "cretapark-More_Customizations-1.1.10": {
+    "russianName": "Основа пользовательской косметики",
+    "description": "Упрощает создание и добавление косметического контента для других модов.",
+    "category": "Зависимости"
+  },
+  "CTNOriginals-PEAKFastStartup-1.1.2": {
+    "russianName": "Быстрый старт PEAK",
+    "description": "Пропускает длинную заставку при запуске и сразу начинает загрузку игры.",
+    "category": "Удобство"
+  },
+  "Cysharp-UniTask-2.5.0": {
+    "russianName": "Библиотека UniTask",
+    "description": "Предоставляет модам средства асинхронной работы в Unity с минимальными выделениями памяти.",
+    "category": "Зависимости"
+  },
+  "Darkbrewery-Emblem-1.6.4": {
+    "russianName": "Оформление заставок",
+    "description": "Позволяет менять оформление титульного экрана и экранов загрузки.",
+    "category": "Интерфейс"
+  },
+  "DarkSpider-TextUpgradesUIScale-1.2.1": {
+    "russianName": "Размер списка улучшений",
+    "description": "Позволяет менять размер текста списка улучшений R.E.P.O. после версии 0.4.0 с настраиваемым шагом.",
+    "category": "Интерфейс"
+  },
+  "darmuh-darmuhsTerminalStuff-3.10.4": {
+    "russianName": "Расширенный терминал",
+    "description": "Добавляет новые возможности терминала и множество настроек. Автор указывает совместимость с v80.",
+    "category": "Удобство"
+  },
+  "darmuh-FovUpdate-0.3.3": {
+    "russianName": "Поле зрения и масштаб",
+    "description": "Позволяет настроить поле зрения и масштаб изображения, а также поддержку сверхшироких и сверхвысоких экранов.",
+    "category": "Интерфейс"
+  },
+  "darmuh-OpenLib-0.4.3": {
+    "russianName": "Библиотека OpenLib",
+    "description": "Открытая библиотека для разработки модов Lethal Company, поддерживаемая darmuh.",
+    "category": "Зависимости"
+  },
+  "darmuh-suitsTerminal-1.8.1": {
+    "russianName": "Выбор костюмов через терминал",
+    "description": "Позволяет выбирать костюмы через терминал и освобождает вешалку. Изменения вешалки настраиваются.",
+    "category": "Удобство"
+  },
+  "Daxxpurpura-Watering_Can-1.2.0": {
+    "russianName": "Многофункциональная лейка",
+    "description": "Добавляет лейку с несколькими способами применения.",
+    "category": "Контент"
+  },
+  "DemonMae-Nightmare_Moons-2.6.8": {
+    "russianName": "Кошмарные луны",
+    "description": "Добавляет шесть лун, вдохновлённых атмосферными играми ужасов.",
+    "category": "Контент"
+  },
+  "DemonMae-ut99_interiors-1.15.3": {
+    "russianName": "Интерьеры Unreal Tournament",
+    "description": "Добавляет шесть интерьеров в стиле Unreal Tournament.",
+    "category": "Контент"
+  },
+  "Dev1A3-BetterVehicleControls-1.1.8": {
+    "russianName": "Удобное управление транспортом",
+    "description": "Улучшает управление транспортными средствами.",
+    "category": "Удобство"
+  },
+  "Dev1A3-LethalFixes-1.3.3": {
+    "russianName": "Общие исправления Lethal Company",
+    "description": "Исправляет ряд распространённых ошибок игры.",
+    "category": "Исправления"
+  },
+  "Dev1A3-LobbyImprovements-1.1.4": {
+    "russianName": "Улучшенные лобби",
+    "description": "Добавляет улучшения для сетевых и локальных лобби.",
+    "category": "Удобство"
+  },
+  "DiaperSlopCo-PeakStance-0.2.2": {
+    "russianName": "Поза персонажа",
+    "description": "Позволяет выбрать позу персонажа в состоянии покоя.",
+    "category": "Косметика"
+  },
+  "DiFFoZ-BepInEx_Faster_Load_AssetBundles_Patcher-1.0.1": {
+    "russianName": "Ускоренная загрузка ресурсов",
+    "description": "Ускоряет загрузку ресурсов при запуске игры.",
+    "category": "Исправления"
+  },
+  "DiFFoZ-BepInEx_Faster_Load_AssetBundles_Patcher-1.2.0": {
+    "russianName": "Ускоренная загрузка ресурсов",
+    "description": "Ускоряет загрузку ресурсов при запуске игры.",
+    "category": "Исправления"
+  },
+  "DiFFoZ-HarmonyXTranspilerFix-1.4.0": {
+    "russianName": "Исправление патчей HarmonyX",
+    "description": "Исправляет ошибку HarmonyX, из-за которой изменённые модами методы могли работать неправильно.",
+    "category": "Исправления"
+  },
+  "DiFFoZ-LethalPerformance-1.5.1": {
+    "russianName": "Оптимизация Lethal Company",
+    "description": "Ускоряет повторный поиск часто используемых компонентов игры с помощью кеширования.",
+    "category": "Исправления"
+  },
+  "dig-REPOPresents-1.3.0": {
+    "russianName": "Подарки R.E.P.O.",
+    "description": "Добавляет подарки, в которых могут оказаться более ценные предметы.",
+    "category": "Контент"
+  },
+  "DiggC-CruiserImproved-1.6.4": {
+    "russianName": "Надёжный Company Cruiser",
+    "description": "Повышает надёжность работы Company Cruiser.",
+    "category": "Исправления"
+  },
+  "DirtyGames-REPOGambling-1.7.1": {
+    "russianName": "Казино в магазине R.E.P.O.",
+    "description": "Добавляет настраиваемое казино: колесо с призами и опасными исходами, игровые автоматы, ставки и джекпоты.",
+    "category": "Геймплей"
+  },
+  "discjenny-CartSpeedSync-2.0.0": {
+    "russianName": "Скорость тележки",
+    "description": "Синхронизирует скорость тележки со скоростью бегущего игрока, в том числе после улучшений скорости.",
+    "category": "Исправления"
+  },
+  "DragonClawStudios-DampMine-0.0.20": {
+    "russianName": "Сырая шахта",
+    "description": "Добавляет новый уровень — сырую шахту.",
+    "category": "Контент"
+  },
+  "DriftersStudios-PeakSoup-0.1.2": {
+    "russianName": "Приготовление супа",
+    "description": "Позволяет готовить суп в котелке.",
+    "category": "Геймплей"
+  },
+  "Eberk-Ping_It-1.2.0": {
+    "russianName": "Метки для команды",
+    "description": "Позволяет отмечать ценности, врагов, предметы и другие объекты для себя и друзей.",
+    "category": "Удобство"
+  },
+  "eCrash-Crash_Accessories-1.2.3": {
+    "russianName": "Аксессуары Crash",
+    "description": "Добавляет набор косметики, созданный для компании друзей автора.",
+    "category": "Косметика"
+  },
+  "eepy-Sanrio_Hats-1.0.1": {
+    "russianName": "Шляпы Sanrio",
+    "description": "Добавляет шляпы по персонажам Sanrio.",
+    "category": "Косметика"
+  },
+  "Enchanted_Games-CustomGrabColor-2.4.0": {
+    "russianName": "Цвет луча захвата",
+    "description": "Позволяет настроить цвет луча захвата. Поддерживает совместную игру.",
+    "category": "Косметика"
+  },
+  "Entity378-Lethal_Doors_Fixed-1.2.1": {
+    "russianName": "Исправленный Lethal Doors",
+    "description": "Обновляет Lethal Doors для работы с версией v50 игры.",
+    "category": "Исправления"
+  },
+  "Entity378-SellBodiesFixed-1.14.0": {
+    "russianName": "Продажа тел врагов",
+    "description": "Позволяет продавать тела погибших врагов. Обновлённая версия SellBodies.",
+    "category": "Геймплей"
+  },
+  "Esrifox-Esri_Outfit_for_PEAK-1.0.1": {
+    "russianName": "Наряд Esri",
+    "description": "Добавляет авторский наряд Esrifox для PEAK.",
+    "category": "Косметика"
+  },
+  "Esrifox-EsriCosmetics_for_PEAK-1.0.1": {
+    "russianName": "Косметика Esri",
+    "description": "Добавляет авторские косметические предметы Esrifox для PEAK.",
+    "category": "Косметика"
+  },
+  "Evaisa-FixPluginTypesSerialization-1.1.4": {
+    "russianName": "Исправление данных модов",
+    "description": "Исправляет ошибки чтения пользовательских сериализуемых структур и других данных модов в Unity.",
+    "category": "Исправления"
+  },
+  "Evaisa-HookGenPatcher-0.0.5": {
+    "russianName": "Генератор HookGen",
+    "description": "Создаёт файлы MMHOOK при предварительной загрузке BepInEx. Нужен другим модам для подключения к игровому коду.",
+    "category": "Зависимости"
+  },
+  "Evaisa-LethalLib-1.2.0": {
+    "russianName": "Библиотека LethalLib",
+    "description": "Набор инструментов для создания модов Lethal Company.",
+    "category": "Зависимости"
+  },
+  "Evaisa-LethalThings-0.10.13": {
+    "russianName": "Новые вещи LethalThings",
+    "description": "Добавляет 11 предметов лома, шесть товаров магазина, врага, четыре украшения, опасность на карте и новую игровую механику.",
+    "category": "Контент"
+  },
+  "evansvl-BossHP-0.1.4": {
+    "russianName": "Точное здоровье босса",
+    "description": "Показывает точное синхронизированное здоровье рядом со стандартной полосой босса. Поддерживает эффект тряски от урона и настройку цвета.",
+    "category": "Интерфейс"
+  },
+  "evansvl-BossTimer-0.1.6": {
+    "russianName": "Таймер ухода босса",
+    "description": "Показывает точное синхронизированное время до ухода активного босса в стиле стандартного интерфейса.",
+    "category": "Интерфейс"
+  },
+  "evansvl-FishHP-0.2.2": {
+    "russianName": "Здоровье существ",
+    "description": "Показывает синхронизированные полосы здоровья живых существ, которым игрок нанёс урон, кроме боссов. Цвет и тряска полос настраиваются.",
+    "category": "Интерфейс"
+  },
+  "evansvl-ModMenu-0.3.6": {
+    "russianName": "Меню настроек модов",
+    "description": "Добавляет меню настроек модов на главный экран и в меню паузы. Автоматически создаёт элементы управления для настроек BepInEx.",
+    "category": "Интерфейс"
+  },
+  "Fabrieze-Fabs_Twsty_Peak_Pack-1.0.5": {
+    "russianName": "Выражения лица Fabs",
+    "description": "Добавляет авторские выражения лица для PEAK.",
+    "category": "Косметика"
+  },
+  "FadingBullets-Fadings_Cosmetics-1.0.4": {
+    "russianName": "Косметика Fading",
+    "description": "Добавляет косметику Fading, включая уши и брови персонажа автора.",
+    "category": "Косметика"
+  },
+  "FakeGameDevelopers-ExtraMouths-1.0.2": {
+    "russianName": "Еда для большой команды",
+    "description": "Увеличивает количество доступной для сбора еды в PEAK для лобби, где больше четырёх игроков.",
+    "category": "Геймплей"
+  },
+  "Fandovec03-SpiderPositionFix-1.6.5": {
+    "russianName": "Исправление положения пауков",
+    "description": "Исправляет рассинхронизацию положения бункерного паука и его модели, а также смещение анимации покоя на стороне игрока.",
+    "category": "Исправления"
+  },
+  "FedenatorMODS-Fedenator_Cosmetics_Pack-1.4.5": {
+    "russianName": "Набор косметики Fedenator",
+    "description": "Добавляет глаза, рты, аксессуары и шляпы.",
+    "category": "Косметика"
+  },
+  "fedorabunnies-Even_More_Hats-1.1.4": {
+    "russianName": "Ещё больше шляп",
+    "description": "Добавляет дополнительные шляпы.",
+    "category": "Косметика"
+  },
+  "FFM_OF_LUOYUYUE-FrogQTE-1.0.1": {
+    "russianName": "Освобождение от лягушки",
+    "description": "Позволяет вырваться из лягушки частыми нажатиями пробела.",
+    "category": "Геймплей"
+  },
+  "figgies-SmoreHats-1.3.0": {
+    "russianName": "Шляпы Smore",
+    "description": "Добавляет десять шляп, включая вариант без головного убора.",
+    "category": "Косметика"
+  },
+  "FishTank-ManyManyHats-1.4.2": {
+    "russianName": "Большая коллекция шляп",
+    "description": "Добавляет большую коллекцию шляп для PEAK и элементы настройки лица.",
+    "category": "Косметика"
+  },
+  "FlabasGeezahs-HTFBulkBuy-1.4.0": {
+    "russianName": "Покупка оптом",
+    "description": "Позволяет покупать у торговцев сразу 1, 5, 10, 25 или 50 единиц по клавише T: приманки, предметы, ячейки и улучшения оружия.",
+    "category": "Удобство"
+  },
+  "flipf17-DeadTTS-1.1.1": {
+    "russianName": "Озвучка погибших игроков",
+    "description": "Позволяет слышать озвученные текстовые сообщения погибших игроков. Есть настройки.",
+    "category": "Звук"
+  },
+  "FlipMods-TooManyEmotes-2.3.17": {
+    "russianName": "Большой набор эмоций",
+    "description": "Добавляет более 300 эмоций, колесо выбора и музыку. Враги в масках тоже могут использовать эмоции; покупка эмоций в магазине включается по желанию.",
+    "category": "Косметика"
+  },
+  "Flopper-ImprovedStamina-1.2.0": {
+    "russianName": "Восстановление выносливости",
+    "description": "Меняет систему восстановления выносливости.",
+    "category": "Геймплей"
+  },
+  "Fneaky-ImmortalSnailFork-0.1.1": {
+    "russianName": "Бессмертная улитка",
+    "description": "Добавляет Бессмертную улитку как врага для версии v81.",
+    "category": "Контент"
+  },
+  "Fracore34-UMINEKO_IS_PEAK-1.2.0": {
+    "russianName": "Косметика Umineko",
+    "description": "Добавляет косметические предметы по Umineko.",
+    "category": "Косметика"
+  },
+  "Franku-FrankusCosmetics-1.0.2": {
+    "russianName": "Косметика Franku",
+    "description": "Добавляет личный набор косметики автора.",
+    "category": "Косметика"
+  },
+  "Generic_GMD-Generic_Doorscript-1.0.2": {
+    "russianName": "Правила соединения дверей",
+    "description": "Запрещает соединение дверных проёмов с меткой 7779. Вспомогательный мод; сам по себе ничего не добавляет.",
+    "category": "Зависимости"
+  },
+  "Generic_GMD-Generic_Interiors-5.2.1": {
+    "russianName": "Интерьеры Generic",
+    "description": "Добавляет шесть интерьеров: склад, бункер, стоки, подстанцию, башню и лиминальный комплекс.",
+    "category": "Контент"
+  },
+  "Generic_GMD-ManuLib-1.1.3": {
+    "russianName": "Библиотека ManuLib",
+    "description": "Библиотека вспомогательных скриптов для предметов, изменения их стоимости и запуска событий. Сама по себе не синхронизирует эти действия между игроками.",
+    "category": "Зависимости",
+    "source": "https://thunderstore.io/api/experimental/package/Generic_GMD/ManuLib/1.1.3/readme/"
+  },
+  "glarmer-PEAK_Unlimited-4.0.1": {
+    "russianName": "Больше четырёх игроков",
+    "description": "Снимает ограничение числа игроков в PEAK, чтобы играть большой компанией. Добавляет дополнительный зефир.",
+    "category": "Геймплей"
+  },
+  "glarmer-PEAK_Visuals-2.1.0": {
+    "russianName": "Расширенная графика PEAK",
+    "description": "Добавляет графические настройки для улучшения изображения, включая DLSS.",
+    "category": "Интерфейс"
+  },
+  "glarmer-UpscaleLib-1.0.0": {
+    "russianName": "Библиотека масштабирования",
+    "description": "Загружает библиотеки масштабирования изображения для PEAK Visuals.",
+    "category": "Зависимости"
+  },
+  "Glebushubus-FullBodyVisible-1.0.6": {
+    "russianName": "Полное тело от первого лица",
+    "description": "Показывает всё тело при виде от первого лица, а не только руки и ноги.",
+    "category": "Косметика"
+  },
+  "grey5525-TheFacility-1.1.7": {
+    "russianName": "Комплекс The Facility",
+    "description": "Добавляет авторский уровень и новые ценности.",
+    "category": "Контент"
+  },
+  "Grimm_Industries-MultiCosmetic_Mod-5.3.1": {
+    "russianName": "Несколько украшений сразу",
+    "description": "Позволяет одновременно надевать несколько косметических предметов в PEAK. Внешний вид синхронизируется с игроками, у которых установлен этот мод.",
+    "category": "Косметика"
+  },
+  "Hamunii-AutoHookGenPatcher-1.1.1": {
+    "russianName": "Автоматический HookGen",
+    "description": "Автоматически создаёт файлы MMHOOK при предварительной загрузке BepInEx. Используется другими модами.",
+    "category": "Зависимости"
+  },
+  "Hamunii-AutoReload-1.0.2": {
+    "russianName": "Перезагрузка плагинов",
+    "description": "Следит за изменениями файлов в BepInEx/plugins и автоматически перезагружает плагины. Инструмент для разработчиков модов.",
+    "category": "Зависимости"
+  },
+  "Hamunii-DetourContext_Dispose_Fix-1.0.9": {
+    "russianName": "Исправление DetourContext",
+    "description": "Исправляет неработающее освобождение DetourContext в MonoMod.RuntimeDetour через патчер BepInEx.",
+    "category": "Исправления"
+  },
+  "Hamunii-TypeLoadExceptionFixer-1.0.4": {
+    "russianName": "Исправление загрузки типов",
+    "description": "Исправляет ошибки, вызванные типами данных, которые не удаётся загрузить.",
+    "category": "Исправления"
+  },
+  "Hardy-LCMaxSoundsFix-1.2.0": {
+    "russianName": "Больше одновременных звуков",
+    "description": "Увеличивает число звуков, которые могут играть одновременно, чтобы уменьшить пропадание шагов и других эффектов.",
+    "category": "Исправления"
+  },
+  "Hatsune_EXO-HTFSlide-1.6.0": {
+    "russianName": "Скольжение и бег",
+    "description": "Добавляет скольжение, переключаемый бег и ускорение при соскальзывании с уступа. Работает на стороне игрока.",
+    "category": "Геймплей"
+  },
+  "Heloise-TADC_cosmetics_mod-1.0.2": {
+    "russianName": "Косметика «Цифровой цирк»",
+    "description": "Добавляет шляпы, аксессуары, рты и глаза по персонажам «Удивительного цифрового цирка». Для правильной настройки используйте инструкции к каждому персонажу.",
+    "category": "Косметика"
+  },
+  "HeroHanex-NoItemSpawnLimit-1.0.8": {
+    "russianName": "Без лимита предметов в грузовике",
+    "description": "Убирает или настраивает ограничения появления предметов в грузовике, включая предметы модов. Устанавливается на стороне хоста и поддерживает совместную игру.",
+    "category": "Геймплей"
+  },
+  "Hnsk_Noah-Campfire_Refuel-1.2.0": {
+    "russianName": "Заправка фонаря у костра",
+    "description": "Автоматически заправляет фонарь при зажигании костра.",
+    "category": "Удобство"
+  },
+  "IAmBatby-LethalLevelLoader-1.7.13": {
+    "russianName": "Загрузчик пользовательских уровней",
+    "description": "Предоставляет другим модам средства ручного и динамического подключения пользовательского контента в Lethal Company. Поддерживает v81.",
+    "category": "Зависимости"
+  },
+  "IAteSpaghetti-GhostHats-0.1.2": {
+    "russianName": "Шляпы на призраках",
+    "description": "Показывает шляпы других игроков на их призраках. Достаточно установить мод только у себя.",
+    "category": "Косметика"
+  },
+  "IAteSpaghetti-WaitForMEak-0.1.2": {
+    "russianName": "Подключение к идущему забегу",
+    "description": "Держит присоединившихся игроков призраками, затем переносит их к самому низко находящемуся живому скауту вместо базового лагеря. Нужен только хосту.",
+    "category": "Геймплей"
+  },
+  "Ice_Box_Studio_HTF-AmmoCounter-1.0.4": {
+    "russianName": "Счётчик патронов",
+    "description": "Показывает патроны в магазине, название оружия, установленные модули и необязательный счётчик убийств StatTrak.",
+    "category": "Интерфейс"
+  },
+  "Ice_Box_Studio_HTF-HeldItemNameHud-1.0.1": {
+    "russianName": "Название предмета в руках",
+    "description": "Показывает название удерживаемого предмета над панелью быстрого доступа, а текущую приманку — над коробкой с наживкой.",
+    "category": "Интерфейс"
+  },
+  "Ice_Box_Studio_HTF-HowtoFishIdentityAPI-1.0.1": {
+    "russianName": "Библиотека идентификации игроков",
+    "description": "Предоставляет модам How to Fish стабильный проверенный идентификатор игрока для действий, которые контролирует сервер.",
+    "category": "Зависимости"
+  }
+}
