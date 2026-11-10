@@ -3,7 +3,6 @@
 use crate::{
     launch::ShortcutRequest, manifest::DirectoryGuard, model::GameRecord, paths::AppPaths,
 };
-use serde::Deserialize;
 use std::{
     fs,
     io::{Read, Write},
@@ -12,7 +11,10 @@ use std::{
 
 const MAX_LINK_BYTES: u64 = 512 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[cfg(windows)]
+mod native;
+
+#[derive(Debug)]
 struct Link {
     path: PathBuf,
     target: PathBuf,
@@ -145,18 +147,13 @@ fn link_bytes(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 fn read_links(paths: &[PathBuf]) -> Result<Vec<Link>, String> {
-    let input =
-        serde_json::to_vec(&serde_json::json!({"paths":paths})).map_err(|e| e.to_string())?;
-    let output = crate::security::powershell(
-        r#"
-$r=[Console]::In.ReadToEnd()|ConvertFrom-Json
-$shell=New-Object -ComObject WScript.Shell
-$items=@(foreach($p in $r.paths){try {$l=$shell.CreateShortcut([string]$p); @{path=[string]$p;target=[string]$l.TargetPath;arguments=[string]$l.Arguments}}catch{}})
-ConvertTo-Json -InputObject $items -Compress
-"#,
-        Some(&input),
-    )?;
-    serde_json::from_str(&output).map_err(|_| "Не удалось прочитать ярлыки".into())
+    #[cfg(windows)]
+    return native::read(paths);
+    #[cfg(not(windows))]
+    {
+        let _ = paths;
+        Err("Ярлыки доступны только в Windows".into())
+    }
 }
 
 fn create_at(
@@ -206,19 +203,18 @@ fn create_at(
         .map(|v| crate::launch::quote_windows_argument(v))
         .collect::<Vec<_>>()
         .join(" ");
-    let input = serde_json::to_vec(&serde_json::json!({"output":temporary,"launcher":launcher,"arguments":args,"working":launcher.parent(),"title":request.title,"icon":format!("{},0",exe.display())})).map_err(|e|e.to_string())?;
     let result = (|| {
-        crate::security::powershell(
-            r#"
-$r=[Console]::In.ReadToEnd()|ConvertFrom-Json
-$s=New-Object -ComObject WScript.Shell
-$l=$s.CreateShortcut([string]$r.output)
-$l.TargetPath=[string]$r.launcher; $l.Arguments=[string]$r.arguments
-$l.WorkingDirectory=[string]$r.working; $l.Description=[string]$r.title
-$l.IconLocation=[string]$r.icon; $l.Save()
-"#,
-            Some(&input),
+        #[cfg(windows)]
+        native::write(
+            &temporary,
+            launcher,
+            &args,
+            launcher.parent().ok_or("Не найдена папка лаунчера")?,
+            &request.title,
+            exe,
         )?;
+        #[cfg(not(windows))]
+        return Err("Ярлыки доступны только в Windows".into());
         let bytes = link_bytes(&temporary)?;
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -437,16 +433,7 @@ mod tests {
         let original = fs::read(&link).unwrap();
         fs::write(desktop.join("note.txt"), b"keep").unwrap();
         let repeat = create_at(&desktop, &launcher, &request).unwrap_or_else(|error| {
-            let input = serde_json::to_vec(&serde_json::json!({"path":link})).unwrap();
-            let readback = crate::security::powershell(
-                r#"
-$r=[Console]::In.ReadToEnd()|ConvertFrom-Json
-$s=New-Object -ComObject WScript.Shell
-$l=$s.CreateShortcut([string]$r.path)
-@{path=[string]$r.path;exists=[IO.File]::Exists([string]$r.path);target=[string]$l.TargetPath;arguments=[string]$l.Arguments;working=[string]$l.WorkingDirectory;icon=[string]$l.IconLocation;inputEncoding=[Console]::InputEncoding.WebName;outputEncoding=[Console]::OutputEncoding.WebName;defaultEncoding=[Text.Encoding]::Default.WebName}|ConvertTo-Json -Compress
-"#,
-                Some(&input),
-            );
+            let readback = native::details(&link);
             let links = read_links(std::slice::from_ref(&link));
             panic!(
                 "{error}; expected link={link:?}, launcher={launcher:?}, launcher identity={:?}, exe={:?}, exe identity={:?}; parsed={links:?}; COM={readback:?}",
@@ -473,5 +460,66 @@ $l=$s.CreateShortcut([string]$r.path)
         );
         assert_eq!(remove_at(&desktop, &launcher, "peak", &root).unwrap(), 1);
         assert!(desktop.join("note.txt").exists());
+    }
+
+    #[test]
+    fn unicode_shell_links_preserve_all_fields_and_foreign_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let desktop = temp.path().join("桌面 🎮");
+        let launcher_dir = temp.path().join("启动 🎲");
+        let root = temp.path().join("游戏 🌄/peak");
+        for path in [&desktop, &launcher_dir, &root] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let launcher = launcher_dir.join("启动器 🎮.exe");
+        let exe = root.join("游戏 🎮.exe");
+        fs::write(&launcher, b"fixture").unwrap();
+        fs::write(&exe, b"fixture").unwrap();
+        let request = ShortcutRequest {
+            game_id: "peak".into(),
+            title: "Игра 中文 🎮".into(),
+            exe_path: Some(exe.clone()),
+            target: None,
+        };
+        let path = create_at(&desktop, &launcher, &request).unwrap();
+        assert_eq!(path.file_name().unwrap(), "Игра 中文 🎮 (Chill Hub).lnk");
+        let bytes = fs::read(&path).unwrap();
+        let links = read_links(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].path, path);
+        assert_eq!(path_key(&links[0].target), path_key(&launcher));
+        let parsed = ShortcutRequest::parse_args(&arguments(&links[0].arguments).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.title, request.title);
+        assert_eq!(path_key(parsed.exe_path.as_ref().unwrap()), path_key(&exe));
+        let (working, icon, index) = native::details(&path).unwrap();
+        assert_eq!(path_key(&working), path_key(&launcher_dir));
+        assert_eq!(path_key(&icon), path_key(&exe));
+        assert_eq!(index, 0);
+        assert_eq!(create_at(&desktop, &launcher, &request).unwrap(), path);
+        let wrong_game = ShortcutRequest {
+            game_id: "other".into(),
+            ..request.clone()
+        };
+        assert!(create_at(&desktop, &launcher, &wrong_game).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        let foreign = desktop.join("Другой 中文 🎮.lnk");
+        let other_launcher = temp.path().join("other.exe");
+        fs::write(&other_launcher, b"fixture").unwrap();
+        native::write(
+            &foreign,
+            &other_launcher,
+            &links[0].arguments,
+            temp.path(),
+            "Чужой 中文 🎮",
+            &exe,
+        )
+        .unwrap();
+        let foreign_bytes = fs::read(&foreign).unwrap();
+        assert_eq!(remove_at(&desktop, &launcher, "peak", &root).unwrap(), 1);
+        assert!(!path.exists());
+        assert_eq!(fs::read(&foreign).unwrap(), foreign_bytes);
     }
 }
