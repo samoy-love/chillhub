@@ -16,6 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "update_legacy.rs"]
+mod legacy;
 #[path = "update_maintenance.rs"]
 mod maintenance;
 pub use maintenance::{
@@ -89,13 +91,30 @@ pub enum UpdateCheck {
 }
 
 pub fn version_parts(value: &str) -> Result<[u32; 4], String> {
-    let parts: Vec<_> = value.split('.').collect();
-    if !(3..=4).contains(&parts.len()) {
+    if value.len() > 64 {
+        return Err("Некорректный номер версии".into());
+    }
+    let numeric = if let Some((numeric, suffix)) = value.split_once('-') {
+        if suffix.is_empty()
+            || suffix.len() > 32
+            || !suffix.as_bytes()[0].is_ascii_alphanumeric()
+            || !suffix
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.')
+        {
+            return Err("Некорректный номер версии".into());
+        }
+        numeric
+    } else {
+        value
+    };
+    let parts: Vec<_> = numeric.split('.').collect();
+    if !(2..=4).contains(&parts.len()) {
         return Err("Некорректный номер версии".into());
     }
     let mut parsed = [0; 4];
     for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() || part.len() > 9 || !part.bytes().all(|b| b.is_ascii_digit()) {
+        if part.is_empty() || part.len() > 6 || !part.bytes().all(|b| b.is_ascii_digit()) {
             return Err("Некорректный номер версии".into());
         }
         parsed[i] = part.parse().map_err(|_| "Некорректный номер версии")?;
@@ -531,6 +550,7 @@ pub fn execute_job(job: &UpdateJob, progress: &(dyn Fn(&str, f32) + Sync)) -> Re
         }
     };
     let state = UpdateOutcome {
+        legacy_fingerprint: None,
         version: if job.mode == UpdateMode::Recovery {
             job.staged.current_version.clone()
         } else {
@@ -597,6 +617,7 @@ pub fn previous_outcome(paths: &UpdatePaths) -> Option<UpdateOutcome> {
     fs::read(paths.config.join("update-status.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .or_else(|| legacy::read(paths))
 }
 
 fn outcome_lock(paths: &UpdatePaths) -> Result<ProcessLock, String> {
@@ -621,7 +642,26 @@ pub fn acknowledge_outcome(paths: &UpdatePaths, shown: &UpdateOutcome) -> Result
     if previous_outcome(paths).as_ref() != Some(shown) {
         return Ok(false);
     }
-    maintenance::remove_file(&paths.config.join("update-status.json"))?;
+    if let Some(fingerprint) = &shown.legacy_fingerprint {
+        // Do not delete a C# result: an older updater does not share our lock
+        // and may publish a newer result while this acknowledgement is written.
+        atomic_write(
+            &paths.config.join("legacy-update-ack"),
+            fingerprint.as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        if let Some(old) = legacy::read(paths)
+            && let Some(fingerprint) = old.legacy_fingerprint
+        {
+            atomic_write(
+                &paths.config.join("legacy-update-ack"),
+                fingerprint.as_bytes(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        maintenance::remove_file(&paths.config.join("update-status.json"))?;
+    }
     Ok(true)
 }
 
@@ -669,6 +709,8 @@ pub struct UpdateOutcome {
     pub version: String,
     pub success: bool,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_fingerprint: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1177,9 +1219,30 @@ mod tests {
     #[test]
     fn downgrade_and_bad_versions() {
         assert!(version_parts("1.7.20").unwrap() < version_parts("1.8.0").unwrap());
-        for s in ["../1.8.1", "1.8", "1.8.1.exe", "1.-2.3", " 1.8.1"] {
+        for s in ["../1.8.1", "1", "1.8.1.exe", "1.-2.3", " 1.8.1"] {
             assert!(version_parts(s).is_err(), "{s}");
         }
+    }
+    #[test]
+    fn legacy_version_shapes_remain_safe_for_update_paths() {
+        assert_eq!(version_parts("1.8").unwrap(), [1, 8, 0, 0]);
+        assert_eq!(version_parts("1.8.1-beta.2").unwrap(), [1, 8, 1, 0]);
+        assert_eq!(version_parts("1.8.1.9-preview").unwrap(), [1, 8, 1, 9]);
+        for invalid in [
+            "1.8-",
+            "1.8-.beta",
+            "1.8-beta/../other",
+            "1.8-beta\\other",
+            "1.8-beta?x=1",
+            "1.8-beta\"",
+            "1.8-beta-2",
+            "1.2.3.4.5",
+            "1000000.1",
+        ] {
+            assert!(version_parts(invalid).is_err(), "{invalid}");
+        }
+        assert!(version_parts(&format!("1.8-{}", "x".repeat(33))).is_err());
+        assert!(version_parts("1.8.1-beta").unwrap() > version_parts("1.8").unwrap());
     }
     #[test]
     fn preserve_is_exact_root_path() {

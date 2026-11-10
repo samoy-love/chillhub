@@ -628,6 +628,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let staged = super::super::tests::package(temp.path());
         let first = UpdateOutcome {
+            legacy_fingerprint: None,
             version: "1.8.1".into(),
             success: false,
             message: "first".into(),
