@@ -320,13 +320,15 @@
     },
     {
       "id": "karaoke-header",
-      "scope": "Original is animated lyric text, not an audio music player. Omitted from Native to avoid decorative idle animation; omission requires product review.",
+      "scope": "Optional legacy header lyrics; Unicode text, line pauses, no timer when inactive, narrow, hidden behind a panel, minimized or reduced motion",
       "original": [
         "launcher/ChillHub/Core/Shell/KaraokePresenter.cs",
         "launcher/ChillHub/MainWindow.xaml"
       ],
-      "tests": [],
-      "disposition": "intentional-legacy-omission"
+      "tests": [
+        "karaoke::tests::unicode_lines_pause_fade_and_loop_without_skipping_letters",
+        "real_ui_headless_layout_and_actions"
+      ]
     },
     {
       "id": "controller-callback-flow",
@@ -374,7 +376,8 @@
         "diagnostics::tests::auto_error_reports_use_server_schema_and_redact_private_paths",
         "diagnostics::tests::auto_error_quota_persists_and_failed_delivery_refunds",
         "diagnostics::tests::auto_error_legacy_quota_and_outbox_origin_are_respected",
-        "diagnostics::tests::error_reports_and_metrics_test_optin_cannot_send_to_production"
+        "diagnostics::tests::error_reports_and_metrics_test_optin_cannot_send_to_production",
+        "diagnostic_notifications::tests::notices_are_profile_scoped_and_quota_notice_is_not_repeated_each_tick"
       ]
     }
   ]

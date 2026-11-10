@@ -32,7 +32,9 @@ $output = Join-Path (Split-Path $manifestPath) "ChillHub-$($package.version)-Nat
 if (Test-Path -LiteralPath $output) { throw "Файл уже существует: $output. Создайте новую упаковку." }
 . (Join-Path $PSScriptRoot 'ensure-webview2-bootstrapper.ps1')
 $bootstrapper = Ensure-WebView2Bootstrapper -RedistDir (Join-Path $PSScriptRoot 'Redist') -Required
+& (Join-Path $PSScriptRoot 'native-installer-artwork.ps1') -OutputDirectory (Split-Path $manifestPath)
 $parameters = @('/V2','/DNATIVE_CLIENT',"/DNATIVE_OUTPUT=$output","/DPAYLOAD_DIR=$payload","/DAPP_VERSION=$($package.version)","/DAPP_VERSION_NUMERIC=$($package.version).0")
+$parameters += "/DNATIVE_SIDEBAR=$(Join-Path (Split-Path $manifestPath) 'installer-sidebar.bmp')"
 if ($FastCompress) { $parameters += '/DFAST_COMPRESS' }
 $parameters += Join-Path $PSScriptRoot 'installer.nsi'
 & $MakeNsis @parameters

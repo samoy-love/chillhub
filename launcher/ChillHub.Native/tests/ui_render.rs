@@ -453,6 +453,49 @@ fn real_ui_headless_layout_and_actions() {
     .expect("headless platform only");
     let mut h = Harness::new();
     h.capture("main", 1360, 850, 1.0);
+    let karaoke_ticks = Rc::new(std::cell::Cell::new(0));
+    let counter = karaoke_ticks.clone();
+    h.ui.on_karaoke_tick(move || counter.set(counter.get() + 1));
+    h.ui.set_karaoke_enabled(true);
+    h.ui.set_karaoke_text("Фирменная строка лаунчера".into());
+    h.ui.set_karaoke_next("Следующая строка — аккуратно в одну линию".into());
+    settle();
+    assert_eq!(
+        karaoke_ticks.get(),
+        0,
+        "inactive window must not wake the timer"
+    );
+    h.ui.set_karaoke_active(true);
+    mock_elapsed_time(Duration::ZERO); // Apply declarative timer bindings first.
+    settle();
+    assert!(
+        karaoke_ticks.get() > 0,
+        "visible active header must advance"
+    );
+    h.capture("karaoke", 1360, 850, 1.0);
+    h.ui.set_reduced_motion(true);
+    h.ui.set_karaoke_fading(true);
+    mock_elapsed_time(Duration::ZERO);
+    let paused = karaoke_ticks.get();
+    settle();
+    assert_eq!(
+        karaoke_ticks.get(),
+        paused,
+        "reduced motion must stop the timer"
+    );
+    h.capture("karaoke-reduced", 1360, 850, 1.0);
+    h.ui.set_karaoke_fading(false);
+    h.ui.set_reduced_motion(false);
+    h.capture("karaoke-small", 900, 500, 1.0);
+    let paused = karaoke_ticks.get();
+    settle();
+    assert_eq!(
+        karaoke_ticks.get(),
+        paused,
+        "hidden narrow header must not wake the timer"
+    );
+    h.ui.set_karaoke_enabled(false);
+    h.ui.set_karaoke_active(false);
     if h.qa {
         h.ui.set_operation_busy(true);
         settle();

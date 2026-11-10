@@ -12,7 +12,7 @@ $expected = '7e9588d62c5b830ac2413a3a475b5588e445406e0466dd6333477e631237ec4a'
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $archive = Join-Path $Destination $archiveName
 if (!(Test-Path -LiteralPath $archive)) {
-    Invoke-WebRequest -Uri $source -OutFile $archive
+    Invoke-WebRequest -Uri $source -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 3
 }
 $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "mpv archive SHA256 mismatch: $actual" }

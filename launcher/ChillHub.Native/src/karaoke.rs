@@ -50,7 +50,7 @@ impl Ticker {
 
 pub(super) fn bind(ui: &AppWindow) {
     let ticker = Rc::new(RefCell::new(Ticker::new(include_str!(
-        "../assets/karaoke.txt"
+        "../Assets/karaoke.txt"
     ))));
     ui.set_karaoke_next(ticker.borrow().next().into());
     let weak = ui.as_weak();

@@ -643,7 +643,7 @@ export component AppWindow inherits Window {
         Text { x: root.sidebar-width + root.page-padding; y: 0px; width: root.width - root.sidebar-width - root.page-padding * 2 - (root.karaoke-visible ? 530px : 174px); height: 56px; text: "Библиотека" + (root.game-title != "" ? "   /   " + root.game-title : ""); color: Theme.dim; font-size: 12px; vertical-alignment: center; overflow: elide; }
         if root.karaoke-visible: Rectangle {
             x: root.width - root.page-padding - 510px; y: 15px; width: 330px; height: 34px;
-            opacity: root.karaoke-fading ? 0 : 1;
+            opacity: root.karaoke-fading && !root.reduced-motion ? 0 : 1;
             animate opacity { duration: root.reduced-motion ? 0ms : 150ms; }
             Text { width: parent.width; height: 18px; text: root.reduced-motion ? "Баста — «Моя игра»" : root.karaoke-text; color: Theme.ink; font-size: 12px; overflow: elide; }
             Text { y: 20px; width: parent.width; height: 14px; text: root.reduced-motion ? "Фирменная строка Chill Hub" : root.karaoke-next; color: Theme.dim; font-size: 10px; overflow: elide; }

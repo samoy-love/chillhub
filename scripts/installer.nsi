@@ -199,8 +199,25 @@ SetDatablockOptimize on
 
 ; MUI options (simple modern touches)
 !define MUI_ABORTWARNING
+!ifdef NATIVE_CLIENT
+; Match ui/theme.slint. Runtime helpers keep the Slint theme; NSIS keeps its
+; native accessible controls while using the same type, brand and surfaces.
+SetFont "Segoe UI" 9
+BrandingText "Chill Hub"
+!define MUI_BGCOLOR "121215"
+!define MUI_TEXTCOLOR "F6F4F7"
+!define MUI_INSTFILESPAGE_COLORS "C9BBFA 1C1C21"
+!define MUI_CUSTOMFUNCTION_GUIINIT NativeTheme
+!define MUI_CUSTOMFUNCTION_UNGUIINIT un.NativeTheme
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${NATIVE_SIDEBAR}"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "${NATIVE_SIDEBAR}"
+!define MUI_WELCOMEPAGE_TITLE "Добро пожаловать в Chill Hub"
+!define MUI_WELCOMEPAGE_TEXT "Игры, модпаки и совместные вечера — в одной библиотеке.$\r$\n$\r$\nВыберите папку для лаунчера и игр. Существующие игры сохранятся при переустановке."
+!define MUI_FINISHPAGE_TITLE "Chill Hub готов"
+!else
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_RIGHT
+!endif
 
 ; Finish page settings: show prerequisites first, then run app
 !define MUI_FINISHPAGE_SHOWREADME
@@ -221,8 +238,14 @@ SetDatablockOptimize on
 ; MUI применяет MUI_PAGE_CUSTOMFUNCTION_* к БЛИЖАЙШЕЙ следующей странице и тут
 ; же их снимает.
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryLeave
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW NativeTheme
+!endif
 !insertmacro MUI_PAGE_DIRECTORY
 Page Custom SelectGamesDir_Create SelectGamesDir_Leave
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW NativeTheme
+!endif
 !insertmacro MUI_PAGE_INSTFILES
 Page Custom SecurityPage_Create
 ; Показ финальной страницы — момент, когда галочку WebView2 можно спрятать
@@ -231,9 +254,18 @@ Page Custom SecurityPage_Create
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstall pages
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.NativeTheme
+!endif
 !insertmacro MUI_UNPAGE_CONFIRM
 UninstPage Custom un.SelectDeleteGames_Create un.SelectDeleteGames_Leave
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.NativeTheme
+!endif
 !insertmacro MUI_UNPAGE_INSTFILES
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.NativeTheme
+!endif
 !insertmacro MUI_UNPAGE_FINISH
 
 ; ЯЗЫК ОДИН — РУССКИЙ.
@@ -1125,6 +1157,13 @@ Function SelectGamesDir_Create
     ${NSD_Check} $DesktopShortcut_Check
   ${EndIf}
 
+!ifdef NATIVE_CLIENT
+  SetCtlColors $0 F6F4F7 121215
+  SetCtlColors $GamesDir_Label F6F4F7 121215
+  SetCtlColors $GamesDir_Edit F6F4F7 1C1C21
+  SetCtlColors $DesktopShortcut_Check F6F4F7 121215
+!endif
+
   nsDialogs::Show
 FunctionEnd
 
@@ -1184,11 +1223,50 @@ security_page_skip:
 FunctionEnd
 
 Function FinishPageShow
+!ifdef NATIVE_CLIENT
+  Call NativeTheme
+!endif
   ${If} $WebView2Present == 1
     SendMessage $mui.FinishPage.ShowReadme ${BM_SETCHECK} ${BST_UNCHECKED} 0
     ShowWindow $mui.FinishPage.ShowReadme ${SW_HIDE}
   ${EndIf}
 FunctionEnd
+
+!ifdef NATIVE_CLIENT
+; Standard controls remain keyboard accessible; all pages share the palette.
+!macro NativeThemeFunctions PREFIX
+Function ${PREFIX}NativeTheme
+  Push $HWNDPARENT
+  Call ${PREFIX}NativeThemeControl
+  System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 20, *i 1, i 4)'
+FunctionEnd
+Function ${PREFIX}NativeThemeControl
+  Exch $0
+  Push $1
+  Push $2
+  System::Call 'user32::GetClassNameW(p r0, w .r2, i 1024)'
+  ${If} $2 == "Button"
+    System::Call 'uxtheme::SetWindowTheme(p r0, w "", w "")'
+  ${EndIf}
+  ${If} $2 == "Edit"
+    SetCtlColors $0 F6F4F7 1C1C21
+  ${Else}
+    SetCtlColors $0 F6F4F7 121215
+  ${EndIf}
+  System::Call 'user32::GetWindow(p r0, i 5) p.r1'
+  ${DoWhile} $1 != 0
+    Push $1
+    Call ${PREFIX}NativeThemeControl
+    System::Call 'user32::GetWindow(p r1, i 2) p.r1'
+  ${Loop}
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+!macroend
+!insertmacro NativeThemeFunctions ""
+!insertmacro NativeThemeFunctions "un."
+!endif
 
 Function RunAppAfterInstall
   ; If user ticked "Запустить Chill Hub", set a flag; actual launch may be deferred
@@ -1313,6 +1391,12 @@ Function un.SelectDeleteGames_Create
   ${NSD_CreateLabel} 0 70 100% 28 "Настройки лаунчера (тема, лимиты, папки) будут удалены вместе с ним."
   Pop $2
 
+!ifdef NATIVE_CLIENT
+  SetCtlColors $0 F6F4F7 121215
+  SetCtlColors $1 F6F4F7 121215
+  SetCtlColors $2 A6A3AF 121215
+  SetCtlColors $DeleteGames_Check F6F4F7 121215
+!endif
   nsDialogs::Show
 FunctionEnd
 

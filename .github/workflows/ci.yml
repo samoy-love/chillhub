@@ -790,7 +790,7 @@ jobs:
     # executables fail before main. Keep the full Native gate on desktop Windows.
     # Forks always use hosted runners and never execute on our own machine.
     runs-on: ${{ (github.event.pull_request.head.repo.fork || needs.changes.outputs.native == 'true') && 'windows-latest' || 'win-builder' }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Тот же закреплённый SDK вызывает build-installer.ps1 при выкатке.
