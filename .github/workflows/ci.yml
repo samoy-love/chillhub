@@ -867,8 +867,9 @@ jobs:
           "target=$(Join-Path $env:LOCALAPPDATA 'chillhub-tools/build-cache/chillhub-native')" >> $env:GITHUB_OUTPUT
           "registry=$(Join-Path $env:CARGO_HOME 'registry')" >> $env:GITHUB_OUTPUT
       - name: Кэш зависимостей Native
+        id: native-build-cache
         if: needs.changes.outputs.native == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ steps.native-cache.outputs.target }}
@@ -881,6 +882,10 @@ jobs:
         run: |
           $env:CARGO_TARGET_DIR = Join-Path $env:LOCALAPPDATA 'chillhub-tools/build-cache/chillhub-native'
           ./scripts/native-ci.ps1 -ValidationOnly
+      - name: Native — установка, переустановка и удаление
+        if: needs.changes.outputs.native == 'true'
+        shell: pwsh
+        run: ./scripts/ci/native-installer-smoke.ps1
       - name: Сохранить журналы и снимки Native
         if: always() && (needs.changes.result != 'success' || needs.changes.outputs.native == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
@@ -893,6 +898,14 @@ jobs:
             launcher/ChillHub.Native/dist/build-info.json
             launcher/ChillHub.Native/dist/helper-runtime-deps.txt
           retention-days: 7
+      - name: Сохранить собранные зависимости Native
+        if: ${{ !cancelled() && needs.changes.outputs.native == 'true' && steps.native-build-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.native-cache.outputs.target }}
+            ${{ steps.native-cache.outputs.registry }}
+          key: ${{ steps.native-build-cache.outputs.cache-primary-key }}
       # Сам установщик артефактом не выкладывается: его никто не скачивал, а
       # полсотни мегабайт на каждый прогон за девяносто дней хранения съели
       # общую квоту артефактов организации, и 21.09.2026 CI упал во всех
