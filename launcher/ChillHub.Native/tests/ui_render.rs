@@ -1228,7 +1228,7 @@ fn real_ui_headless_layout_and_actions() {
         h.ui.hide().unwrap();
     }
     let setup = SetupWindow::new().unwrap();
-    setup.set_version("1.8.1".into());
+    setup.set_version(env!("CARGO_PKG_VERSION").into());
     setup.set_install_path("C:\\Users\\Игрок\\AppData\\Local\\Chill Hub".into());
     setup.set_games_path("D:\\Совместные игры\\Chill Hub".into());
     setup.set_needs_webview(true);
@@ -1252,6 +1252,17 @@ fn real_ui_headless_layout_and_actions() {
             let snapshot = setup.window().take_snapshot().unwrap();
             assert_eq!(snapshot.width(), (w as f32 * scale) as u32);
             if h.qa {
+                if error {
+                    let status = ElementHandle::find_by_element_id(&setup, "status-copy")
+                        .next()
+                        .expect("setup error status");
+                    let p = status.absolute_position();
+                    let s = status.size();
+                    assert!(
+                        p.y >= 90.0 && s.height > 0.0 && p.y + s.height <= he as f32 - 80.0,
+                        "setup error must remain visible above the footer at {w}x{he}"
+                    );
+                }
                 let filename = format!("{name}-{w}x{he}-{}pct.png", (scale * 100.0) as u32);
                 image::save_buffer(
                     h.base.join("dist/qa-renders").join(&filename),

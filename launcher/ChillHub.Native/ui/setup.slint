@@ -62,7 +62,7 @@ export component SetupWindow inherits Window {
         Image { x: 28px; y: 24px; width: 44px; height: 44px; source: @image-url("assets/brand.png"); image-fit: contain; }
         Text { x: 84px; y: 24px; height: 28px; text: "Chill Hub"; font-size: 23px; font-weight: 700; color: Theme.ink; }
         Text { x: 85px; y: 53px; height: 18px; text: "Версия " + root.version; font-size: 12px; color: Theme.dim; }
-        Rectangle { x: 28px; y: 90px; width: parent.width - 56px; height: parent.height - 180px; background: Theme.surface; border-radius: 16px; border-width: 1px; border-color: Theme.border;
+        Rectangle { x: 28px; y: 90px; width: parent.width - 56px; height: parent.height - 180px - (root.message == "" ? 0px : status-copy.height + 12px); background: Theme.surface; border-radius: 16px; border-width: 1px; border-color: Theme.border;
             ScrollView { x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px; content-width: self.visible-width - 16px; content-height: body.preferred-height;
                 body := VerticalLayout { width: parent.width - 16px; spacing: 12px;
                     Text { text: root.done ? (root.removing ? "Chill Hub удалён" : "Всё готово к игре") : root.busy && !root.picking ? (root.removing ? "Удаляем Chill Hub" : "Устанавливаем Chill Hub") : (root.removing ? "Удаление лаунчера" : "Ваша библиотека начинается здесь"); color: Theme.ink; font-size: 25px; font-weight: 600; wrap: word-wrap; }
@@ -78,10 +78,10 @@ export component SetupWindow inherits Window {
                     if root.busy && !root.picking: Rectangle { height: 4px; background: #343039; border-radius: 2px; clip: true;
                         Rectangle { width: parent.width / 3; height: parent.height; background: Theme.accent; x: (animation-tick() / 1600ms - floor(animation-tick() / 1600ms)) * (parent.width + self.width) - self.width; }
                     }
-                    if root.message != "": Text { text: root.message; color: root.error ? #f0aaa9 : Theme.dim; font-size: 13px; wrap: word-wrap; }
                 }
             }
         }
+        status-copy := Text { x: 28px; y: parent.height - 86px - self.height; width: parent.width - 56px; height: root.message == "" ? 0px : min(108px, self.preferred-height); text: root.message; color: root.error ? #f0aaa9 : Theme.dim; font-size: 13px; wrap: word-wrap; overflow: elide; accessible-label: root.message; }
         AuxiliaryButton { x: 28px; y: parent.height - 66px; width: 144px; text: root.done ? "Закрыть" : "Отмена"; enabled: !root.busy; clicked => { root.cancel(); } }
         AuxiliaryButton { x: parent.width - 248px; y: parent.height - 66px; width: 220px; text: root.done ? (root.removing ? "Готово" : "Открыть Chill Hub") : root.busy ? "Подождите…" : root.removing ? "Удалить" : "Установить"; primary: true; enabled: !root.busy && (root.done || root.removing || root.downgrade-from == "" || root.allow-downgrade); clicked => { root.submit(); } }
     }
