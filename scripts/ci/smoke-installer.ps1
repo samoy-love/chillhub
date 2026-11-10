@@ -117,6 +117,8 @@ New-Item -ItemType Directory -Path $snapshotDir -Force | Out-Null
 # Ярлыки называются по видимому имени продукта — «Chill Hub», а не по имени exe.
 $desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Chill Hub.lnk'
 $startMenuDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'Chill Hub'
+$legacyDesktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'ChillHub.lnk'
+$legacyStartMenuDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'ChillHub'
 
 function Save-Snapshot {
     param([string]$Path, [string]$Name)
@@ -141,6 +143,8 @@ function Restore-Snapshot {
 
 $hadDesktopLnk = Save-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk'
 $hadStartMenu = Save-Snapshot -Path $startMenuDir -Name 'StartMenu'
+$hadLegacyDesktopLnk = Save-Snapshot -Path $legacyDesktopLnk -Name 'ChillHub.lnk'
+$hadLegacyStartMenu = Save-Snapshot -Path $legacyStartMenuDir -Name 'LegacyStartMenu'
 
 # КАТАЛОГИ ДАННЫХ УВОДЯТСЯ В СТОРОНУ ПЕРЕИМЕНОВАНИЕМ, А НЕ КОПИРОВАНИЕМ.
 #
@@ -169,17 +173,6 @@ function Move-Aside {
     }
 }
 
-# Уводим ДО первой установки, а не перед разрушающей веткой: удаление сносит
-# служебные каталоги ВСЕГДА, без всяких галочек, — то есть по живым каталогам
-# пошло бы уже первое тихое удаление.
-#
-# Не получилось — прогона не будет. «Пропустить часть проверок» здесь означало
-# бы пойти по настоящему каталогу разработчика.
-if (-not ((Move-Aside -Path $appDataDir -Name 'AppDataRoaming') -and
-          (Move-Aside -Path $localAppDataDir -Name 'AppDataLocal'))) {
-    throw "Каталоги данных заняты — увести их в сторону не удалось. Закройте Chill Hub (проверьте значок в области уведомлений) и повторите."
-}
-
 # Ключи реестра сохраняются целиком (reg export), а не по одному значению:
 # восстановить надо всё, что было, а не то, что вспомнили перечислить.
 $hadUninstKey = Test-Path -LiteralPath $UninstKey
@@ -190,6 +183,13 @@ if ($hadAppKey) { reg export "HKCU\Software\ChillHub\Install" (Join-Path $snapsh
 $gamesDir = Join-Path ([IO.Path]::GetTempPath().TrimEnd('\')) ("chillhub-smoke-games-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 
 try {
+    # Переносим до установки, но уже под finally: если второй перенос не
+    # удастся, первый каталог всё равно должен вернуться на место.
+    if (-not ((Move-Aside -Path $appDataDir -Name 'AppDataRoaming') -and
+              (Move-Aside -Path $localAppDataDir -Name 'AppDataLocal'))) {
+        throw "Каталоги данных заняты — увести их в сторону не удалось. Закройте Chill Hub (проверьте значок в области уведомлений) и повторите."
+    }
+
     # ---------------------------------------------------------------- установка
     Write-Host "[smoke] тихая установка в $InstallDir" -ForegroundColor Cyan
     $code = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
@@ -444,6 +444,8 @@ finally {
 
     Restore-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk' -Existed $hadDesktopLnk
     Restore-Snapshot -Path $startMenuDir -Name 'StartMenu' -Existed $hadStartMenu
+    Restore-Snapshot -Path $legacyDesktopLnk -Name 'ChillHub.lnk' -Existed $hadLegacyDesktopLnk
+    Restore-Snapshot -Path $legacyStartMenuDir -Name 'LegacyStartMenu' -Existed $hadLegacyStartMenu
 
     if (Test-Path -LiteralPath $UninstKey) { Remove-Item -LiteralPath $UninstKey -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $AppKey) { Remove-Item -LiteralPath $AppKey -Recurse -Force -ErrorAction SilentlyContinue }
