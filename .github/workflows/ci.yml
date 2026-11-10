@@ -785,11 +785,11 @@ jobs:
     name: Installer (NSIS)
     needs: changes
     if: needs.changes.outputs.dotnet == 'true'
-    # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
-    # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
-    # чужой код до неё физически не доедет даже при ошибочном одобрении:
-    # для форка выражение вычисляется в windows-latest.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
+    # Native GUI tests require the desktop system DLLs (including opengl32).
+    # win-builder lacks opengl32: its C# installer tests pass, but Slint test
+    # executables fail before main. Keep the full Native gate on desktop Windows.
+    # Forks always use hosted runners and never execute on our own machine.
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || needs.changes.outputs.native == 'true') && 'windows-latest' || 'win-builder' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
