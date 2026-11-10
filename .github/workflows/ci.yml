@@ -118,7 +118,7 @@ jobs:
             echo "→ клиент не задет: сборка и установщик пропускаются"
           fi
 
-          if echo "$FILES" | grep -qE '^(launcher/ChillHub\.Native/|scripts/(native-|ensure-webview2-bootstrapper\.ps1$|app\.ico$|installer\.nsi$|ci/ensure-native-rust\.ps1$)|\.github/workflows/ci\.yml$|\.gitattributes$|\.editorconfig$)'; then
+          if echo "$FILES" | grep -qE '^(launcher/ChillHub\.Native/|scripts/(native-|ensure-webview2-bootstrapper\.ps1$|app\.ico$|installer\.nsi$|ci/(ensure-native-rust|native-installer-smoke|smoke-installer)\.ps1$)|tests/parity-contract\.json$|\.github/workflows/ci\.yml$|\.gitattributes$|\.editorconfig$)'; then
             echo "native=true" >> "$GITHUB_OUTPUT"
           else
             echo "native=false" >> "$GITHUB_OUTPUT"
@@ -874,8 +874,12 @@ jobs:
           path: |
             ${{ steps.native-cache.outputs.target }}
             ${{ steps.native-cache.outputs.registry }}
-          key: native-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}
-          restore-keys: native-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-
+          # Save compiled applications as well as dependencies. A lockfile-only
+          # key otherwise keeps the first partial build forever, even after fixes.
+          key: native-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-${{ hashFiles('launcher/ChillHub.Native/src/**', 'launcher/ChillHub.Native/ui/**', 'launcher/ChillHub.Native/tests/**', 'launcher/ChillHub.Native/build.rs', 'launcher/ChillHub.Native/Cargo.toml') }}
+          restore-keys: |
+            native-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-
+            native-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-
       - name: Native — формат, Clippy, тесты и три Release-приложения
         if: needs.changes.result != 'success' || needs.changes.outputs.native == 'true'
         shell: pwsh

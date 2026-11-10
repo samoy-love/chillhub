@@ -15,6 +15,11 @@ try {
     & (Join-Path $project 'build.ps1') -Test -Target $Target *> $log
 } catch {
     $failure = $_
+    # Keep the actual failing assertion visible in the job, even when the
+    # optional dependency diagnostic has nothing to report.
+    try {
+        if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 | Write-Host }
+    } catch { Write-Warning "Cannot read Native test log: $_" }
     try {
         & (Join-Path $PSScriptRoot 'native-dependency-diagnostics.ps1') -TestLog $log |
             Tee-Object -FilePath (Join-Path $project 'dist/ci-dependencies.log')
