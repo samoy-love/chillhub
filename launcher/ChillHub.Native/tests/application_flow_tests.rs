@@ -753,14 +753,18 @@ fn main(){std::fs::write("started.txt",std::env::current_dir().unwrap().to_strin
         .arg("--crate-name=launch_fixture")
         .arg("-o")
         .arg(&executable);
-    if let Some(linker) = std::env::var_os("CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER") {
+    // A GNU override is irrelevant to MSVC, even if inherited from the shell.
+    #[cfg(target_env = "gnu")]
+    if let Some(linker) = std::env::var_os("CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER")
+        .filter(|value| !value.is_empty())
+    {
         compiler
             .arg("-C")
             .arg(format!("linker={}", linker.to_string_lossy()))
             .args(["-C", "linker-flavor=ld", "-C", "link-self-contained=yes"]);
         let dlltool = std::path::Path::new(&linker)
             .parent()
-            .unwrap()
+            .expect("GNU fixture linker must include its toolchain directory")
             .join("llvm-dlltool.exe");
         compiler
             .arg("-C")

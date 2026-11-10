@@ -105,5 +105,13 @@ try {
     }
 } finally {
     Pop-Location
-    foreach ($key in $keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
+    foreach ($key in $keys) {
+        # PowerShell coerces $null to an empty string for this .NET overload.
+        # Newer runtimes preserve that empty variable instead of removing it.
+        if ($null -eq $saved[$key]) {
+            Remove-Item -LiteralPath "Env:$key" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process')
+        }
+    }
 }
