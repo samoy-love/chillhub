@@ -5,6 +5,7 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Diagnostics;
     using System.IO;
     using System.Net.Http;
     using System.Runtime.ExceptionServices;
@@ -129,7 +130,7 @@ namespace ChillHub.Tests {
                 var img = new Image { Tag = "//cdn.invalid/cover.png" };
 
                 ImageLoader.AttachAndLoad(img, "https://api.invalid/v1/");
-                await Settle();
+                await WaitForImage(img);
 
                 Assert.Equal(new[] { "https://cdn.invalid/cover.png" }, handler.Requested);
             });
@@ -381,7 +382,7 @@ namespace ChillHub.Tests {
                 var img = new Image { Tag = "/manifests/game/icon.png" };
 
                 ImageLoader.AttachAndLoad(img, "https://api.invalid/v1/");
-                await Settle();
+                await WaitForImage(img);
 
                 Assert.Equal(new[] { "https://api.invalid/manifests/game/icon.png" }, handler.Requested);
             });
@@ -399,7 +400,7 @@ namespace ChillHub.Tests {
                 var img = new Image { DataContext = new NewsItem { CoverUrl = "https://cdn.invalid/cover.png" } };
 
                 ImageLoader.AttachAndLoad(img, "https://api.invalid/v1/");
-                await Settle();
+                await WaitForImage(img);
 
                 Assert.Equal(new[] { "https://cdn.invalid/cover.png" }, handler.Requested);
             });
@@ -628,14 +629,16 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Даёт диспетчеру доработать то, что было поставлено в очередь.
-        /// AttachAndLoad запускает загрузку «в фоне», и без этого проверять было бы нечего.
+        /// Дожидается результата фоновой загрузки, сохраняя работающий диспетчер.
+        /// Число проходов очереди не гарантирует, что пул потоков уже выполнил запрос.
         /// </summary>
-        private static async Task Settle() {
-            for (var i = 0; i < 20; i++) {
-                await Dispatcher.CurrentDispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
-                await Task.Yield();
+        private static async Task WaitForImage(Image image) {
+            var elapsed = Stopwatch.StartNew();
+            while (image.Source == null && elapsed.Elapsed < TimeSpan.FromSeconds(10)) {
+                await Task.Delay(10);
             }
+
+            Assert.NotNull(image.Source);
         }
 
         /// <summary>
