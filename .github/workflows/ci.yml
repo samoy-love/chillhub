@@ -872,6 +872,7 @@ jobs:
           name: native-windows-validation
           path: |
             launcher/ChillHub.Native/dist/ci-tests.log
+            launcher/ChillHub.Native/dist/ci-dependencies.log
             launcher/ChillHub.Native/dist/qa-renders
             launcher/ChillHub.Native/dist/build-info.json
             launcher/ChillHub.Native/dist/helper-runtime-deps.txt

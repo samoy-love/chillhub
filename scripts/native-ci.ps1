@@ -13,6 +13,13 @@ $previousQa = $env:CHILLHUB_UI_QA
 try {
     $env:CHILLHUB_UI_QA = '1'
     & (Join-Path $project 'build.ps1') -Test -Target $Target *> $log
+} catch {
+    $failure = $_
+    try {
+        & (Join-Path $PSScriptRoot 'native-dependency-diagnostics.ps1') -TestLog $log |
+            Tee-Object -FilePath (Join-Path $project 'dist/ci-dependencies.log')
+    } catch { Write-Warning "Dependency diagnostics failed: $_" }
+    throw $failure
 } finally { $env:CHILLHUB_UI_QA = $previousQa }
 & (Join-Path $project 'build.ps1') -Target $Target
 if ($ValidationOnly) { return }
