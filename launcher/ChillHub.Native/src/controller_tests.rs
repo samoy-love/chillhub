@@ -226,6 +226,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         visible: vec![],
         icons: vec![],
         choices: HashMap::new(),
+        launching: Default::default(),
         query: String::new(),
         only_mods: false,
         mod_query: String::new(),
@@ -331,6 +332,37 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                 1 if !ui.get_busy() && ui.get_can_play() && ui.get_play_label() == "Играть" => {
                     let tasks = captured.borrow().tasks.clone();
                     if tasks.len() != 2 || !tasks.iter().all(|t| t.state == QueueState::Completed) { return Ok(false); }
+                    captured.borrow_mut().launching.insert(("fixture".into(), false));
+                    controller::refresh_choice(&ui, &captured);
+                    *stage.borrow_mut() = (13, 0);
+                }
+                13 if !ui.get_busy() && ui.get_play_label() == "Запускаем…" => {
+                    if ui.get_can_play() || ui.get_operation_busy() { return Err("pending launch did not isolate its copy".into()); }
+                    ui.invoke_play_requested();
+                    if captured.borrow().launching.len() != 1 { return Err("duplicate pending launch was accepted".into()); }
+                    ui.invoke_panel_closed();
+                    ui.invoke_panel_requested("settings".into());
+                    ui.set_settings_path(draft.clone().into());
+                    ui.invoke_settings_leave("".into());
+                    if !ui.get_settings_error().contains("Дождитесь запуска") { return Err("pending launch allowed library replacement".into()); }
+                    ui.set_settings_path(original_games.clone().into());
+                    ui.invoke_settings_leave("".into());
+                    ui.invoke_game_selected(0);
+                    *stage.borrow_mut() = (14, 0);
+                }
+                14 if !ui.get_busy() => {
+                    if !ui.get_can_play() || ui.get_operation_busy() || ui.get_game_title() != "Без дополнений" { return Err("another game was blocked by pending launch".into()); }
+                    ui.invoke_game_selected(1);
+                    *stage.borrow_mut() = (15, 0);
+                }
+                15 if !ui.get_busy() => {
+                    if ui.get_can_play() || ui.get_play_label() != "Запускаем…" { return Err("returning to pending copy allowed a duplicate launch".into()); }
+                    captured.borrow_mut().launching.clear();
+                    controller::refresh_choice(&ui, &captured);
+                    *stage.borrow_mut() = (16, 0);
+                }
+                16 if !ui.get_busy() && ui.get_can_play() && ui.get_play_label() == "Играть" => {
+                    let tasks = captured.borrow().tasks.clone();
                     ui.invoke_panel_closed();
                     ui.invoke_panel_requested("settings".into());
                     ui.set_settings_path(draft.clone().into());

@@ -239,13 +239,27 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
             match result {
                 Ok((option, running, version, time, files, queued)) => {
                     let blocked = service::blocked(&state.borrow().maintenance, &option.action);
-                    ui.set_can_verify_game(files[0] && !queued && running.is_none());
-                    ui.set_can_verify_mods(files[1] && !queued && running.is_none());
+                    let launching = selected(state).is_some_and(|(game, target)| {
+                        state
+                            .borrow()
+                            .launching
+                            .contains(&(game.game_id, target.via_steam()))
+                    });
+                    ui.set_can_verify_game(files[0] && !queued && running.is_none() && !launching);
+                    ui.set_can_verify_mods(files[1] && !queued && running.is_none() && !launching);
                     ui.set_has_game_files(files[2]);
                     ui.set_can_create_shortcut(files[3]);
-                    ui.set_can_play(option.available() && running.is_none() && !queued && !blocked);
+                    ui.set_can_play(
+                        option.available()
+                            && running.is_none()
+                            && !queued
+                            && !blocked
+                            && !launching,
+                    );
                     ui.set_play_label(
-                        if running.is_some() {
+                        if launching {
+                            "Запускаем…"
+                        } else if running.is_some() {
                             "Игра запущена"
                         } else if queued {
                             "В очереди"
@@ -264,7 +278,9 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
                         }
                         .into(),
                     );
-                    ui.set_status(if running.is_some() {
+                    ui.set_status(if launching {
+                        "Ожидаем запуска игры".into()
+                    } else if running.is_some() {
                         "Игра уже запущена".into()
                     } else if queued {
                         "Откройте загрузки, чтобы продолжить или отменить задачу".into()
@@ -658,7 +674,10 @@ fn check_updates(ui: &AppWindow, state: &State, startup: bool) {
                 );
             }
             if let Ok(UpdateCheck::Available(release)) = release {
-                if ui.get_panel_kind() != "" || !state.borrow().services.idle() {
+                if ui.get_panel_kind() != ""
+                    || !state.borrow().services.idle()
+                    || !state.borrow().launching.is_empty()
+                {
                     ui.set_connection_note(
                         format!("Доступно обновление Chill Hub {}", release.version).into(),
                     );
@@ -817,6 +836,10 @@ fn save_settings(ui: &AppWindow, state: &State, next: String) {
         return;
     }
     ui.set_settings_error("".into());
+    if reload_needed && !state.borrow().launching.is_empty() {
+        ui.set_settings_error("Дождитесь запуска игр перед изменением папки или сервера.".into());
+        return;
+    }
     ui.set_operation_busy(true);
     background_for(
         ui,
@@ -1537,15 +1560,27 @@ pub(super) fn play(ui: &AppWindow, state: &State) {
         return;
     };
     let services = state.borrow().services.clone();
-    ui.set_busy(true);
-    ui.set_operation_busy(true);
-    ui.set_can_play(false);
     let offline = state.borrow().offline;
     let shown_action = state.borrow().option.as_ref().map(|o| o.action.clone());
+    let launching = shown_action == Some(LaunchAction::Play);
+    let launch_key = (game.game_id.clone(), target.via_steam());
+    if state.borrow().launching.contains(&launch_key) {
+        return;
+    }
+    if launching {
+        state.borrow_mut().launching.insert(launch_key.clone());
+        ui.set_play_label("Запускаем…".into());
+        ui.set_status("Ожидаем запуска игры".into());
+    } else {
+        ui.set_busy(true);
+        ui.set_operation_busy(true);
+    }
+    ui.set_can_play(false);
     background_for(
         ui,
-        Activity::Operation,
+        if launching { Activity::Quiet } else { Activity::Operation },
         move || -> Result<Option<chillhub_native::playtime::SessionHandle>, install_ui::PlayFailure> {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let option = services.option(&game, target)?;
             if option.action==LaunchAction::Play && shown_action.is_some_and(|shown|shown!=LaunchAction::Play) {
                 return Err("Состояние игры изменилось. Проверьте кнопку и нажмите её снова, чтобы запустить игру.".to_string().into());
@@ -1581,10 +1616,15 @@ pub(super) fn play(ui: &AppWindow, state: &State) {
                     .map(|_| None)
                     .map_err(Into::into)
             }
+            })).unwrap_or_else(|_| Err(install_ui::PlayFailure::General("Не удалось завершить запуск. Подробности сохранены в журнале.".into())))
         },
-        |ui, state, result| {
-            ui.set_busy(false);
-            ui.set_operation_busy(false);
+        move |ui, state, result| {
+            if launching {
+                state.borrow_mut().launching.remove(&launch_key);
+            } else {
+                ui.set_busy(false);
+                ui.set_operation_busy(false);
+            }
             match result {
                 Ok(Some(session)) => {
                     if let Some(warning) = &session.warning {
@@ -1795,6 +1835,14 @@ fn report_failure(ui: &AppWindow, state: &State, kind: &str, error: &str) {
     toast(ui, state, error);
 }
 fn action(ui: &AppWindow, state: &State, value: &str) {
+    if matches!(value, "update-install" | "update-verify") && !state.borrow().launching.is_empty() {
+        toast(
+            ui,
+            state,
+            "Дождитесь запуска игр перед обновлением лаунчера.",
+        );
+        return;
+    }
     let services = state.borrow().services.clone();
     match value {
         "choose-games-folder" => {
