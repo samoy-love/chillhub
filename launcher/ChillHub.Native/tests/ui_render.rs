@@ -4,6 +4,7 @@
 //! the expanded size/DPI matrix to dist/qa-renders for visual inspection.
 use chillhub_native::ui::{
     AppWindow, AuxiliaryWindow, GameRow, MediaTile, ModBenefit, ModRow, OrphanRow, QueueRow,
+    SetupWindow,
 };
 use i_slint_backend_testing::{
     ElementHandle, ElementRoot, TestingBackend, TestingBackendOptions, mock_elapsed_time,
@@ -80,6 +81,12 @@ impl Harness {
         let log = actions.clone();
         ui.on_action_requested(move |a| log.borrow_mut().push(a.into()));
         let log = actions.clone();
+        ui.on_feedback_send(move |_, _, kind, _, _| {
+            log.borrow_mut().push(format!("feedback:{kind}"))
+        });
+        let weak = ui.as_weak();
+        ui.on_game_selected(move |index| weak.upgrade().unwrap().set_selected_game(index));
+        let log = actions.clone();
         ui.on_queue_action(move |id, a| log.borrow_mut().push(format!("queue:{id}:{a}")));
         let log = actions.clone();
         ui.on_orphan_action(move |id, a| log.borrow_mut().push(format!("orphan:{id}:{a}")));
@@ -142,6 +149,17 @@ impl Harness {
         ui.set_has_modpack_link(true);
         ui.set_can_play(true);
         ui.set_launcher_version("1.8.1".into());
+        ui.set_releases(model(
+            chillhub_native::changelog::entries_since("1.7.20")
+                .into_iter()
+                .map(|r| chillhub_native::ui::ReleaseRow {
+                    version: r.version.into(),
+                    date: r.date.into(),
+                    changes: r.changes.into(),
+                    fresh: r.fresh,
+                })
+                .collect(),
+        ));
         ui.set_can_verify_game(true);
         ui.set_can_verify_mods(true);
         ui.set_has_game_files(true);
@@ -881,11 +899,31 @@ fn real_ui_headless_layout_and_actions() {
     assert!(h.ui.get_panel_kind().is_empty(), "Escape closes the modal");
     h.panel("settings", "Настройки", "");
     if h.qa {
+        resize(h.ui.window(), 1360, 850, 1.0);
+        settle();
         let threads =
             ElementHandle::find_by_accessible_label(&h.ui, "Количество потоков скачивания")
                 .find(|e| e.accessible_enabled().is_some())
                 .unwrap();
         threads.set_accessible_value("8");
+        let limit =
+            ElementHandle::find_by_accessible_label(&h.ui, "Ограничить скорость скачивания")
+                .next()
+                .unwrap();
+        limit.invoke_accessible_default_action();
+        settle();
+        assert_eq!(
+            h.ui.get_settings_speed(),
+            0,
+            "off means unlimited without entering zero"
+        );
+        limit.invoke_accessible_default_action();
+        settle();
+        assert_eq!(
+            h.ui.get_settings_speed(),
+            10,
+            "toggle restores the last speed limit"
+        );
         threads.scroll(0.0, -1000.0);
         settle();
         h.click("Сохранить");
@@ -893,7 +931,7 @@ fn real_ui_headless_layout_and_actions() {
             h.actions.borrow().contains(&"settings:8:10".to_string()),
             "custom numeric field preserves editable settings"
         );
-        ElementHandle::find_by_accessible_label(&h.ui, "Сохранить")
+        ElementHandle::find_by_element_id(&h.ui, "AppWindow::settings-scroll")
             .next()
             .unwrap()
             .scroll(0.0, 1000.0);
@@ -917,7 +955,7 @@ fn real_ui_headless_layout_and_actions() {
             .unwrap();
         assert_in_bounds(&save, 1120.0, 720.0, "settings footer after scroll");
         h.capture("settings-small-scrolled", 900, 500, 1.0);
-        let visible_field = ElementHandle::find_by_accessible_label(&h.ui, "Уменьшить движение")
+        let visible_field = ElementHandle::find_by_element_id(&h.ui, "AppWindow::settings-scroll")
             .next()
             .unwrap();
         visible_field.scroll(0.0, -1000.0);
@@ -928,7 +966,7 @@ fn real_ui_headless_layout_and_actions() {
             .unwrap();
         assert_in_bounds(&save, 900.0, 500.0, "small settings footer after scroll");
         h.ui.set_settings_error("Папку игр и адрес сервера можно изменить после завершения загрузок и игр. Скорость, потоки и поведение окна можно менять сейчас. Исправьте путь или дождитесь окончания операции; введённые настройки сохранены на экране.".into());
-        save.scroll(0.0, -1000.0);
+        visible_field.scroll(0.0, -1000.0);
         settle();
         h.capture("settings-save-error", 900, 500, 1.0);
         h.ui.set_settings_error("".into());
@@ -978,6 +1016,23 @@ fn real_ui_headless_layout_and_actions() {
             "Escape closes feedback after a pointer transition from help"
         );
         h.panel("feedback", "Идея или ошибка", "");
+        h.click("Тема сообщения");
+        h.click("Вопрос");
+        ElementHandle::find_by_accessible_label(&h.ui, "Тема сообщения")
+            .next()
+            .unwrap()
+            .scroll(0.0, -1000.0);
+        settle();
+        h.click("Отправить");
+        assert!(
+            h.actions.borrow().contains(&"feedback:question".to_owned()),
+            "question remains a separate feedback category; no network is used"
+        );
+        ElementHandle::find_by_accessible_label(&h.ui, "Отправить")
+            .next()
+            .unwrap()
+            .scroll(0.0, 1000.0);
+        settle();
         let input = ElementHandle::find_by_accessible_label(&h.ui, "Ваше имя, необязательно")
             .next()
             .unwrap();
@@ -1125,6 +1180,111 @@ fn real_ui_headless_layout_and_actions() {
         }
     }
     auxiliary.hide().unwrap();
+    if h.qa {
+        h.ui.show().unwrap();
+        h.panel("", "", "");
+        h.ui.set_selected_game(0);
+        resize(h.ui.window(), 1360, 850, 1.0);
+        settle();
+        let row = ElementHandle::find_by_accessible_label(&h.ui, "BOMBANANA!")
+            .find(|e| e.accessible_enabled() == Some(true))
+            .unwrap();
+        let p = row.absolute_position();
+        let s = row.size();
+        let position = slint::LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+        h.ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Right,
+        });
+        h.ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Right,
+        });
+        settle();
+        assert_eq!(h.ui.get_panel_kind(), "manage");
+        assert_eq!(
+            h.ui.get_selected_game(),
+            1,
+            "right click manages the clicked game"
+        );
+        key(h.ui.window(), Key::Escape);
+        settle();
+        for _ in 0..2 {
+            h.ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            h.ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            mock_elapsed_time(Duration::from_millis(30));
+        }
+        assert_eq!(
+            h.ui.get_panel_kind(),
+            "manage",
+            "double click opens details instead of launching a game"
+        );
+        h.ui.hide().unwrap();
+    }
+    let setup = SetupWindow::new().unwrap();
+    setup.set_version("1.8.1".into());
+    setup.set_install_path("C:\\Users\\Игрок\\AppData\\Local\\Chill Hub".into());
+    setup.set_games_path("D:\\Совместные игры\\Chill Hub".into());
+    setup.set_needs_webview(true);
+    setup.show().unwrap();
+    for (name, removing, busy, done, error) in [
+        ("setup-install", false, false, false, false),
+        ("setup-progress", false, true, false, false),
+        ("setup-error", false, false, false, true),
+        ("setup-finished", false, false, true, false),
+        ("setup-remove", true, false, false, false),
+        ("setup-removed", true, false, true, false),
+    ] {
+        setup.set_removing(removing);
+        setup.set_busy(busy);
+        setup.set_done(done);
+        setup.set_error(error);
+        setup.set_message(if error {"Операция не завершена: файл занят. Закройте лаунчер и повторите установку. Ваши игры сохранятся."} else {""}.into());
+        for (w, he, scale) in [(560, 480, 1.0), (740, 690, 1.5), (740, 690, 2.0)] {
+            resize(setup.window(), w, he, scale);
+            settle();
+            let snapshot = setup.window().take_snapshot().unwrap();
+            assert_eq!(snapshot.width(), (w as f32 * scale) as u32);
+            if h.qa {
+                let filename = format!("{name}-{w}x{he}-{}pct.png", (scale * 100.0) as u32);
+                image::save_buffer(
+                    h.base.join("dist/qa-renders").join(&filename),
+                    snapshot.as_bytes(),
+                    snapshot.width(),
+                    snapshot.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+                h.renders.push(serde_json::json!({"file":filename,"logicalWidth":w,"logicalHeight":he,"scale":scale}));
+                for label in [
+                    "Отмена",
+                    "Закрыть",
+                    "Установить",
+                    "Удалить",
+                    "Готово",
+                    "Открыть Chill Hub",
+                ] {
+                    for button in ElementHandle::find_by_accessible_label(&setup, label)
+                        .filter(|e| e.accessible_enabled() == Some(true))
+                    {
+                        let p = button.absolute_position();
+                        let s = button.size();
+                        assert!(
+                            p.y >= 0.0 && p.y + s.height <= he as f32,
+                            "{name}: footer outside {w}x{he}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    setup.hide().unwrap();
     if h.qa {
         std::fs::write(
             h.base.join("dist/qa-renders/index.json"),

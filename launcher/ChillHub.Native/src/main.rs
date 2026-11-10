@@ -663,13 +663,26 @@ fn open_panel(ui: &AppWindow, state: &State, kind: &str) {
             "Сообщение команде Chill Hub".into(),
             "".into(),
         ),
-        "changelog" => (
-            "Что нового".into(),
-            format!("Chill Hub {}", env!("CARGO_PKG_VERSION")),
-            chillhub_native::changelog::text_since(
-                &state.borrow().prefs.last_seen_changelog_version,
-            ),
-        ),
+        "changelog" => {
+            ui.set_releases(ModelRc::new(VecModel::from(
+                chillhub_native::changelog::entries_since(
+                    &state.borrow().prefs.last_seen_changelog_version,
+                )
+                .into_iter()
+                .map(|r| chillhub_native::ui::ReleaseRow {
+                    version: r.version.into(),
+                    date: r.date.into(),
+                    changes: r.changes.into(),
+                    fresh: r.fresh,
+                })
+                .collect::<Vec<_>>(),
+            )));
+            (
+                "Что нового".into(),
+                format!("Chill Hub {}", env!("CARGO_PKG_VERSION")),
+                "".into(),
+            )
+        }
         _ => (
             "Chill Hub".into(),
             format!("Версия {}", env!("CARGO_PKG_VERSION")),

@@ -5,7 +5,7 @@ fn main() {
     let ui_root = if std::env::var_os("CARGO_FEATURE_LAUNCHER_UI").is_some() {
         Some("ui/root.slint")
     } else if std::env::var_os("CARGO_FEATURE_HELPER_UI").is_some() {
-        Some("ui/auxiliary.slint")
+        Some("ui/helper-root.slint")
     } else {
         None
     };

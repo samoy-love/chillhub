@@ -11,16 +11,46 @@ use std::{
 const MAX_LOG_BYTES: u64 = 512 * 1024;
 const KEEP_LOGS: usize = 10;
 
+/// Share the native title-bar theme and parent standard folder dialogs to the
+/// actual helper window. No GPU renderer is enabled by raw-window-handle.
+pub fn style_window(window: &slint::Window) -> isize {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        #[link(name = "dwmapi", kind = "raw-dylib")]
+        unsafe extern "system" {
+            fn DwmSetWindowAttribute(
+                hwnd: isize,
+                attribute: u32,
+                value: *const i32,
+                size: u32,
+            ) -> i32;
+        }
+        if let Ok(handle) = window.window_handle().window_handle()
+            && let RawWindowHandle::Win32(handle) = handle.as_raw()
+        {
+            let hwnd = handle.hwnd.get();
+            unsafe {
+                DwmSetWindowAttribute(hwnd, 20, &1, 4);
+            }
+            return hwnd;
+        }
+    }
+    0
+}
+
 #[derive(Clone, Copy)]
 pub enum HelperKind {
     Updater,
     Security,
+    Setup,
 }
 impl HelperKind {
     fn name(self) -> &'static str {
         match self {
             Self::Updater => "updater",
             Self::Security => "security",
+            Self::Setup => "setup",
         }
     }
 }

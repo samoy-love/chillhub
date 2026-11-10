@@ -8,6 +8,9 @@ use slint::ComponentHandle;
 use std::path::PathBuf;
 
 fn main() -> Result<(), String> {
+    if std::env::args().nth(1).as_deref() == Some("--setup-ui") {
+        return chillhub_native::setup::run(std::env::args().skip(2).collect());
+    }
     let log = HelperLog::open(HelperKind::Updater);
     if let Ok(log) = &log {
         let _ = log.record("start", "Запущен модуль обновления");
@@ -39,6 +42,7 @@ fn finish(ui: &AuxiliaryWindow, result: Result<(), String>, log: &Result<HelperL
 fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     helper_runtime::select_renderer()?;
     let ui = AuxiliaryWindow::new().map_err(|e| e.to_string())?;
+    helper_runtime::style_window(ui.window());
     ui.set_window_title("Обновление · Chill Hub".into());
     ui.set_heading("Обновление Chill Hub".into());
     ui.set_subtitle("Проверяем файлы, сохраняем предыдущую версию и перезапускаем лаунчер.".into());

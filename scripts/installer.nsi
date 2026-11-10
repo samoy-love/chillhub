@@ -196,6 +196,10 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 !endif
 SetDatablockOptimize on
+!ifdef NATIVE_CLIENT
+; Start the small Slint frontend without decompressing the entire game player.
+ReserveFile "${PAYLOAD_DIR}\ChillHub.Updater.exe"
+!endif
 
 ; MUI options (simple modern touches)
 !define MUI_ABORTWARNING
@@ -519,7 +523,14 @@ Section "Install" SecInstall
   ;                      перезаписывает, что даёт вечный цикл обновления.
   ; Список исключений обязан совпадать с ChillHub.Update.PreserveMatcher.DefaultRules
   ; и со staging-фильтром в scripts/build-installer.ps1 (New-LauncherPayload).
+  ClearErrors
   File /r /x "config.json" /x "launcher.version" /x "launcher.update-status" /x "Uninstall.exe" /x "*.pdb" /x "linux-*" /x "osx-*" "${PAYLOAD_DIR}\*.*"
+!ifdef NATIVE_CLIENT
+  ${If} ${Errors}
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+!endif
 
   ; Write uninstaller
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -699,6 +710,12 @@ Section "Install" SecInstall
 !ifdef NATIVE_CLIENT
   ; Native release always contains the verified bootstrapper, never the full runtime.
   File "Redist\${PREREQ_WEBVIEW2}"
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/WEBVIEW2" $R1
+  ${IfNot} ${Errors}
+    Call InstallPrereqs
+  ${EndIf}
 !else
   ; Only legacy non-release CI may continue without the download.
   ; Release build-installer.ps1 requires it before invoking NSIS.
@@ -972,6 +989,31 @@ Function .onInit
   ; галочкой никто не увидит, а менять поведение тихой установки этой правкой
   ; не хотелось.
   StrCpy $DesktopShortcut_State 1
+!ifdef NATIVE_CLIENT
+  ClearErrors
+  ${GetOptions} $R0 "/NODESKTOP" $R1
+  ${IfNot} ${Errors}
+    StrCpy $DesktopShortcut_State 0
+  ${EndIf}
+  ; Only the graphical entrypoint starts Slint. The child /S process executes
+  ; these same installation sections and never recursively opens another UI.
+  IfSilent native_setup_worker
+  Call DetectWebView2
+  IntOp $R2 1 - $WebView2Present
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=ChillHub.Setup.exe "${PAYLOAD_DIR}\ChillHub.Updater.exe"
+  ClearErrors
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui install "$EXEPATH" "$INSTDIR" "$GAMES_DIR" "${APP_VERSION}" "$R2"' $R3
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "Не удалось открыть установщик. Скачайте Chill Hub заново."
+    SetErrorLevel 1
+  ${Else}
+    SetErrorLevel $R3
+  ${EndIf}
+  Quit
+native_setup_worker:
+!endif
 
   ; УСТАНОВКА СТАРОЙ ВЕРСИИ ПОВЕРХ НОВОЙ — С ПОДТВЕРЖДЕНИЕМ.
   ;
@@ -987,6 +1029,13 @@ Function .onInit
     ; 0 — равны, 1 — установленная новее, 2 — устанавливаемая новее.
     ${VersionCompare} "$0" "${APP_VERSION}" $1
     ${If} $1 == 1
+!ifdef NATIVE_CLIENT
+      ${GetParameters} $R0
+      ClearErrors
+      ${GetOptions} $R0 "/ALLOWDOWNGRADE" $R1
+      IfErrors +2
+      Goto continue
+!endif
       MessageBox MB_YESNO|MB_ICONEXCLAMATION \
         "Установлена версия $0, а этот установщик ставит ${APP_VERSION} — более старую.$\r$\n$\r$\nПродолжить и откатить ${APP_TITLE} до ${APP_VERSION}?" \
         /SD IDNO IDYES continue
@@ -1317,6 +1366,8 @@ Function InstallPrereqs
 prereq_failed:
   DetailPrint "WebView2 Runtime is not available after optional setup."
 !ifdef NATIVE_CLIENT
+  ; The Slint frontend must also show the warning in silent worker mode.
+  SetErrorLevel 20
   MessageBox MB_OK|MB_ICONEXCLAMATION "Не удалось установить компонент для видео YouTube. Игры будут работать, а видео пока можно открыть в браузере. Подключитесь к интернету и повторите установку Chill Hub, чтобы добавить компонент." /SD IDOK
 !else
   MessageBox MB_OK|MB_ICONEXCLAMATION "Не удалось установить компонент для новостей. Игры будут работать. Подключитесь к интернету и повторите установку Chill Hub, чтобы добавить компонент." /SD IDOK
@@ -1346,6 +1397,29 @@ Function un.onInit
     IfFileExists "D:\*.*" 0 +2
       StrCpy $Un_GamesDir "D:\Games\ChillHub"
   ${EndIf}
+
+!ifdef NATIVE_CLIENT
+  IfSilent native_uninstall_worker
+  InitPluginsDir
+  ; Both UI and engine run outside the installation, so no executable holds
+  ; the directory being removed. _?= prevents a second asynchronous copy.
+  ClearErrors
+  CopyFiles /SILENT "$INSTDIR\ChillHub.Updater.exe" "$PLUGINSDIR\ChillHub.Setup.exe"
+  CopyFiles /SILENT "$EXEPATH" "$PLUGINSDIR\UninstallWorker.exe"
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "Не удалось открыть удаление. Переустановите Chill Hub и попробуйте снова."
+    SetErrorLevel 1
+    Quit
+  ${EndIf}
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui uninstall "$PLUGINSDIR\UninstallWorker.exe" "$INSTDIR" "$Un_GamesDir" "${APP_VERSION}" "0"' $R3
+  ${If} ${Errors}
+    SetErrorLevel 1
+  ${Else}
+    SetErrorLevel $R3
+  ${EndIf}
+  Quit
+native_uninstall_worker:
+!endif
 
   ; ГАЛОЧКИ УДАЛЕНИЯ ДОСТУПНЫ И В ТИХОМ РЕЖИМЕ.
   ;

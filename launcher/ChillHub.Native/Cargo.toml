@@ -1,6 +1,6 @@
 [package]
 name = "chillhub-native"
-version = "1.8.1"
+version = "1.8.2"
 edition = "2024"
 rust-version = "1.92"
 publish = false
@@ -26,7 +26,7 @@ required-features = ["launcher-ui"]
 [features]
 default = ["launcher-ui"]
 launcher-ui = ["dep:slint", "dep:image", "dep:raw-window-handle", "slint/renderer-femtovg-wgpu", "slint/raw-window-handle-06", "slint/unstable-winit-030", "web-video"]
-helper-ui = ["dep:slint"]
+helper-ui = ["dep:slint", "dep:raw-window-handle", "slint/raw-window-handle-06"]
 benchmark = ["launcher-ui", "slint/renderer-femtovg", "slint/unstable-wgpu-30"]
 web-video = ["dep:webview2-com"]
 

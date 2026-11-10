@@ -4,6 +4,7 @@ pub mod diagnostic_bundle;
 pub mod diagnostic_notifications;
 pub mod diagnostics;
 pub mod feedback;
+pub mod folder_picker;
 #[cfg(feature = "helper-ui")]
 pub mod helper_runtime;
 pub mod installed_apps;
@@ -20,6 +21,8 @@ pub mod playtime;
 pub mod queue;
 pub mod security;
 pub mod service;
+#[cfg(feature = "helper-ui")]
+pub mod setup;
 pub mod shortcuts;
 pub mod transfer;
 pub mod update;

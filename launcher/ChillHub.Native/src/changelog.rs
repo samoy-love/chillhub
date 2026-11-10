@@ -1,3 +1,4 @@
+use chrono::Datelike;
 use serde::Deserialize;
 #[derive(Deserialize)]
 struct Release {
@@ -25,6 +26,53 @@ pub fn text() -> String {
     text_since("")
 }
 pub fn text_since(last_seen: &str) -> String {
+    entries_since(last_seen)
+        .into_iter()
+        .map(|r| {
+            format!(
+                "{} · {}{}\n{}",
+                r.version,
+                r.date,
+                if r.fresh { " · Новое" } else { "" },
+                r.changes
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+pub struct Entry {
+    pub version: String,
+    pub date: String,
+    pub changes: String,
+    pub fresh: bool,
+}
+fn display_date(value: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "января",
+        "февраля",
+        "марта",
+        "апреля",
+        "мая",
+        "июня",
+        "июля",
+        "августа",
+        "сентября",
+        "октября",
+        "ноября",
+        "декабря",
+    ];
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(|date| {
+            format!(
+                "{} {} {}",
+                date.day(),
+                MONTHS[date.month0() as usize],
+                date.year()
+            )
+        })
+        .unwrap_or_else(|_| value.to_owned())
+}
+pub fn entries_since(last_seen: &str) -> Vec<Entry> {
     let last = crate::update::version_parts(last_seen).ok();
     let current = crate::update::version_parts(env!("CARGO_PKG_VERSION")).ok();
     let releases: Vec<Release> = serde_json::from_str(include_str!("../Data/changelog.json"))
@@ -36,24 +84,29 @@ pub fn text_since(last_seen: &str) -> String {
                 crate::update::version_parts(&r.version)
                     .is_ok_and(|version| version > last && version <= current)
             });
-            format!(
-                "{} · {}{}\n{}",
-                r.version,
-                r.date,
-                if fresh { " · Новое" } else { "" },
-                r.changes
+            Entry {
+                version: r.version,
+                date: display_date(&r.date),
+                fresh,
+                changes: r
+                    .changes
                     .into_iter()
                     .map(|c| format!("• {c}"))
                     .collect::<Vec<_>>()
-                    .join("\n")
-            )
+                    .join("\n"),
+            }
         })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+        .collect()
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn release_dates_share_russian_format_without_losing_existing_text() {
+        assert_eq!(display_date("2026-11-10"), "10 ноября 2026");
+        assert_eq!(display_date("10 ноября 2026"), "10 ноября 2026");
+        assert_eq!(display_date("unknown"), "unknown");
+    }
     #[test]
     fn new_marks_use_previous_seen_version_and_disappear_on_reopen() {
         assert!(!text_since("").contains(" · Новое"));

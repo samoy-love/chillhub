@@ -103,6 +103,7 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     };
     helper_runtime::select_renderer()?;
     let ui = AuxiliaryWindow::new().map_err(|e| e.to_string())?;
+    helper_runtime::style_window(ui.window());
     ui.set_window_title("Настройка защиты · Chill Hub".into());
     ui.set_heading("Исключения антивируса".into());
     ui.set_subtitle(
