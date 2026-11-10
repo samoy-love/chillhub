@@ -109,6 +109,10 @@ impl Harness {
         ui.on_source_selected(move |s| weak.upgrade().unwrap().set_source(s));
         let weak = ui.as_weak();
         ui.on_mode_selected(move |m| weak.upgrade().unwrap().set_mode(m));
+        let weak = ui.as_weak();
+        ui.on_mod_category_selected(move |category| {
+            weak.upgrade().unwrap().set_mod_category(category);
+        });
         ui.set_games(model(
             catalog
                 .iter()
@@ -512,9 +516,12 @@ fn real_ui_headless_layout_and_actions() {
         }
         h.ui.set_operation_busy(false);
         h.capture("main-small", 900, 500, 1.0);
+        let previous_source = h.ui.get_source();
+        h.ui.set_source("steam".into());
         h.ui.set_status("Игра не установлена в Steam".into());
         h.ui.set_can_play(false);
         h.capture("unavailable-steam-small", 900, 500, 1.0);
+        h.ui.set_source(previous_source);
         h.ui.set_status("Готова к запуску".into());
         h.ui.set_can_play(true);
         h.ui.set_maintenance_note("Меняем диск на сервере раздачи и проверяем файлы. Ожидаемое окончание — 10.11 в 22:30. Установленные игры остаются доступны.".into());
@@ -683,6 +690,26 @@ fn real_ui_headless_layout_and_actions() {
         for &(w, he, scale) in &panel_sizes {
             h.capture(kind, w, he, scale);
         }
+    }
+    if h.qa {
+        h.panel("mods", "Состав модпака", "");
+        resize(h.ui.window(), 900, 500, 1.0);
+        settle();
+        let category = ElementHandle::find_by_accessible_label(&h.ui, "Категория модов")
+            .find(|e| e.accessible_enabled() == Some(true))
+            .expect("all mod categories remain available in a compact selector");
+        assert_in_bounds(&category, 900.0, 500.0, "compact mod categories");
+        category.invoke_accessible_default_action();
+        settle();
+        for _ in 0..9 {
+            key(h.ui.window(), Key::DownArrow);
+        }
+        h.capture("mods-category-menu-small", 900, 500, 1.0);
+        key(h.ui.window(), Key::Return);
+        assert_eq!(h.ui.get_mod_category(), "Сборка");
+        assert_eq!(h.ui.get_panel_kind(), "mods");
+        h.capture("mods-category-small", 900, 500, 1.0);
+        h.ui.set_mod_category("Все".into());
     }
     h.ui.set_can_verify_game(false);
     h.ui.set_can_verify_mods(false);

@@ -229,6 +229,15 @@ component ComboBox inherits Rectangle {
         touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: pointer; clicked => { key.focus(); root.open(); } }
     }
     popup := PopupWindow { x: 0px; y: root.height + 4px; width: root.width; height: min(256px, root.model.length * 36px + 12px); close-policy: close-on-click-outside; forward-focus: popup-key;
+        property <int> visible-choice: root.current-index;
+        changed visible-choice => { self.reveal-selection(); }
+        changed is-open => { if self.is-open { self.reveal-selection(); } }
+        init => { self.reveal-selection(); }
+        function reveal-selection() {
+            let top = root.current-index * 36px;
+            if top + choice-scroll.content-y < 0px { choice-scroll.content-y = -top; }
+            else if top + 34px + choice-scroll.content-y > choice-scroll.height { choice-scroll.content-y = min(0px, choice-scroll.height - top - 34px); }
+        }
         Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #25222b; border-width: 1px; border-color: #47404f; border-radius: 8px; }
         popup-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
             focus-changed-event => { root.popup-open = self.has-focus; }
@@ -840,11 +849,9 @@ export component AppWindow inherits Window {
                 }
                 SearchField { x: 0px; y: mod-note.height + 12px; width: parent.width - (root.has-modpack-link ? 190px : 0px); placeholder: "Найти мод по названию или описанию"; edited(value) => { root.mod-search-edited(value); } }
                 if root.has-modpack-link: ActionButton { x: parent.width - 178px; y: mod-note.height + 12px; width: 178px; height: 38px; text: "Страница сборки"; compact: true; quiet: true; icon: "arrow"; clicked => { root.action-requested("open-modpack-source"); } }
-                ScrollView { x: 0px;
-                    y: mod-note.height + 60px; width: parent.width; height: 39px;
-                    content-height: self.height; content-width: max(self.width, root.mod-categories.length * 152px);
-                    for category[i] in root.mod-categories: ActionButton { y: 0px;  x: i * 152px; width: 144px; compact: true; text: category; selected: root.mod-category == category; clicked => { root.mod-category-selected(category); } }
-                }
+                Text { x: 0px; y: mod-note.height + 60px; width: 78px; height: 36px; text: "Категория"; color: Theme.dim; font-size: 12px; vertical-alignment: center; }
+                ComboBox { x: 86px; y: mod-note.height + 60px; width: 220px; height: 36px; model: root.mod-categories; current-value: root.mod-category; label: "Категория модов"; selected(value) => { root.mod-category-selected(value); } }
+                Text { x: 322px; y: mod-note.height + 60px; width: parent.width - 322px; height: 36px; text: "Найдено: " + root.mods.length; color: Theme.dim; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
                 ScrollView { x: 0px;
                     y: mod-note.height + 112px; width: parent.width; height: parent.height - self.y;
                     content-width: self.visible-width - 16px; content-height: max(self.height, mod-rows.preferred-height);
