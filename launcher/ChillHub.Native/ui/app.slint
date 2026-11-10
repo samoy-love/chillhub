@@ -793,7 +793,14 @@ export component AppWindow inherits Window {
             TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; scroll-event(event) => { accept } }
             Text { x: 28px; y: 23px; width: parent.width - 104px; height: 34px; text: root.panel-title; color: Theme.ink; font-size: 28px; font-weight: 600; overflow: elide; }
             Text { x: 28px; y: 60px; width: parent.width - 90px; height: 18px; text: root.panel-subtitle; color: Theme.dim; font-size: 13px; overflow: elide; }
-            modal-close := ActionButton { init => { self.focus(); } x: parent.width - 48px; y: 17px; width: 32px; compact: true; icon: "close"; accessible-name: "Закрыть"; enabled: !root.operation-busy && !root.feedback-exit-confirm; clicked => { root.request-close(); } }
+            modal-close := ActionButton {
+                property <string> active-panel: root.panel-kind;
+                init => { self.focus(); }
+                // The modal survives help -> feedback/settings transitions, but
+                // the previously focused action belongs to the removed content.
+                changed active-panel => { self.focus(); }
+                x: parent.width - 48px; y: 17px; width: 32px; compact: true; icon: "close"; accessible-name: "Закрыть"; enabled: !root.operation-busy && !root.feedback-exit-confirm; clicked => { root.request-close(); }
+            }
 
             if root.gallery-open: Rectangle {
                 x: 19px; y: 85px; width: parent.width - 38px; height: parent.height - 95px;

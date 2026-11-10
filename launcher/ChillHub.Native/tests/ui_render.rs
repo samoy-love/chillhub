@@ -11,7 +11,7 @@ use i_slint_backend_testing::{
 use serde_json::Value;
 use slint::{
     ComponentHandle, Image, LogicalSize, ModelRc, SharedString, VecModel,
-    platform::{Key, WindowEvent},
+    platform::{Key, PointerEventButton, WindowEvent},
 };
 use std::{
     cell::RefCell,
@@ -950,6 +950,32 @@ fn real_ui_headless_layout_and_actions() {
         assert!(
             h.actions.borrow().contains(&"version:2.6.A".to_owned()),
             "version dropdown supports keyboard selection"
+        );
+        // Unlike Harness::panel, a real help action replaces modal content
+        // without destroying the modal. A pointer click also moves focus into
+        // the outgoing action, which an accessibility invocation does not do.
+        h.panel("help", "Помощь", "Chill Hub");
+        let feedback_action = ElementHandle::find_by_accessible_label(&h.ui, "Идея или ошибка")
+            .next()
+            .unwrap();
+        let origin = feedback_action.absolute_position();
+        let size = feedback_action.size();
+        let position =
+            slint::LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
+        h.ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        h.ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        settle();
+        assert_eq!(h.ui.get_panel_kind(), "feedback");
+        key(h.ui.window(), Key::Escape);
+        assert!(
+            h.ui.get_panel_kind().is_empty(),
+            "Escape closes feedback after a pointer transition from help"
         );
         h.panel("feedback", "Идея или ошибка", "");
         let input = ElementHandle::find_by_accessible_label(&h.ui, "Ваше имя, необязательно")
