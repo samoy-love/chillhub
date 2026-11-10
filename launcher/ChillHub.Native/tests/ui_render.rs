@@ -512,6 +512,11 @@ fn real_ui_headless_layout_and_actions() {
         }
         h.ui.set_operation_busy(false);
         h.capture("main-small", 900, 500, 1.0);
+        h.ui.set_status("Игра не установлена в Steam".into());
+        h.ui.set_can_play(false);
+        h.capture("unavailable-steam-small", 900, 500, 1.0);
+        h.ui.set_status("Готова к запуску".into());
+        h.ui.set_can_play(true);
         h.ui.set_maintenance_note("Меняем диск на сервере раздачи и проверяем файлы. Ожидаемое окончание — 10.11 в 22:30. Установленные игры остаются доступны.".into());
         h.capture("maintenance", 900, 500, 1.0);
         h.ui.set_maintenance_note("".into());

@@ -519,7 +519,11 @@ fn delete_game_directory(library: &Path, root: &Path, game_id: &str) -> Result<(
         };
         let name: Vec<u16> = trash.as_os_str().encode_wide().collect();
         let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-        let size = offset + name.len() * 2;
+        // The Win32 wrapper converts an absolute DOS path before forwarding it
+        // to NT. Supply a real NUL even though FileNameLength excludes it: spare
+        // alignment bytes are not guaranteed and previously made some path
+        // lengths fail (or rename to a name containing trailing heap bytes).
+        let size = offset + (name.len() + 1) * 2;
         // usize storage provides the alignment required by FILE_RENAME_INFO.
         let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
         let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
@@ -645,6 +649,27 @@ mod tests {
         assert!(!game.exists());
         assert_eq!(std::fs::read(other.join("keep")).unwrap(), b"other");
     }
+    #[test]
+    fn delete_handles_every_utf16_path_alignment() {
+        let temp = tempfile::tempdir().unwrap();
+        for extra in 0..8 {
+            let library = temp
+                .path()
+                .join(format!("Библиотека {} конец", "x".repeat(extra)));
+            let game = library.join("old-one");
+            let other = library.join("keep");
+            std::fs::create_dir_all(&game).unwrap();
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::write(game.join("fixture"), b"remove").unwrap();
+            std::fs::write(other.join("fixture"), b"keep").unwrap();
+            delete_game_directory(&library, &game, "old-one")
+                .unwrap_or_else(|e| panic!("path alignment {extra}: {e}"));
+            assert!(!game.exists());
+            assert_eq!(std::fs::read(other.join("fixture")).unwrap(), b"keep");
+            assert_eq!(std::fs::read_dir(&library).unwrap().count(), 1);
+        }
+    }
+
     #[test]
     fn delete_removes_readonly_game_files() {
         let temp = tempfile::tempdir().unwrap();

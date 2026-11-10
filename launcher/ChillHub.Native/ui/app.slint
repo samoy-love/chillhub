@@ -689,8 +689,12 @@ export component AppWindow inherits Window {
                         Text { x: 190px + 38px * root.spacious; y: 17px; text: "Режим запуска"; color: Theme.dim; font-size: 11px; }
                         if root.has-mods: Segment { x: 190px + 38px * root.spacious; y: 39px; width: 168px + 16px * root.spacious; first: "С модами"; second: "Без модов"; right: root.mode == "plain"; motion: !root.reduced-motion; enabled: root.panel-kind == "" && !root.operation-busy; selected(right) => { root.mode-selected(right ? "plain" : "mods"); } }
                         if !root.has-mods: Text { x: 190px + 38px * root.spacious; y: 39px; height: 36px; text: "Обычная игра"; color: Theme.ink; font-weight: 600; font-size: 14px; vertical-alignment: center; }
-                        Rectangle { x: parent.width - (151px + 38px * root.spacious); y: 20px; width: 6px; height: 6px; border-radius: 3px; background: #a7daba; }
-                        Text { x: parent.width - (139px + 38px * root.spacious); y: 15px; width: 115px + 38px * root.spacious; height: 16px; text: root.status; color: #cbc6d2; font-size: 11px; overflow: elide; }
+                        Rectangle {
+                            x: parent.width - self.width - 24px; y: 10px;
+                            width: max(144px, min(320px, parent.width - (390px + 54px * root.spacious))); height: 27px;
+                            Rectangle { x: 0px; y: 9px; width: 6px; height: 6px; border-radius: 3px; background: root.can-play ? #a7daba : Theme.dim; }
+                            Text { x: 12px; width: parent.width - 12px; height: parent.height; text: root.status; color: #cbc6d2; font-size: 11px; wrap: word-wrap; vertical-alignment: center; }
+                        }
                         action-label-measure := Text { visible: false; text: root.play-label; font-size: 13px; font-weight: 700; }
                         ActionButton { x: parent.width - self.width - 24px; y: 39px; width: min(240px,max(132px + 38px * root.spacious,action-label-measure.preferred-width + 52px)); height: 40px; text: root.play-label; icon: "play"; primary: true; enabled: root.can-play && !root.busy && !root.operation-busy && root.panel-kind == ""; clicked => { root.play-requested(); } }
                         Text { x: 24px; y: 83px; width: parent.width - 48px; height: 13px; text: root.installed-version + (root.playtime-label != "" ? "   ·   " + root.playtime-label : ""); color: #aaa3b2; font-size: 9px; overflow: elide; }

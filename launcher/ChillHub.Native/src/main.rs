@@ -914,10 +914,10 @@ fn open_web_video(ui: &AppWindow, state: &State, generation: u64, source: String
             };
             let Some(status) = status else { return; };
             if status.close_requested { close_panel(&ui, &state); return; }
-            let current = (status.ready, status.error.clone());
+            let current = (status.ready, status.error.clone(), status.error_code);
             if previous.as_ref() != Some(&current) {
                 state.borrow().services.api.event("media.web_state", serde_json::json!({
-                    "ready": status.ready, "error": status.error, "refererConfigured": status.referer_configured
+                    "ready": status.ready, "error": status.error, "errorCode": status.error_code, "refererConfigured": status.referer_configured
                 }));
                 ui.set_web_video_status(status.error.unwrap_or_else(|| if status.ready { "".into() } else { "Открываем видео…".into() }).into());
                 previous = Some(current);

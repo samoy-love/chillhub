@@ -203,6 +203,8 @@ SetDatablockOptimize on
 ; Match ui/theme.slint. Runtime helpers keep the Slint theme; NSIS keeps its
 ; native accessible controls while using the same type, brand and surfaces.
 SetFont "Segoe UI" 9
+ManifestDPIAware true
+ManifestDPIAwareness PerMonitorV2,PerMonitor
 BrandingText "Chill Hub"
 !define MUI_BGCOLOR "121215"
 !define MUI_TEXTCOLOR "F6F4F7"

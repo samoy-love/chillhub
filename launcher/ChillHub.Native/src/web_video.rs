@@ -52,6 +52,7 @@ impl WebVideoRect {
 pub struct WebVideoStatus {
     pub ready: bool,
     pub error: Option<String>,
+    pub error_code: Option<i64>,
     pub close_requested: bool,
     pub referer_configured: bool,
 }
@@ -666,12 +667,13 @@ fn apply_player_message(status: &mut WebVideoStatus, value: &serde_json::Value) 
         Some("ready") => {
             status.ready = true;
             status.error = None;
+            status.error_code = None;
         }
         Some("error") => {
             status.ready = false;
-            status.error = Some(player_error(
-                value.get("code").and_then(|v| v.as_i64()).unwrap_or(0),
-            ));
+            let code = value.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+            status.error_code = Some(code);
+            status.error = Some(player_error(code));
         }
         Some("load-error") if !status.ready => {
             status.error = Some(
@@ -727,6 +729,7 @@ mod tests {
         apply_player_message(&mut status, &serde_json::json!({"type":"load-error"}));
         assert!(status.ready && status.error.is_none());
         apply_player_message(&mut status, &serde_json::json!({"type":"error","code":150}));
+        assert_eq!(status.error_code, Some(150));
         assert!(!status.ready && status.error.unwrap().contains("Автор"));
     }
     #[test]
