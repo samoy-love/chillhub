@@ -42,7 +42,9 @@ export async function publishPresentation({ base, cookie, seed, provenance, outp
       try {
         return await fetch(new URL(route, origin), {
           redirect: 'error', signal: AbortSignal.timeout(20000), ...options,
-          headers: { Accept: 'application/json', ...(route.startsWith('/admin/') ? { Cookie: cookie } : {}), ...options.headers },
+          // nginx weakens the ETag when it compresses JSON. If-Match requires
+          // the original strong validator; never strip W/ from a received tag.
+          headers: { Accept: 'application/json', 'Accept-Encoding': 'identity', ...(route.startsWith('/admin/') ? { Cookie: cookie } : {}), ...options.headers },
         });
       } catch (cause) {
         if (attempt + 1 === attempts) throw new Error(`Request failed: ${options.method || 'GET'} ${route}`, { cause });

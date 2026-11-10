@@ -15,7 +15,7 @@ async function fixture(t, options={}) {
     res.setHeader('Content-Type','application/json');
     if(req.url==='/admin/api/games') {
       assert.equal(req.headers.cookie,'access_token=test; csrf_token=csrf');
-      if(!options.oldAPI)res.setHeader('ETag',state.etag);
+      if(!options.oldAPI)res.setHeader('ETag',options.gzipProxy && req.headers['accept-encoding']!=='identity' ? 'W/'+state.etag : state.etag);
       res.end(JSON.stringify({items:state.items}));
     } else if(req.url==='/api/games') res.end(JSON.stringify({items:[{...state.items[1],latestVersion:options.changedVersion?'2.0':'1.0'}]}));
     else if(req.url==='/assets/media/file.jpg') {res.setHeader('Content-Length','12');res.end();}
@@ -55,4 +55,8 @@ test('a concurrent edit refuses the migration instead of retrying a stale snapsh
   const f=await fixture(t,{concurrentEdit:true});await assert.rejects(publishPresentation({...f.args,apply:true}),/412/);
   assert.equal(f.state.posts,1);assert.equal(f.state.items[1].presentation,undefined);
   const report=JSON.parse(await readFile(path.join(f.output,'publication-result.json')));assert.equal(report.writeAttempted,true);
+});
+test('publication requests an uncompressed registry for a strong concurrency validator',async t=>{
+  const f=await fixture(t,{gzipProxy:true});const result=await publishPresentation({...f.args,apply:true});
+  assert.equal(result.etag,f.state.etag);assert.equal(f.state.posts,1);assert.equal(result.checks.publicReadback,true);
 });
