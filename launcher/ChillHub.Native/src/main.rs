@@ -1398,9 +1398,7 @@ fn main() {
         }
     }
     std::panic::set_hook(Box::new(|info| {
-        if let Ok(paths) = chillhub_native::paths::AppPaths::discover() {
-            chillhub_native::diagnostics::log(&paths.data_dir, "panic", &info.to_string());
-        }
+        chillhub_native::diagnostics::startup_log("panic", &info.to_string());
         if let Some((api, data)) = PANIC_CONTEXT.get() {
             chillhub_native::diagnostics::report_error(api, data, "panic", &info.to_string());
         }
@@ -1416,15 +1414,15 @@ fn main() {
         }
     }
     if let Err(error) = run() {
-        let local = chillhub_native::paths::AppPaths::discover()
-            .map(|p| p.data_dir)
-            .unwrap_or_else(|_| std::env::temp_dir().join("ChillHub"));
-        let _ = std::fs::create_dir_all(&local);
-        let _ = std::fs::write(local.join("startup-error.log"), &error);
+        let log = chillhub_native::diagnostics::startup_log("startup-error", &error);
         if let Some((api, data)) = PANIC_CONTEXT.get() {
             chillhub_native::diagnostics::report_error(api, data, "startup", &error);
         }
-        eprintln!("{error}");
-        desktop::show_error(&error);
+        let details = match log {
+            Some(path) => format!("{error}\n\nПодробности: {}", path.display()),
+            None => format!("{error}\n\nЖурнал недоступен или отключён."),
+        };
+        eprintln!("{details}");
+        desktop::show_error(&details);
     }
 }

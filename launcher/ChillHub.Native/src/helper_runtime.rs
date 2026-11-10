@@ -37,11 +37,31 @@ pub struct HelperLog {
 }
 impl HelperLog {
     pub fn open(kind: HelperKind) -> Result<Self, String> {
-        let data = std::env::var_os("CHILLHUB_DATA_DIR")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("ChillHub")))
-            .ok_or("Не найдена папка настроек")?;
-        Self::in_directory(&data, kind)
+        Self::with_fallback(
+            crate::diagnostics::log_data_directory().as_deref(),
+            &std::env::temp_dir(),
+            kind,
+        )
+    }
+
+    fn with_fallback(data: Option<&Path>, temp: &Path, kind: HelperKind) -> Result<Self, String> {
+        let preferred = data
+            .map(|p| Self::in_directory(p, kind))
+            .unwrap_or_else(|| Err("Не найдена папка настроек".into()));
+        match preferred {
+            Ok(log) => Ok(log),
+            Err(primary_error) => {
+                let fallback = crate::diagnostics::fallback_log_data(data, temp)
+                    .map_err(|error| format!("{primary_error}; резервный журнал: {error}"))?;
+                let log = Self::in_directory(&fallback, kind).map_err(|error| {
+                    format!("Основной журнал недоступен: {primary_error}; резервный: {error}")
+                })?;
+                // The fallback uses the same held directory handles and fresh file
+                // as the primary path, including in the elevated security helper.
+                log.record("log.fallback", &primary_error)?;
+                Ok(log)
+            }
+        }
     }
 
     pub fn in_directory(data: &Path, kind: HelperKind) -> Result<Self, String> {
@@ -150,7 +170,10 @@ pub fn record_result(log: &Result<HelperLog, String>, result: &Result<(), String
                 .unwrap_or("Операция завершена");
             match log.record(if result.is_ok() { "complete" } else { "error" }, message) {
                 Ok(()) => format!("Подробности: {}", log.path().display()),
-                Err(error) => format!("Не удалось записать подробности: {error}"),
+                Err(error) => format!(
+                    "Не удалось дописать журнал {}: {error}",
+                    log.path().display()
+                ),
             }
         }
         Err(error) => format!("Журнал недоступен: {error}"),
@@ -160,6 +183,46 @@ pub fn record_result(log: &Result<HelperLog, String>, result: &Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn both_helpers_fall_back_to_injected_temp_and_report_the_real_log() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("blocked-roaming");
+        fs::write(&data, b"profile unchanged").unwrap();
+        let fallback = temp.path().join("user-temp");
+        for kind in [HelperKind::Updater, HelperKind::Security] {
+            let log = HelperLog::with_fallback(Some(&data), &fallback, kind).unwrap();
+            assert!(log.path().starts_with(&fallback));
+            let caption = record_result(&Ok(log.clone()), &Err("fixture failure".into()));
+            assert!(caption.contains(log.path().to_str().unwrap()));
+            let contents = fs::read_to_string(log.path()).unwrap();
+            assert!(contents.contains("log.fallback") && contents.contains("fixture failure"));
+        }
+        assert_eq!(fs::read(&data).unwrap(), b"profile unchanged");
+        assert!(!fallback.join("config.json").exists());
+        let unknown = HelperLog::with_fallback(None, &fallback, HelperKind::Updater).unwrap();
+        assert!(unknown.path().starts_with(&fallback));
+    }
+
+    #[test]
+    fn helper_fallback_preserves_retention_and_reports_both_location_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("blocked-roaming");
+        fs::write(&data, b"profile unchanged").unwrap();
+        let fallback = temp.path().join("user-temp");
+        for _ in 0..12 {
+            HelperLog::with_fallback(Some(&data), &fallback, HelperKind::Security).unwrap();
+        }
+        let fallback_data = crate::diagnostics::fallback_log_data(Some(&data), &fallback).unwrap();
+        assert!(fs::read_dir(fallback_data.join("logs")).unwrap().count() <= KEEP_LOGS);
+        let blocked = temp.path().join("blocked-temp");
+        fs::write(&blocked, b"temp unchanged").unwrap();
+        let result = HelperLog::with_fallback(Some(&data), &blocked, HelperKind::Updater);
+        let caption = record_result(&result, &Err("fixture operation failure".into()));
+        assert!(caption.contains("Основной журнал") && caption.contains("резервный"));
+        assert!(!caption.contains("Подробности:"));
+        assert_eq!(fs::read(&blocked).unwrap(), b"temp unchanged");
+    }
+
     #[test]
     fn helper_log_is_local_bounded_and_preserves_unrelated_files() {
         let temp = tempfile::tempdir().unwrap();

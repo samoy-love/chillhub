@@ -103,12 +103,11 @@ impl Bundle {
             ));
         }
     }
-    fn helper_logs(&mut self, data: &Path) {
-        let directory = data.join("logs");
-        if crate::manifest::check_no_links(&directory).is_err() {
+    fn helper_logs(&mut self, directory: &Path) {
+        if crate::manifest::check_no_links(directory).is_err() {
             return;
         }
-        let Ok(entries) = fs::read_dir(&directory) else {
+        let Ok(entries) = fs::read_dir(directory) else {
             return;
         };
         let mut candidates = Vec::new();
@@ -134,7 +133,7 @@ impl Bundle {
         candidates.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         for kind in ["updater", "security"] {
             for (_, _, name) in candidates.iter().filter(|(k, _, _)| *k == kind).take(2) {
-                self.tail(data, &format!("logs/{name}"), 24 * 1024);
+                self.tail(directory, name, 24 * 1024);
             }
         }
     }
@@ -211,7 +210,10 @@ pub fn collect(data: &Path) -> String {
 pub(crate) fn recent_log(data: &Path) -> String {
     let mut bundle = Bundle::new();
     bundle.append(&format!("Chill Hub {}\n", env!("CARGO_PKG_VERSION")));
-    bundle.tail(data, "logs/launcher.log", 48 * 1024);
+    bundle.logs_left = 48 * 1024;
+    for directory in crate::diagnostics::log_directories(data) {
+        bundle.tail(&directory, "launcher.log", 48 * 1024);
+    }
     crate::diagnostics::redact(&bundle.text)
 }
 
@@ -281,18 +283,21 @@ fn collect_at(data: &Path, install: Option<&Path>) -> String {
         Err(error) => bundle.append(&format!("{error}\n")),
     }
     bundle.section("Launcher and updater logs");
-    bundle.tail(data, "logs/launcher.log", 96 * 1024);
-    bundle.helper_logs(data);
-    for relative in [
-        "logs/launcher.previous.log",
-        "logs/updater.log",
-        "logs/security.log",
-        "logs/client.log",
-        "logs/client.1.log",
-        "logs/boot.log",
-        "update-status.json",
-        "startup-error.log",
-    ] {
+    for directory in crate::diagnostics::log_directories(data) {
+        bundle.tail(&directory, "launcher.log", 96 * 1024);
+        bundle.helper_logs(&directory);
+        for name in [
+            "launcher.previous.log",
+            "updater.log",
+            "security.log",
+            "client.log",
+            "client.1.log",
+            "boot.log",
+        ] {
+            bundle.tail(&directory, name, 96 * 1024);
+        }
+    }
+    for relative in ["update-status.json", "startup-error.log"] {
         bundle.tail(data, relative, 96 * 1024);
     }
     if let Some(install) = install {

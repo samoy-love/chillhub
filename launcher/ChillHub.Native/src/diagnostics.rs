@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Mutex,
     time::Duration,
 };
 static LOG_LOCK: Mutex<()> = Mutex::new(());
+static LOG_PATHS: Mutex<BTreeMap<PathBuf, PathBuf>> = Mutex::new(BTreeMap::new());
 
 /// One bounded structured record, with the same rotation and privacy rules as
 /// the human-readable log. Callers record state changes, never frame/progress ticks.
@@ -21,31 +22,218 @@ pub fn log(data: &Path, kind: &str, message: &str) {
     if !logging_enabled(&std::env::var("CHILLHUB_CLIENT_LOG").unwrap_or_default()) {
         return;
     }
-    let Ok(_guard) = LOG_LOCK.lock() else {
-        return;
+    let _ = log_with_fallback(Some(data), &std::env::temp_dir(), kind, message);
+}
+
+/// Startup can fail before AppPaths or the configuration can be loaded. Only
+/// this log is redirected; callers must not use its directory for user state.
+pub fn startup_log(kind: &str, message: &str) -> Option<PathBuf> {
+    if !logging_enabled(&std::env::var("CHILLHUB_CLIENT_LOG").unwrap_or_default()) {
+        return None;
+    }
+    log_with_fallback(
+        log_data_directory().as_deref(),
+        &std::env::temp_dir(),
+        kind,
+        message,
+    )
+    .ok()
+}
+
+pub(crate) fn log_data_directory() -> Option<PathBuf> {
+    std::env::var_os("CHILLHUB_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("ChillHub")))
+}
+
+/// The explicit temporary root is also the test seam: tests never modify TEMP
+/// or write in the real profile. A profile hash keeps isolated runs apart.
+pub(crate) fn fallback_log_data(data: Option<&Path>, temp: &Path) -> io::Result<PathBuf> {
+    if !temp.is_absolute()
+        || temp.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(io::Error::other(
+            "Не найдена безопасная временная папка пользователя",
+        ));
+    }
+    let identity = data
+        .map(|p| p.as_os_str().as_encoded_bytes())
+        .unwrap_or(b"profile-unavailable");
+    let hash = blake3::hash(identity).to_hex();
+    Ok(temp.join("ChillHub").join(format!("logs-{}", &hash[..16])))
+}
+
+/// Last successfully written file, not a guessed preferred destination.
+pub fn actual_log_path(data: &Path) -> Option<PathBuf> {
+    LOG_PATHS.lock().ok()?.get(data).cloned()
+}
+
+/// Opening old logs remains available when new logging is disabled. Resolve
+/// only existing safe directories; this action must never create a log/profile.
+pub fn existing_log_directory(data: &Path) -> Option<PathBuf> {
+    existing_log_directory_at(data, &std::env::temp_dir())
+}
+
+fn existing_log_directory_at(data: &Path, temp: &Path) -> Option<PathBuf> {
+    let actual = actual_log_path(data);
+    let mut first_existing = None;
+    let mut newest = None;
+    for directory in log_directories_at(data, temp) {
+        let Ok(_guard) = crate::manifest::DirectoryGuard::acquire(&directory, false) else {
+            continue;
+        };
+        if !fs::metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
+            continue;
+        }
+        if actual.as_ref().is_some_and(|path| {
+            path.parent() == Some(directory.as_path())
+                && fs::symlink_metadata(path)
+                    .is_ok_and(|meta| meta.is_file() && !crate::manifest::is_reparse(&meta))
+        }) {
+            return Some(directory);
+        }
+        first_existing.get_or_insert_with(|| directory.clone());
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        // At most three candidates and 256 immediate entries per candidate;
+        // opening logs never walks a tree or reads arbitrary file contents.
+        for entry in entries.take(256).filter_map(Result::ok) {
+            if !is_supported_log_name(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if !meta.is_file() || crate::manifest::is_reparse(&meta) {
+                continue;
+            }
+            let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if newest.as_ref().is_none_or(|(time, _)| modified > *time) {
+                newest = Some((modified, directory.clone()));
+            }
+        }
+    }
+    newest.map(|(_, directory)| directory).or(first_existing)
+}
+
+fn is_supported_log_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "launcher.log"
+            | "launcher.previous.log"
+            | "client.log"
+            | "client.1.log"
+            | "client.2.log"
+            | "client.3.log"
+            | "boot.log"
+            | "updater.log"
+            | "security.log"
+            | "security-helper.log"
+    ) {
+        return true;
+    }
+    ["updater-", "security-"].into_iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .and_then(|suffix| suffix.strip_suffix(".jsonl"))
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+    })
+}
+
+pub(crate) fn log_directories(data: &Path) -> Vec<PathBuf> {
+    log_directories_at(data, &std::env::temp_dir())
+}
+
+fn log_directories_at(data: &Path, temp: &Path) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    if let Some(path) = actual_log_path(data)
+        && let Some(parent) = path.parent()
+    {
+        directories.push(parent.to_owned());
+    }
+    for directory in std::iter::once(data.join("logs")).chain(
+        fallback_log_data(Some(data), temp)
+            .ok()
+            .map(|p| p.join("logs")),
+    ) {
+        if !directories.contains(&directory) {
+            directories.push(directory);
+        }
+    }
+    directories
+}
+
+fn log_with_fallback(
+    data: Option<&Path>,
+    temp: &Path,
+    kind: &str,
+    message: &str,
+) -> io::Result<PathBuf> {
+    let _lock = LOG_LOCK
+        .lock()
+        .map_err(|_| io::Error::other("Журнал занят"))?;
+    let preferred = data
+        .map(|p| write_log(p, kind, message))
+        .unwrap_or_else(|| Err(io::Error::other("Не найдена папка настроек пользователя")));
+    let path = match preferred {
+        Ok(path) => path,
+        Err(primary_error) => {
+            let fallback = fallback_log_data(data, temp)?;
+            write_log(&fallback, kind, message).map_err(|fallback_error| {
+                io::Error::other(format!(
+                    "Основной журнал недоступен: {primary_error}; резервный: {fallback_error}"
+                ))
+            })?
+        }
     };
+    if let Some(data) = data
+        && let Ok(mut paths) = LOG_PATHS.lock()
+    {
+        // A normal process has one profile; bound diagnostic/test callers too.
+        if paths.len() >= 64 && !paths.contains_key(data) {
+            paths.pop_first();
+        }
+        paths.insert(data.to_owned(), path.clone());
+    }
+    Ok(path)
+}
+
+fn write_log(data: &Path, kind: &str, message: &str) -> io::Result<PathBuf> {
     let directory = data.join("logs");
-    if fs::create_dir_all(&directory).is_err() {
-        return;
-    }
+    let _guard = crate::manifest::DirectoryGuard::acquire(&directory, true)?;
     let path = directory.join("launcher.log");
-    if fs::metadata(&path).is_ok_and(|m| m.len() > 2 * 1024 * 1024) {
+    let mut file = crate::manifest::open_regular(&path, true, true, false)?;
+    if file.metadata()?.len() > 2 * 1024 * 1024 {
+        drop(file);
         let previous = directory.join("launcher.previous.log");
-        let _ = fs::remove_file(&previous);
-        let _ = fs::rename(&path, &previous);
+        crate::manifest::check_no_links(&previous)?;
+        match fs::remove_file(&previous) {
+            Ok(()) => (),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
+        }
+        fs::rename(&path, &previous)?;
+        file = crate::manifest::open_regular(&path, true, true, false)?;
     }
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(
-            file,
-            "{} [{kind}] {}",
-            chrono::Utc::now().to_rfc3339(),
-            redact(message)
-                .chars()
-                .take(12000)
-                .collect::<String>()
-                .replace(['\r', '\n'], " ")
-        );
-    }
+    file.seek(SeekFrom::End(0))?;
+    writeln!(
+        file,
+        "{} [{kind}] {}",
+        chrono::Utc::now().to_rfc3339(),
+        redact(message)
+            .chars()
+            .take(12000)
+            .collect::<String>()
+            .replace(['\r', '\n'], " ")
+    )?;
+    file.flush()?;
+    Ok(path)
 }
 
 fn logging_enabled(value: &str) -> bool {
@@ -487,6 +675,203 @@ pub fn metric(api: &ApiClient, data: &Path, event: Metric) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn empty_primary_directory_does_not_hide_existing_fallback_logs() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("profile");
+        let fallback = temp.path().join("user-temp");
+        fs::create_dir_all(data.join("logs")).unwrap();
+        let directory = fallback_log_data(Some(&data), &fallback)
+            .unwrap()
+            .join("logs");
+        fs::create_dir_all(&directory).unwrap();
+        let log = directory.join(format!("security-{}.jsonl", uuid::Uuid::new_v4()));
+        fs::write(&log, b"previous helper log").unwrap();
+        assert!(actual_log_path(&data).is_none());
+        assert_eq!(existing_log_directory_at(&data, &fallback), Some(directory));
+        assert_eq!(fs::read_dir(data.join("logs")).unwrap().count(), 0);
+        assert_eq!(fs::read(log).unwrap(), b"previous helper log");
+        assert!(!data.join("config.json").exists());
+    }
+
+    #[test]
+    fn newest_existing_log_wins_after_restart_but_active_process_path_has_priority() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("profile");
+        let fallback = temp.path().join("user-temp");
+        let primary = data.join("logs");
+        fs::create_dir_all(&primary).unwrap();
+        let old = primary.join("client.log");
+        fs::write(&old, b"old primary log").unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600)),
+            )
+            .unwrap();
+        let directory = fallback_log_data(Some(&data), &fallback)
+            .unwrap()
+            .join("logs");
+        fs::create_dir_all(&directory).unwrap();
+        let current = directory.join("launcher.log");
+        fs::write(&current, b"current fallback log").unwrap();
+        fs::write(primary.join("unrelated-private.log"), b"not a launcher log").unwrap();
+        assert_eq!(existing_log_directory_at(&data, &fallback), Some(directory));
+        assert_eq!(fs::read(&old).unwrap(), b"old primary log");
+        assert_eq!(fs::read(&current).unwrap(), b"current fallback log");
+        assert!(!primary.join("launcher.log").exists());
+        log_with_fallback(Some(&data), &fallback, "test", "active primary log").unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&current)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::SystemTime::now() + Duration::from_secs(3600)),
+            )
+            .unwrap();
+        assert_eq!(existing_log_directory_at(&data, &fallback), Some(primary));
+    }
+
+    #[test]
+    fn old_logs_can_be_opened_without_enabling_or_writing_new_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("profile");
+        let primary = data.join("logs");
+        let fallback = temp.path().join("user-temp");
+        fs::create_dir_all(&primary).unwrap();
+        let file = primary.join("client.log");
+        fs::write(&file, b"old client log").unwrap();
+        let modified = fs::metadata(&file).unwrap().modified().unwrap();
+        // An empty runtime map models a new process with logging disabled.
+        assert!(actual_log_path(&data).is_none());
+        assert_eq!(existing_log_directory_at(&data, &fallback), Some(primary));
+        assert_eq!(fs::read(&file).unwrap(), b"old client log");
+        assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), modified);
+        assert!(actual_log_path(&data).is_none());
+        assert!(!fallback.exists());
+        assert!(!data.join("logs/launcher.log").exists());
+        assert!(!data.join("config.json").exists());
+    }
+
+    #[test]
+    fn opening_existing_fallback_logs_does_not_create_primary_or_missing_folders() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("unavailable-profile");
+        let fallback = temp.path().join("user-temp");
+        assert!(existing_log_directory_at(&data, &fallback).is_none());
+        assert!(!data.exists() && !fallback.exists());
+        let directory = fallback_log_data(Some(&data), &fallback)
+            .unwrap()
+            .join("logs");
+        fs::create_dir_all(&directory).unwrap();
+        let log = directory.join("launcher.log");
+        fs::write(&log, b"previous fallback log").unwrap();
+        assert_eq!(existing_log_directory_at(&data, &fallback), Some(directory));
+        assert!(!data.exists());
+        assert_eq!(fs::read(log).unwrap(), b"previous fallback log");
+        assert!(actual_log_path(&data).is_none());
+        // A file at the preferred directory is not an openable log directory.
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("logs"), b"not a directory").unwrap();
+        let unused = temp.path().join("unused-temp");
+        assert!(existing_log_directory_at(&data, &unused).is_none());
+        assert!(!unused.exists());
+    }
+
+    #[test]
+    fn unavailable_profile_logs_only_to_injected_temp_and_reports_actual_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("blocked-roaming");
+        fs::write(&data, b"profile must remain unchanged").unwrap();
+        let fallback = temp.path().join("user-temp");
+        let path = log_with_fallback(Some(&data), &fallback, "startup", "fixture failure").unwrap();
+        assert!(path.starts_with(&fallback));
+        assert_eq!(actual_log_path(&data).as_deref(), Some(path.as_path()));
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("fixture failure")
+        );
+        assert_eq!(fs::read(&data).unwrap(), b"profile must remain unchanged");
+        assert!(!fallback.join("config.json").exists());
+        assert!(!fallback.join("games").exists());
+        assert!(!fallback.join("error-reports").exists());
+        let report = crate::diagnostic_bundle::recent_log(&data);
+        assert!(report.contains("fixture failure"));
+        assert!(!report.contains(&fallback.to_string_lossy().to_string()));
+        assert_eq!(
+            log_directories_at(&data, &fallback).first().unwrap(),
+            path.parent().unwrap()
+        );
+        let other = fallback_log_data(Some(&temp.path().join("other-profile")), &fallback).unwrap();
+        assert_ne!(other.join("logs/launcher.log"), path);
+    }
+
+    #[test]
+    fn writable_profile_keeps_primary_log_and_does_not_create_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("profile");
+        let fallback = temp.path().join("unused-temp");
+        let path = log_with_fallback(Some(&data), &fallback, "test", "primary").unwrap();
+        assert_eq!(path, data.join("logs/launcher.log"));
+        assert!(!fallback.exists());
+        assert_eq!(actual_log_path(&data), Some(path));
+    }
+
+    #[test]
+    fn fallback_rotation_remains_bounded_and_unknown_profile_never_uses_cwd() {
+        let temp = tempfile::tempdir().unwrap();
+        let fallback = temp.path().join("user-temp");
+        let path = log_with_fallback(None, &fallback, "startup", "first").unwrap();
+        fs::write(&path, vec![b'a'; 2 * 1024 * 1024 + 1]).unwrap();
+        let second = log_with_fallback(None, &fallback, "startup", "second").unwrap();
+        assert_eq!(path, second);
+        assert!(path.starts_with(&fallback));
+        assert!(fs::metadata(&path).unwrap().len() < 1024);
+        assert!(path.with_file_name("launcher.previous.log").is_file());
+        assert!(fallback_log_data(None, Path::new("relative-temp")).is_err());
+        assert!(fallback_log_data(None, &temp.path().join("child/../escape")).is_err());
+    }
+
+    #[test]
+    fn both_unavailable_locations_are_an_error_without_claiming_a_log_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("blocked-profile");
+        let fallback = temp.path().join("blocked-temp");
+        fs::write(&data, b"profile").unwrap();
+        fs::write(&fallback, b"temp").unwrap();
+        let result = log_with_fallback(Some(&data), &fallback, "test", "not written");
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Основной журнал") && error.contains("резервный"));
+        assert!(actual_log_path(&data).is_none());
+        assert_eq!(fs::read(&data).unwrap(), b"profile");
+        assert_eq!(fs::read(&fallback).unwrap(), b"temp");
+    }
+
+    #[test]
+    fn planted_hardlink_is_not_written_and_fallback_is_also_guarded() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("profile");
+        fs::create_dir_all(data.join("logs")).unwrap();
+        let sentinel = temp.path().join("unrelated.txt");
+        fs::write(&sentinel, b"keep").unwrap();
+        fs::hard_link(&sentinel, data.join("logs/launcher.log")).unwrap();
+        let fallback = temp.path().join("user-temp");
+        let fallback_data = fallback_log_data(Some(&data), &fallback).unwrap();
+        fs::create_dir_all(fallback_data.join("logs")).unwrap();
+        fs::hard_link(&sentinel, fallback_data.join("logs/launcher.log")).unwrap();
+        assert!(log_with_fallback(Some(&data), &fallback, "test", "must not write").is_err());
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+        fs::remove_file(fallback_data.join("logs/launcher.log")).unwrap();
+        let path = log_with_fallback(Some(&data), &fallback, "test", "safe fallback").unwrap();
+        assert_eq!(path, fallback_data.join("logs/launcher.log"));
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+    }
+
     #[test]
     fn logging_respects_the_existing_environment_switch() {
         for value in ["0", "false", " OFF ", "No"] {

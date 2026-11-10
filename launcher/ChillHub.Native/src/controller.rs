@@ -1846,9 +1846,15 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
         "retry-catalog" => reload(ui, state),
         "delete-selected-orphans" => orphan_ui::confirm_selected(ui, state),
         "open-logs" => {
-            let path = services.paths.data_dir.join("logs");
-            if let Err(e) = service::open_directory(&path) {
-                toast(ui, state, &e);
+            if let Some(directory) =
+                chillhub_native::diagnostics::existing_log_directory(&services.paths.data_dir)
+            {
+                if let Err(e) = service::open_directory(&directory) {
+                    toast(ui, state, &e);
+                }
+            } else {
+                let e = "Журнал недоступен или отключён.";
+                toast(ui, state, e);
             }
         }
         "feedback" | "changelog" | "update" | "security" => open_panel(ui, state, value),
