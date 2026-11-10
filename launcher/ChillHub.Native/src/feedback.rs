@@ -41,6 +41,7 @@ pub struct FeedbackService {
     api: ApiClient,
     data: PathBuf,
     lock: Mutex<()>,
+    local_admin_port: Option<u16>,
 }
 impl FeedbackService {
     pub fn new(api: ApiClient, data: PathBuf) -> Self {
@@ -48,7 +49,29 @@ impl FeedbackService {
             api,
             data,
             lock: Mutex::new(()),
+            local_admin_port: Some(55777),
         }
+    }
+    /// Development hosts can run the admin on a different port or disable it.
+    pub fn with_local_admin_port(mut self, port: Option<u16>) -> Self {
+        self.local_admin_port = port;
+        self
+    }
+
+    fn local_admin_endpoint(&self) -> Option<url::Url> {
+        let mut endpoint = self.api.base.clone();
+        if !matches!(endpoint.host_str(), Some("localhost" | "127.0.0.1")) {
+            return None;
+        }
+        let port = self.local_admin_port?;
+        if endpoint.port_or_known_default() == Some(port) {
+            return None;
+        }
+        endpoint.set_port(Some(port)).ok()?;
+        endpoint.set_path("/feedback/submit");
+        endpoint.set_query(None);
+        endpoint.set_fragment(None);
+        Some(endpoint)
     }
     fn queue_path(&self) -> PathBuf {
         self.data.join("feedback_queue.json")
@@ -161,14 +184,29 @@ impl FeedbackService {
         let system = draft.system.clone().unwrap_or_else(system_info);
         let body = serde_json::json!({"name":draft.name,"contact":draft.contact,"type":draft.kind,"comment":draft.comment,
             "attachLogs":draft.attach_logs,"logs":logs,"system":system});
-        match self
+        let mut response = self
             .api
             .client
             .post(endpoint)
             .header("X-Request-ID", &draft.id)
             .json(&body)
-            .send()
+            .send();
+        // Only a missing development route or unavailable server may fall back.
+        // Explicit validation and quota responses must remain authoritative.
+        if response.as_ref().map_or(true, |r| {
+            r.status().is_server_error() || r.status().as_u16() == 404
+        }) && let Some(endpoint) = self.local_admin_endpoint()
         {
+            crate::diagnostics::event(&self.data, "feedback.local-fallback", serde_json::json!({}));
+            response = self
+                .api
+                .client
+                .post(endpoint)
+                .header("X-Request-ID", &draft.id)
+                .json(&body)
+                .send();
+        }
+        match response {
             Ok(response) if response.status().is_success() => Some(SendResult::Sent),
             Ok(response) if response.status().as_u16() == 429 => Some(SendResult::RateLimited(
                 response
@@ -247,6 +285,60 @@ fn system_info() -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn development_fallback_is_local_and_never_bypasses_rejection_or_quota() {
+        for status in [404, 503, 400, 429] {
+            let temp = tempfile::tempdir().unwrap();
+            let primary = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            let admin = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            let service = FeedbackService::new(
+                ApiClient::new(&format!("http://{}", primary.server_addr())).unwrap(),
+                temp.path().into(),
+            )
+            .with_local_admin_port(Some(admin.server_addr().to_ip().unwrap().port()));
+            let primary_worker = std::thread::spawn(move || {
+                let request = primary
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                request.respond(tiny_http::Response::empty(status)).unwrap();
+            });
+            let admin_worker = std::thread::spawn(move || {
+                let request = admin
+                    .recv_timeout(std::time::Duration::from_millis(500))
+                    .unwrap();
+                if let Some(mut request) = request {
+                    assert!(matches!(status, 404 | 503));
+                    assert_eq!(request.url(), "/feedback/submit");
+                    let body: serde_json::Value =
+                        serde_json::from_reader(request.as_reader()).unwrap();
+                    assert_eq!(body["comment"], "local fixture");
+                    request.respond(tiny_http::Response::empty(200)).unwrap();
+                } else {
+                    assert!(matches!(status, 400 | 429));
+                }
+            });
+            let result = service.submit(FeedbackDraft {
+                comment: "local fixture".into(),
+                ..Default::default()
+            });
+            match status {
+                404 | 503 => assert_eq!(result, SendResult::Sent),
+                429 => assert!(matches!(result, SendResult::RateLimited(_))),
+                _ => assert!(matches!(result, SendResult::Rejected(_))),
+            }
+            primary_worker.join().unwrap();
+            admin_worker.join().unwrap();
+        }
+        let temp = tempfile::tempdir().unwrap();
+        for base in ["https://launcher.samoy.love", "http://127.0.0.1:55777"] {
+            assert!(
+                FeedbackService::new(ApiClient::new(base).unwrap(), temp.path().into())
+                    .local_admin_endpoint()
+                    .is_none()
+            );
+        }
+    }
     #[test]
     fn invalid_message_is_not_saved_or_sent() {
         let temp = tempfile::tempdir().unwrap();

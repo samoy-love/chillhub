@@ -8,6 +8,7 @@ mod controller;
 mod controller_tests;
 mod desktop;
 mod install_ui;
+mod karaoke;
 mod orphan_ui;
 #[cfg(feature = "benchmark")]
 mod perf_probe;
@@ -65,6 +66,7 @@ struct AppState {
     native_hwnd: isize,
     video_timer: Timer,
     toast_timer: Timer,
+    report_notices: std::collections::VecDeque<String>,
     maintenance_timer: Timer,
     update_timer: Timer,
     poll_inflight: bool,
@@ -507,6 +509,14 @@ fn toast(ui: &AppWindow, state: &State, text: &str) {
         move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_toast("".into());
+                ACTIVE_STATE.with(|slot| {
+                    if let Some(state) = slot.borrow().as_ref() {
+                        let next = state.borrow_mut().report_notices.pop_front();
+                        if let Some(text) = next {
+                            toast(&ui, state, &text);
+                        }
+                    }
+                });
             }
         },
     );
@@ -1279,6 +1289,7 @@ fn run() -> Result<(), String> {
         native_hwnd: 0,
         video_timer: Timer::default(),
         toast_timer: Timer::default(),
+        report_notices: Default::default(),
         maintenance_timer: Timer::default(),
         update_timer: Timer::default(),
         poll_inflight: false,

@@ -467,23 +467,51 @@ pub(super) fn cleanup_legacy_artifacts(install: &Path) {
 #[cfg(windows)]
 pub(super) fn refresh_shell_icons(exe: &Path) {
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::process::CommandExt;
     use windows_sys::Win32::UI::Shell::{
-        SHCNE_ASSOCCHANGED, SHCNE_UPDATEITEM, SHCNF_IDLIST, SHCNF_PATHW, SHChangeNotify,
+        SHCNE_ASSOCCHANGED, SHCNE_UPDATEITEM, SHCNF_FLUSHNOWAIT, SHCNF_IDLIST, SHCNF_PATHW,
+        SHChangeNotify,
     };
-    let path: Vec<_> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    if std::env::var_os("CHILLHUB_DATA_DIR").is_some() {
+        return;
+    }
+    let mut paths = crate::shortcuts::launcher_shortcuts(exe);
+    paths.push(exe.to_owned());
+    for item in paths {
+        let path: Vec<_> = item.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            SHChangeNotify(
+                SHCNE_UPDATEITEM as i32,
+                SHCNF_PATHW | SHCNF_FLUSHNOWAIT,
+                path.as_ptr().cast(),
+                std::ptr::null(),
+            );
+        }
+    }
     unsafe {
-        SHChangeNotify(
-            SHCNE_UPDATEITEM as i32,
-            SHCNF_PATHW,
-            path.as_ptr().cast(),
-            std::ptr::null(),
-        );
         SHChangeNotify(
             SHCNE_ASSOCCHANGED as i32,
             SHCNF_IDLIST,
             std::ptr::null(),
             std::ptr::null(),
         );
+    }
+    if let Ok(system) = crate::shortcuts::system_directory() {
+        let tool = system.join("ie4uinit.exe");
+        if tool.is_file()
+            && let Ok(mut child) = Command::new(tool)
+                .arg("-show")
+                .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+                .spawn()
+        {
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                if !matches!(child.try_wait(), Ok(None)) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
     }
 }
 #[cfg(not(windows))]

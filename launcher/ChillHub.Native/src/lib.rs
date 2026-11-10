@@ -1,6 +1,7 @@
 pub mod changelog;
 pub mod config;
 pub mod diagnostic_bundle;
+pub mod diagnostic_notifications;
 pub mod diagnostics;
 pub mod feedback;
 #[cfg(feature = "helper-ui")]

@@ -188,6 +188,11 @@ pub(super) fn delete_selected(ui: &AppWindow, state: &State, rows: Vec<OrphanRow
                 if !current.iter().any(|r|r.id==id&&r.path==path){return Err("Папка изменилась или игра снова есть в каталоге. Удаление пропущено.".into());}
                 services.delete_local(&GameRecord{game_id:id.clone(),title:id.clone(),..Default::default()})
             }).map(|_|"Удалено".to_string()).unwrap_or_else(|e|format!("Не удалено: {e}"));
+                chillhub_native::diagnostics::event(
+                    &services.paths.data_dir,
+                    "game.orphan-delete",
+                    serde_json::json!({"gameId":id,"result":result}),
+                );
                 results.push((id.clone(), result.clone()));
                 let weak = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {

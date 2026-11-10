@@ -329,8 +329,40 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
     );
 }
 
+pub(super) fn queue_report_notice(
+    ui: &AppWindow,
+    state: &State,
+    notice: chillhub_native::diagnostic_notifications::ReportNotice,
+) {
+    let text = notice.message();
+    if ui.get_toast().is_empty() {
+        toast(ui, state, &text);
+    } else {
+        let mut s = state.borrow_mut();
+        if s.report_notices.len() < 8 && !s.report_notices.contains(&text) {
+            s.report_notices.push_back(text);
+        }
+    }
+}
 pub(super) fn initialize(ui: &AppWindow, state: &State) {
+    crate::karaoke::bind(ui);
     settings(ui, state);
+    let weak = ui.as_weak();
+    chillhub_native::diagnostic_notifications::subscribe(
+        &state.borrow().services.paths.data_dir,
+        move |notice| {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ACTIVE_STATE.with(|slot| {
+                        if let Some(state) = slot.borrow().as_ref() {
+                            queue_report_notice(&ui, state, notice);
+                        }
+                    });
+                }
+            });
+        },
+    );
     let services = state.borrow().services.clone();
     chillhub_native::installed_apps::refresh(&services.paths.games_dir, &services.paths.data_dir);
     background(
@@ -529,6 +561,15 @@ pub(super) fn install_window_refresh(ui: &AppWindow) {
     use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
     let weak = ui.as_weak();
     ui.window().on_winit_window_event(move |_, event| {
+        if let WindowEvent::Focused(focused) = event {
+            let weak = weak.clone();
+            let focused = *focused;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_karaoke_active(focused);
+                }
+            });
+        }
         if matches!(event, WindowEvent::Focused(true)) {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -731,6 +772,12 @@ fn settings(ui: &AppWindow, state: &State) {
     ui.set_settings_speed(c.speed_limit_mbps);
     ui.set_settings_api(c.api_base_url.clone().into());
     ui.set_settings_tray(c.minimize_to_tray);
+    ui.set_karaoke_enabled(
+        c.extra
+            .get("KaraokeEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    );
     ui.set_reduced_motion(
         c.extra
             .get("ReducedMotion")
@@ -745,8 +792,15 @@ fn save_live_settings(ui: &AppWindow, state: &State) {
     let speed = ui.get_settings_speed();
     let tray = ui.get_settings_tray();
     let reduced = ui.get_reduced_motion();
+    let karaoke = ui.get_karaoke_enabled();
     let s = state.borrow();
     if s.prefs.download_threads == threads
+        && s.prefs
+            .extra
+            .get("KaraokeEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            == karaoke
         && s.prefs.speed_limit_mbps == speed
         && s.prefs.minimize_to_tray == tray
         && s.prefs
@@ -771,6 +825,7 @@ fn save_live_settings(ui: &AppWindow, state: &State) {
                     c.speed_limit_mbps = speed;
                     c.minimize_to_tray = tray;
                     c.extra.insert("ReducedMotion".into(), reduced.into());
+                    c.extra.insert("KaraokeEnabled".into(), karaoke.into());
                 }
             })
         },
@@ -785,6 +840,9 @@ fn save_live_settings(ui: &AppWindow, state: &State) {
                     s.prefs.speed_limit_mbps = saved.speed_limit_mbps;
                     s.prefs.minimize_to_tray = saved.minimize_to_tray;
                     s.prefs.extra.insert("ReducedMotion".into(), reduced.into());
+                    s.prefs
+                        .extra
+                        .insert("KaraokeEnabled".into(), karaoke.into());
                     s.services
                         .queue
                         .set_speed_limit(saved.speed_limit_mbps.max(0) as u64 * 1024 * 1024);
@@ -817,6 +875,13 @@ fn save_settings(ui: &AppWindow, state: &State, next: String) {
     let tray = ui.get_settings_tray();
     let reduced = ui.get_reduced_motion();
     let current = state.borrow().prefs.clone();
+    let karaoke = ui.get_karaoke_enabled();
+    let karaoke_changed = current
+        .extra
+        .get("KaraokeEnabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        != karaoke;
     let paths_changed = !settings_ui::same_path(&path, &services.paths.games_dir.to_string_lossy());
     let api_changed = api != current.api_base_url.trim_end_matches('/');
     let reload_needed = paths_changed || api_changed;
@@ -831,6 +896,7 @@ fn save_settings(ui: &AppWindow, state: &State, next: String) {
         && current.speed_limit_mbps == speed
         && current.minimize_to_tray == tray
         && !reduced_changed
+        && !karaoke_changed
     {
         finish_settings(ui, state, &next);
         return;
@@ -872,6 +938,7 @@ fn save_settings(ui: &AppWindow, state: &State, next: String) {
                 c.minimize_to_tray = tray;
                 c.extra
                     .insert("ReducedMotion".into(), serde_json::Value::Bool(reduced));
+                c.extra.insert("KaraokeEnabled".into(), karaoke.into());
             })?;
             services
                 .queue
@@ -2367,6 +2434,10 @@ pub(super) fn bind(ui: &AppWindow, state: &State) {
         }
     });
     handler!(on_setting_changed, |ui, state, key, value| {
+        if key == "karaoke" {
+            ui.set_karaoke_enabled(value == "true");
+            save_live_settings(&ui, &state);
+        }
         if key == "reduced-motion" {
             ui.set_reduced_motion(value == "true");
             save_live_settings(&ui, &state);

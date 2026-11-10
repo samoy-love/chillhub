@@ -610,7 +610,8 @@ fn feedback_distinguishes_rejection_rate_limit_and_saved_offline_queue() {
         )]));
         let temp = tempfile::tempdir().unwrap();
         let feedback =
-            FeedbackService::new(ApiClient::new(&server.base).unwrap(), temp.path().into());
+            FeedbackService::new(ApiClient::new(&server.base).unwrap(), temp.path().into())
+                .with_local_admin_port(None);
         let result = feedback.submit(FeedbackDraft {
             comment: "Тест на локальном сервере".into(),
             attach_logs: false,

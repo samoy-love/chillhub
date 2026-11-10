@@ -240,6 +240,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         native_hwnd: 0,
         video_timer: Timer::default(),
         toast_timer: Timer::default(),
+        report_notices: Default::default(),
         maintenance_timer: Timer::default(),
         update_timer: Timer::default(),
         poll_inflight: false,
@@ -392,13 +393,13 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                         return Err("invalid settings close lost its draft or failed to show a permanent error".into());
                     }
                     ui.set_settings_path(original_games.clone().into());
-                    ui.set_settings_threads(5);ui.set_settings_speed(2);ui.set_settings_api(base.clone().into());ui.set_settings_tray(false);ui.set_reduced_motion(true);
+                    ui.set_settings_threads(5);ui.set_settings_speed(2);ui.set_settings_api(base.clone().into());ui.set_settings_tray(false);ui.set_reduced_motion(true);ui.set_karaoke_enabled(true);
                     *stage.borrow_mut() = (4, 0);
                     ui.invoke_settings_leave("".into());
                 }
                 4 if !ui.get_operation_busy() && !ui.get_loading() && !ui.get_busy() => {
                     let saved = captured.borrow().services.config.load()?;
-                    if saved.download_threads != 5 || saved.speed_limit_mbps != 2 || saved.minimize_to_tray || saved.extra.get("ReducedMotion") != Some(&serde_json::Value::Bool(true)) {
+                    if saved.download_threads != 5 || saved.speed_limit_mbps != 2 || saved.minimize_to_tray || saved.extra.get("ReducedMotion") != Some(&serde_json::Value::Bool(true)) || saved.extra.get("KaraokeEnabled") != Some(&serde_json::Value::Bool(true)) {
                         return Err("settings callback did not persist isolated preferences".into());
                     }
                     if saved.api_base_url != base || saved.games_path != original_games || saved.last_game_id != "fixture" {
@@ -430,6 +431,14 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     *stage.borrow_mut() = (8, 0);
                 }
                 8 if !ui.get_operation_busy() => {
+                    let original = ui.get_toast();
+                    if original.is_empty() { return Err("worker error was not shown".into()); }
+                    controller::queue_report_notice(&ui, &captured, chillhub_native::diagnostic_notifications::ReportNotice::Sent);
+                    if ui.get_toast() != original { return Err("delivery notice hid the original error".into()); }
+                    *stage.borrow_mut() = (80, 0);
+                }
+                80 if ui.get_toast() == "Отчёт об ошибке автоматически отправлен." => {
+                    if !captured.borrow().report_notices.is_empty() { return Err("delivery notice queue did not drain".into()); }
                     ui.invoke_search_edited("Без дополнений".into());
                     if ui.get_games().row_count() != 1 { return Err("UI callbacks stopped after a background failure".into()); }
                     for id in ["old-one","old-two"] {
@@ -447,7 +456,10 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                 }
                 82 if !ui.get_operation_busy() => {
                     let paths=captured.borrow().services.paths.clone();
-                    if paths.game_root("old-one")?.exists()||!paths.game_root("old-two")?.join(".version").exists(){return Err("bulk cleanup changed an unselected folder or left selected game".into());}
+                    if paths.game_root("old-one")?.exists()||!paths.game_root("old-two")?.join(".version").exists(){
+                        let results:Vec<_>=ui.get_orphans().iter().map(|r|format!("{}: {}",r.id,r.result)).collect();
+                        return Err(format!("bulk cleanup changed an unselected folder or left selected game; results={results:?}; panel={}; toast={}",ui.get_panel_body(),ui.get_toast()));
+                    }
                     if !ui.get_orphans().iter().any(|r|r.result=="Удалено"){return Err("bulk cleanup omitted per-folder result".into());}
                     ui.invoke_panel_closed();
                     // Restore paused intent using the canonical Windows spelling while

@@ -480,6 +480,18 @@ fn flush_error_reports_sync(api: &ApiClient, data: &Path) -> std::io::Result<usi
                 continue;
             }
             if quota.count >= REPORT_LIMIT {
+                let retry = quota
+                    .window_start_utc
+                    .map(|start| REPORT_WINDOW_SECONDS - (chrono::Utc::now() - start).num_seconds())
+                    .unwrap_or(REPORT_WINDOW_SECONDS)
+                    .max(1) as u64;
+                crate::diagnostic_notifications::notify(
+                    data,
+                    crate::diagnostic_notifications::ReportNotice::Delayed {
+                        retry_after_seconds: retry,
+                    },
+                    quota.window_start_utc.map(|time| time.timestamp()),
+                );
                 break;
             }
             quota.count += 1;
@@ -510,6 +522,13 @@ fn flush_error_reports_sync(api: &ApiClient, data: &Path) -> std::io::Result<usi
                     .ok()
             })
             .is_some_and(|response| response.status().is_success());
+        if delivered {
+            crate::diagnostic_notifications::notify(
+                data,
+                crate::diagnostic_notifications::ReportNotice::Sent,
+                None,
+            );
+        }
         {
             let lock = report_lock(data, "error-reports.lock")?;
             fs2::FileExt::lock_exclusive(&lock)?;
@@ -1033,21 +1052,45 @@ mod tests {
         let server = ReportServer::new(503);
         let temp = tempfile::tempdir().unwrap();
         let data = temp.path();
+        let (notice_tx, notices) = std::sync::mpsc::channel();
+        crate::diagnostic_notifications::subscribe(data, move |notice| {
+            let _ = notice_tx.send(notice);
+        });
         for error in ["first", "second", "third"] {
             assert!(enqueue_error(&server.api, data, "test", error).unwrap());
         }
         assert_eq!(flush_error_reports_sync(&server.api, data).unwrap(), 0);
+        assert!(
+            notices.try_recv().is_err(),
+            "failed HTTP must not claim delivery"
+        );
         assert_eq!(quota(data, chrono::Utc::now()).count, 0);
         assert_eq!(report_files(data).unwrap().len(), 3);
         server
             .status
             .store(200, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(flush_error_reports_sync(&server.api, data).unwrap(), 3);
+        for _ in 0..3 {
+            assert_eq!(
+                notices.try_recv().unwrap(),
+                crate::diagnostic_notifications::ReportNotice::Sent
+            );
+        }
+        assert!(notices.try_recv().is_err());
         assert_eq!(quota(data, chrono::Utc::now()).count, 3);
         assert!(!enqueue_error(&server.api, data, "test", "first").unwrap());
         assert!(enqueue_error(&server.api, data, "test", "fourth").unwrap());
         let restarted = ApiClient::new(server.api.base.as_str()).unwrap();
         assert_eq!(flush_error_reports_sync(&restarted, data).unwrap(), 0);
+        assert!(matches!(
+            notices.try_recv().unwrap(),
+            crate::diagnostic_notifications::ReportNotice::Delayed { .. }
+        ));
+        assert_eq!(flush_error_reports_sync(&restarted, data).unwrap(), 0);
+        assert!(
+            notices.try_recv().is_err(),
+            "quota notices must not repeat on every tick"
+        );
         assert_eq!(report_files(data).unwrap().len(), 1);
         let mut expired = quota(data, chrono::Utc::now());
         expired.window_start_utc = Some(chrono::Utc::now() - chrono::Duration::seconds(181));

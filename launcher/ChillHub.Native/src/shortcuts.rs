@@ -156,6 +156,97 @@ fn read_links(paths: &[PathBuf]) -> Result<Vec<Link>, String> {
     }
 }
 
+#[cfg(windows)]
+fn known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::SHGetKnownFolderPath};
+    let mut value = std::ptr::null_mut();
+    let status = unsafe { SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut value) };
+    if value.is_null() {
+        return None;
+    }
+    unsafe {
+        let mut len = 0;
+        while len < 32768 && *value.add(len) != 0 {
+            len += 1;
+        }
+        let path = (status >= 0 && len > 0 && len < 32768).then(|| {
+            PathBuf::from(std::ffi::OsString::from_wide(std::slice::from_raw_parts(
+                value, len,
+            )))
+        });
+        CoTaskMemFree(value.cast());
+        path
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn launcher_shortcuts(exe: &Path) -> Vec<PathBuf> {
+    if std::env::var_os("CHILLHUB_DATA_DIR").is_some() {
+        return vec![];
+    }
+    use windows_sys::Win32::UI::Shell::*;
+    let mut folders = Vec::new();
+    for (id, recursive) in [
+        (FOLDERID_Desktop, false),
+        (FOLDERID_PublicDesktop, false),
+        (FOLDERID_Programs, true),
+        (FOLDERID_CommonPrograms, true),
+    ] {
+        if let Some(path) = known_folder(&id) {
+            folders.push((path, recursive));
+        }
+    }
+    if let Some(roaming) = known_folder(&FOLDERID_RoamingAppData) {
+        folders.push((
+            roaming.join("Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar"),
+            false,
+        ));
+    }
+    shortcuts_to_refresh(exe, &folders)
+}
+
+#[cfg(windows)]
+fn shortcuts_to_refresh(exe: &Path, folders: &[(PathBuf, bool)]) -> Vec<PathBuf> {
+    let Some(target) = path_key(exe) else {
+        return vec![];
+    };
+    let mut candidates = Vec::new();
+    let mut guards = Vec::new();
+    for (folder, recursive) in folders {
+        let Ok(guard) = DirectoryGuard::acquire(folder, false) else {
+            continue;
+        };
+        guards.push(guard);
+        for entry in walkdir::WalkDir::new(folder)
+            .follow_links(false)
+            .max_depth(if *recursive { 8 } else { 1 })
+            .into_iter()
+            .take(4096)
+            .filter_map(Result::ok)
+        {
+            if candidates.len() >= 512 {
+                break;
+            }
+            if entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
+                && link_bytes(entry.path()).is_ok()
+            {
+                candidates.push(entry.into_path());
+            }
+        }
+    }
+    let links = read_links(&candidates).unwrap_or_default();
+    links
+        .into_iter()
+        .filter(|link| path_key(&link.target).as_ref() == Some(&target))
+        .map(|link| link.path)
+        .collect()
+}
+
 fn create_at(
     desktop: &Path,
     launcher: &Path,
@@ -346,6 +437,52 @@ fn remove_at(desktop: &Path, launcher: &Path, game_id: &str, root: &Path) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn refresh_discovers_only_launcher_links_without_changing_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let desktop = temp.path().join("Рабочий стол");
+        let programs = temp.path().join("Programs");
+        let pinned = temp.path().join("Pinned");
+        let launcher = temp.path().join("Лаунчер.exe");
+        let foreign = temp.path().join("Other.exe");
+        fs::write(&launcher, b"fixture").unwrap();
+        fs::write(&foreign, b"fixture").unwrap();
+        let wanted = [
+            desktop.join("Переименованный.lnk"),
+            programs.join("Chill Hub/Launcher.lnk"),
+            pinned.join("Game.lnk"),
+        ];
+        let ignored = [
+            desktop.join("Other.lnk"),
+            desktop.join("Nested/Launcher.lnk"),
+        ];
+        for path in wanted.iter().chain(ignored.iter()) {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let target = if path == &ignored[0] {
+                &foreign
+            } else {
+                &launcher
+            };
+            native::write(path, target, "", temp.path(), "Fixture", target).unwrap();
+        }
+        let snapshots: Vec<_> = wanted
+            .iter()
+            .chain(ignored.iter())
+            .map(|path| (path, fs::read(path).unwrap()))
+            .collect();
+        let actual = shortcuts_to_refresh(
+            &launcher,
+            &[(desktop, false), (programs, true), (pinned, false)],
+        );
+        assert_eq!(actual.len(), wanted.len());
+        for path in &wanted {
+            assert!(actual.contains(path));
+        }
+        for (path, bytes) in snapshots {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+    }
     #[test]
     fn isolated_profile_never_touches_desktop() {
         let t = tempfile::tempdir().unwrap();
