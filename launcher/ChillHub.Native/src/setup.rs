@@ -226,7 +226,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         );
     }
     let ui = SetupWindow::new().map_err(|e| e.to_string())?;
-    let owner = helper_runtime::style_window(ui.window());
+    helper_runtime::style_window(ui.window());
     ui.set_removing(request.removing);
     ui.set_version(request.version.clone().into());
     ui.set_install_path(request.install.to_string_lossy().as_ref().into());
@@ -258,6 +258,8 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     let weak = ui.as_weak();
     ui.on_browse(move |games| {
         let Some(ui) = weak.upgrade() else { return };
+        // Resolve HWND at the click, after the event loop has created it.
+        let owner = helper_runtime::style_window(ui.window());
         ui.set_busy(true);
         ui.set_picking(true);
         let initial = PathBuf::from(

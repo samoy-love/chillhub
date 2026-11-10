@@ -14,6 +14,20 @@ const KEEP_LOGS: usize = 10;
 /// Share the native title-bar theme and parent standard folder dialogs to the
 /// actual helper window. No GPU renderer is enabled by raw-window-handle.
 pub fn style_window(window: &slint::Window) -> isize {
+    let handle = window.window_handle();
+    let hwnd = style_handle(&handle);
+    if hwnd == 0 {
+        // Winit creates HWND during the first event-loop iteration, not when
+        // the Slint component is constructed. Keep the adapter-backed handle
+        // and apply the theme once the native window exists, as the launcher does.
+        slint::Timer::single_shot(std::time::Duration::from_millis(80), move || {
+            style_handle(&handle);
+        });
+    }
+    hwnd
+}
+
+fn style_handle(handle: &slint::WindowHandle) -> isize {
     #[cfg(windows)]
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -26,7 +40,7 @@ pub fn style_window(window: &slint::Window) -> isize {
                 size: u32,
             ) -> i32;
         }
-        if let Ok(handle) = window.window_handle().window_handle()
+        if let Ok(handle) = handle.window_handle()
             && let RawWindowHandle::Win32(handle) = handle.as_raw()
         {
             let hwnd = handle.hwnd.get();
