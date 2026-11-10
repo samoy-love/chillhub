@@ -14,7 +14,7 @@ static IMAGE_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceL
 // per URL forever. Different URLs normally proceed independently.
 static IMAGE_LOCKS: [Mutex<()>; 32] = [const { Mutex::new(()) }; 32];
 
-#[derive(Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 struct Validators {
     etag: Option<String>,
     modified: Option<String>,
@@ -51,6 +51,31 @@ fn validators(path: &Path) -> Result<Validators, std::io::Error> {
     Ok(metadata)
 }
 
+fn validators_with_retry(
+    path: &Path,
+    mut on_retry: impl FnMut(&std::io::Error, usize),
+) -> std::io::Result<Validators> {
+    let mut attempt = 1;
+    loop {
+        match validators(path) {
+            // Windows scanners can briefly deny sharing/byte-range access.
+            // Retry only these concrete transient errors, on the image worker.
+            // Missing/access-denied/invalid JSON/hash mismatches keep their
+            // original behavior; total additional waiting is at most 75ms.
+            Err(error)
+                if cfg!(windows)
+                    && attempt < 4
+                    && matches!(error.raw_os_error(), Some(32 | 33)) =>
+            {
+                on_retry(&error, attempt);
+                std::thread::sleep(Duration::from_millis(25));
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
 fn client() -> Result<&'static reqwest::blocking::Client, String> {
     IMAGE_CLIENT
         .get_or_init(|| {
@@ -81,17 +106,20 @@ fn validate_image(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+fn cached_image_result(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path).and_then(|file| {
+        if file.metadata()?.len() > MAX_IMAGE_BYTES {
+            return Err(std::io::Error::other("size"));
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes)?;
+        validate_image(&bytes).map_err(std::io::Error::other)
+    })
+}
+
+#[cfg(test)]
 fn cached_image(path: &Path) -> bool {
-    fs::File::open(path)
-        .and_then(|file| {
-            if file.metadata()?.len() > MAX_IMAGE_BYTES {
-                return Err(std::io::Error::other("size"));
-            }
-            let mut bytes = Vec::new();
-            file.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes)?;
-            validate_image(&bytes).map_err(std::io::Error::other)
-        })
-        .is_ok()
+    cached_image_result(path).is_ok()
 }
 
 /// Only catalog-authored bundled paths and public HTTPS media are accepted.
@@ -126,6 +154,18 @@ pub fn image_path(
     cache: &Path,
     api: &ApiClient,
 ) -> Result<PathBuf, String> {
+    image_path_with_read_observer(value, bundle, cache, api, |_, _| {})
+}
+
+// The observer lets a TEMP test release a real competing Windows handle after
+// the first failed read, without sleeps or process-wide hooks in the fixture.
+fn image_path_with_read_observer(
+    value: &str,
+    bundle: &Path,
+    cache: &Path,
+    api: &ApiClient,
+    mut read_error: impl FnMut(&std::io::Error, usize),
+) -> Result<PathBuf, String> {
     let address = location(value, bundle, api)?;
     if !address.starts_with("https://") && !address.starts_with("http://") {
         return Ok(address.into());
@@ -136,7 +176,17 @@ pub fn image_path(
         .lock()
         .map_err(|_| "Не удалось загрузить изображение")?;
     let output = cache.join(format!("{hash}.img"));
-    let cached = cached_image(&output);
+    let cached_result = cached_image_result(&output);
+    if let Err(error) = &cached_result
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        api.event(
+            "image.cache_read_error",
+            serde_json::json!({"key": hash,
+            "error": error.to_string(), "osCode": error.raw_os_error()}),
+        );
+    }
+    let cached = cached_result.is_ok();
     if cached
         && fs::metadata(&output)
             .and_then(|m| m.modified())
@@ -154,7 +204,15 @@ pub fn image_path(
     let path = url::Url::parse(&address).ok().map(|u| u.path().to_owned());
     let mut last_error = "Не удалось получить изображение".to_string();
     let validators = if cached {
-        validators(&output).unwrap_or_else(|error| {
+        validators_with_retry(&output, |error, attempt| {
+            api.event(
+                "image.cache_metadata_read_retry",
+                serde_json::json!({"path": path, "attempt": attempt,
+                    "error": error.to_string(), "osCode": error.raw_os_error()}),
+            );
+            read_error(error, attempt);
+        })
+        .unwrap_or_else(|error| {
             api.event(
                 "image.cache_metadata_read_error",
                 serde_json::json!({"path": path,
@@ -173,6 +231,14 @@ pub fn image_path(
         if let Some(modified) = &validators.modified {
             request = request.header("If-Modified-Since", modified);
         }
+        #[cfg(test)]
+        api.event(
+            "image.request.fixture",
+            serde_json::json!({"address": address, "cached": cached,
+                "etag": validators.etag, "modified": validators.modified,
+                "attempt": attempt, "headers": format!("{:?}",
+                    request.try_clone().map(|r| r.build().map(|r| r.headers().clone())))}),
+        );
         let response = request.send();
         let received_validators = response
             .as_ref()
@@ -559,6 +625,11 @@ mod tests {
         let api = ApiClient::new(&format!("http://{}", server.server_addr()))
             .unwrap()
             .with_diagnostics(temp.path().join("profile"));
+        let diagnostic_root = temp.path().to_owned();
+        let diagnostic_path = diagnostic_root.join(format!(
+            "{}.img",
+            blake3::hash(api.base.join("/fish.png").unwrap().as_str().as_bytes()).to_hex()
+        ));
         let worker = std::thread::spawn(move || {
             let first = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
             assert!(
@@ -578,7 +649,12 @@ mod tests {
                 second
                     .headers()
                     .iter()
-                    .any(|h| h.field.equiv("If-None-Match") && h.value.as_str() == "\"fish-v1\"")
+                    .any(|h| h.field.equiv("If-None-Match") && h.value.as_str() == "\"fish-v1\""),
+                "Second request: {} {}; headers: {:?}; {}",
+                second.method(),
+                second.url(),
+                second.headers(),
+                cache_diagnostics(&diagnostic_root, &diagnostic_path)
             );
             second.respond(tiny_http::Response::empty(304)).unwrap();
         });
@@ -601,6 +677,13 @@ mod tests {
             Some("\"fish-v1\"")
         );
         stale_image(&api, temp.path());
+        let after_stale = cache_diagnostics(temp.path(), &path);
+        assert!(cached_image(&path), "After stale_image: {after_stale}");
+        assert_eq!(
+            validators(&path).unwrap().etag.as_deref(),
+            Some("\"fish-v1\""),
+            "After stale_image: {after_stale}"
+        );
         assert_eq!(
             image_path("/fish.png", temp.path(), temp.path(), &api).unwrap(),
             path
@@ -613,9 +696,175 @@ mod tests {
                 .unwrap()
                 .elapsed()
                 .unwrap()
-                < CACHE_TTL
+                < CACHE_TTL,
+            "Before revalidation: {after_stale}; after: {}",
+            cache_diagnostics(temp.path(), &path)
         );
         worker.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn temporary_validator_sharing_violation_keeps_conditional_request() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let api = ApiClient::new(&format!("http://{}", server.server_addr()))
+            .unwrap()
+            .with_diagnostics(temp.path().join("profile"));
+        let path = stale_image(&api, temp.path());
+        let meta = Validators {
+            etag: Some("\"fish-v1\"".into()),
+            payload_hash: blake3::hash(FISH_ICON).to_hex().to_string(),
+            ..Default::default()
+        };
+        fs::write(
+            path.with_extension("meta"),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+        let mut held = Some(
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(path.with_extension("meta"))
+                .unwrap(),
+        );
+        assert!(cached_image_result(&path).is_ok());
+        assert_eq!(validators(&path).unwrap_err().raw_os_error(), Some(32));
+        let worker = std::thread::spawn(move || {
+            let request = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
+            let conditional = request
+                .headers()
+                .iter()
+                .any(|h| h.field.equiv("If-None-Match") && h.value.as_str() == "\"fish-v1\"");
+            let headers = format!("{:?}", request.headers());
+            request
+                .respond(tiny_http::Response::empty(if conditional {
+                    304
+                } else {
+                    404
+                }))
+                .unwrap();
+            assert!(
+                conditional,
+                "Expected If-None-Match after unlocking metadata: {headers}"
+            );
+        });
+        let mut reads = 0;
+        assert_eq!(
+            image_path_with_read_observer(
+                "/fish.png",
+                temp.path(),
+                temp.path(),
+                &api,
+                |error, attempt| {
+                    assert_eq!(error.raw_os_error(), Some(32));
+                    assert_eq!(attempt, 1);
+                    reads += 1;
+                    drop(held.take());
+                }
+            )
+            .unwrap(),
+            path
+        );
+        worker.join().unwrap();
+        assert_eq!(reads, 1);
+        assert_eq!(fs::read(&path).unwrap(), FISH_ICON);
+        assert_eq!(
+            validators(&path).unwrap().etag.as_deref(),
+            Some("\"fish-v1\"")
+        );
+        assert!(
+            fs::metadata(&path)
+                .unwrap()
+                .modified()
+                .unwrap()
+                .elapsed()
+                .unwrap()
+                < CACHE_TTL
+        );
+    }
+
+    #[test]
+    fn malformed_and_mismatched_validator_data_is_never_retried_or_trusted() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cached.img");
+        fs::write(&path, FISH_ICON).unwrap();
+        for bytes in [
+            b"not json".to_vec(),
+            serde_json::to_vec(&Validators {
+                etag: Some("\"untrusted\"".into()),
+                payload_hash: "wrong-payload".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+        ] {
+            fs::write(path.with_extension("meta"), bytes).unwrap();
+            let mut retries = 0;
+            let error = validators_with_retry(&path, |_, _| retries += 1).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(retries, 0);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn validator_access_denied_is_not_retried() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cached.img");
+        fs::write(&path, FISH_ICON).unwrap();
+        // Opening a directory as a regular Windows file produces ERROR_ACCESS_DENIED;
+        // no ACL, real profile or process-wide environment changes are needed.
+        fs::create_dir(path.with_extension("meta")).unwrap();
+        let mut retries = 0;
+        let error = validators_with_retry(&path, |_, _| retries += 1).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(5));
+        assert_eq!(retries, 0);
+        assert_eq!(fs::read(&path).unwrap(), FISH_ICON);
+        assert!(path.with_extension("meta").is_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn persistent_validator_sharing_violation_has_a_fixed_retry_limit() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cached.img");
+        fs::write(&path, FISH_ICON).unwrap();
+        let metadata = serde_json::to_vec(&Validators {
+            etag: Some("\"fish-v1\"".into()),
+            payload_hash: blake3::hash(FISH_ICON).to_hex().to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+        fs::write(path.with_extension("meta"), &metadata).unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(path.with_extension("meta"))
+            .unwrap();
+        let mut retries = Vec::new();
+        let error = validators_with_retry(&path, |error, attempt| {
+            retries.push((attempt, error.raw_os_error()));
+        })
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(32));
+        assert_eq!(retries, [(1, Some(32)), (2, Some(32)), (3, Some(32))]);
+        drop(held);
+        assert_eq!(fs::read(&path).unwrap(), FISH_ICON);
+        assert_eq!(fs::read(path.with_extension("meta")).unwrap(), metadata);
+    }
+
+    fn cache_diagnostics(root: &Path, path: &Path) -> String {
+        format!(
+            "cached={:?}; validators={:?}; image={:?}; meta={:?}; log={}",
+            cached_image_result(path),
+            validators(path),
+            fs::metadata(path).map(|m| (m.len(), m.modified())),
+            fs::read_to_string(path.with_extension("meta")),
+            fs::read_to_string(root.join("profile/logs/launcher.log")).unwrap_or_default()
+        )
     }
 
     #[test]
