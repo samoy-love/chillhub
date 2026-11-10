@@ -1253,7 +1253,7 @@ fn real_ui_headless_layout_and_actions() {
             assert_eq!(snapshot.width(), (w as f32 * scale) as u32);
             if h.qa {
                 if error {
-                    let status = ElementHandle::find_by_element_id(&setup, "status-copy")
+                    let status = ElementHandle::find_by_element_id(&setup, "SetupWindow::status-copy")
                         .next()
                         .expect("setup error status");
                     let p = status.absolute_position();
