@@ -106,17 +106,24 @@ pub(super) struct Instance {
     acknowledged: usize,
     data: PathBuf,
 }
+fn instance_suffix(data: &Path, isolated: bool) -> Result<String, String> {
+    if !isolated {
+        return Ok(String::new());
+    }
+    let identity = chillhub_native::paths::path_identity(data)
+        .ok_or("Не удалось определить папку настроек для блокировки лаунчера")?;
+    Ok(format!(
+        ".{}",
+        &blake3::hash(identity.as_bytes()).to_hex()[..16]
+    ))
+}
 impl Instance {
     pub fn acquire(data: &Path, args: &[String]) -> Result<Self, String> {
+        Self::acquire_for_profile(data, args, std::env::var_os("CHILLHUB_DATA_DIR").is_some())
+    }
+    fn acquire_for_profile(data: &Path, args: &[String], isolated: bool) -> Result<Self, String> {
         let shortcut = ShortcutRequest::parse_args(args)?.is_some();
-        let suffix = if std::env::var_os("CHILLHUB_DATA_DIR").is_some() {
-            format!(
-                ".{}",
-                &blake3::hash(data.to_string_lossy().as_bytes()).to_hex()[..16]
-            )
-        } else {
-            String::new()
-        };
+        let suffix = instance_suffix(data, isolated)?;
         let name = wide(&format!("Local\\ChillHub.SingleInstance{suffix}"));
         let event_name = wide(&format!("Local\\ChillHub.ShowRequested{suffix}"));
         let ack_name = wide(&format!("Local\\ChillHub.ShowAcknowledged{suffix}"));
@@ -846,6 +853,68 @@ mod tests {
             CloseHandle(mutex);
             CloseHandle(acknowledged);
         }
+        holder.join().unwrap();
+    }
+    #[test]
+    fn isolated_profile_aliases_share_instance_key_and_secondary_activation() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("Long isolated launcher profile");
+        std::fs::create_dir_all(&directory).unwrap();
+        let canonical = std::fs::canonicalize(&directory).unwrap();
+        let input: Vec<u16> = directory.as_os_str().encode_wide().chain([0]).collect();
+        let mut output = vec![0u16; 32768];
+        let length = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+                input.as_ptr(),
+                output.as_mut_ptr(),
+                output.len() as u32,
+            )
+        } as usize;
+        assert!(length > 0 && length < output.len());
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&output[..length]));
+        assert_eq!(
+            instance_suffix(&short, true).unwrap(),
+            instance_suffix(&canonical, true).unwrap()
+        );
+        assert_eq!(
+            instance_suffix(&short.join("missing/profile"), true).unwrap(),
+            instance_suffix(&canonical.join("missing/profile"), true).unwrap()
+        );
+        assert_ne!(
+            instance_suffix(&canonical.join("missing/other"), true).unwrap(),
+            instance_suffix(&canonical.join("missing/profile"), true).unwrap()
+        );
+        assert!(!directory.join("missing").exists());
+        assert!(instance_suffix(Path::new("relative-profile"), true).is_err());
+        assert_eq!(instance_suffix(&directory, false).unwrap(), "");
+
+        let (held, ready) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let holder = thread::spawn(move || {
+            let primary = Instance::acquire_for_profile(&short, &[], true).unwrap();
+            assert!(primary.primary);
+            held.send(()).unwrap();
+            assert_eq!(
+                unsafe { WaitForSingleObject(primary.event as HANDLE, 5000) },
+                WAIT_OBJECT_0
+            );
+            unsafe { SetEvent(primary.acknowledged as HANDLE) };
+            released.recv().unwrap();
+            let event = primary.event as HANDLE;
+            let acknowledged = primary.acknowledged as HANDLE;
+            drop(primary);
+            // No listener owns these handles in this GUI-free fixture.
+            unsafe {
+                CloseHandle(event);
+                CloseHandle(acknowledged);
+            }
+        });
+        ready.recv().unwrap();
+        let secondary = Instance::acquire_for_profile(&canonical, &[], true).unwrap();
+        assert!(!secondary.primary);
+        drop(secondary);
+        release.send(()).unwrap();
         holder.join().unwrap();
     }
     #[test]

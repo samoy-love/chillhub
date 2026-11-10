@@ -43,27 +43,30 @@ fn memory() -> &'static Mutex<Memory> {
     static MEMORY: OnceLock<Mutex<Memory>> = OnceLock::new();
     MEMORY.get_or_init(Mutex::default)
 }
-fn key(root: &Path) -> String {
-    let key = root.to_string_lossy().into_owned();
-    #[cfg(windows)]
-    let key = key.to_lowercase();
-    key
+fn key(root: &Path) -> Option<String> {
+    crate::paths::path_identity(root)
 }
 
 pub fn needs_repair(root: &Path, version: &str) -> bool {
+    let Some(root_key) = key(root) else {
+        return false;
+    };
     memory()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .states
-        .get(&key(root))
+        .get(&root_key)
         .is_some_and(|state| state.version == version && state.needs_repair)
 }
 pub fn invalidate(root: &Path) {
+    let Some(root_key) = key(root) else {
+        return;
+    };
     memory()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .states
-        .remove(&key(root));
+        .remove(&root_key);
 }
 struct Checking(String);
 impl Drop for Checking {
@@ -92,7 +95,7 @@ pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<boo
     {
         return Ok(prior);
     }
-    let root_key = key(&root);
+    let root_key = key(&root).ok_or("Не удалось проверить расположение папки игры")?;
     {
         let mut memory = memory().lock().unwrap_or_else(|e| e.into_inner());
         if !memory.checking.insert(root_key.clone()) {

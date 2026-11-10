@@ -13,7 +13,7 @@ impl SecurityLifetime {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let install = exe.parent().ok_or("Не найдена папка установки")?;
         let install_lock =
-            crate::update::ProcessLock::acquire(&crate::update::update_mutex_name(install))?;
+            crate::update::ProcessLock::acquire(&crate::update::update_mutex_name(install)?)?;
         let ui = crate::update::ProcessLock::acquire("Local\\ChillHub.SecurityUi")?;
         let lease = open_lease(
             &journal_path()?.with_file_name("security-session.lock"),
@@ -450,11 +450,11 @@ mod windows {
             while seen.len() < request.paths.len() {
                 let result: ExclusionResult = serde_json::from_str(&line(&mut pipe, &child, None)?)
                     .map_err(|_| "Некорректный результат настройки")?;
-                let key = path_key(Path::new(&result.path));
+                let key = result_path_key(request.operation, Path::new(&result.path))?;
                 if !request
                     .paths
                     .iter()
-                    .any(|p| same_path(p, Path::new(&result.path)))
+                    .any(|p| result_path_matches(request.operation, p, Path::new(&result.path)))
                     || !seen.insert(key)
                 {
                     return Err("Помощник вернул неизвестный или повторный путь".into());

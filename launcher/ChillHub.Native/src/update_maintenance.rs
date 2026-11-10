@@ -64,7 +64,7 @@ fn verify_installed_manifest(
 ) -> Result<IntegrityReport, String> {
     paths.validate()?;
     version_parts(&manifest.version)?;
-    let _lock = ProcessLock::acquire(&update_mutex_name(&paths.install))?;
+    let _lock = ProcessLock::acquire(&update_mutex_name(&paths.install)?)?;
     let _install = DirectoryGuard::acquire(&paths.install, false).map_err(|e| e.to_string())?;
     let (files, _) = normalized_payload(manifest)?;
     let mut report = IntegrityReport {
@@ -221,7 +221,7 @@ impl SessionLease {
         if !same_path(session.parent().ok_or("Нет папки сессий")?, &paths.staging) {
             return Err("Сессия находится вне папки обновлений".into());
         }
-        let key = format!("{:x}", Sha256::digest(path_key(session).as_bytes()));
+        let key = format!("{:x}", Sha256::digest(path_key(session)?.as_bytes()));
         let leases = paths.staging.join(".leases");
         let _guard = DirectoryGuard::acquire(&leases, true).map_err(|e| e.to_string())?;
         let path = leases.join(format!("{key}.lock"));
@@ -492,6 +492,25 @@ pub(super) fn refresh_shell_icons(_: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn session_lease_is_exclusive_across_short_and_canonical_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let staged = super::super::tests::package(temp.path());
+        let mut short_paths = staged.paths.clone();
+        short_paths.staging = crate::paths::short_test_path(&staged.paths.staging);
+        let short_session = short_paths
+            .staging
+            .join(staged.session.file_name().unwrap());
+        let mut long_paths = staged.paths.clone();
+        long_paths.staging = fs::canonicalize(&staged.paths.staging).unwrap();
+        let long_session = long_paths.staging.join(staged.session.file_name().unwrap());
+        let first = SessionLease::acquire(&short_paths, &short_session).unwrap();
+        assert!(SessionLease::acquire(&long_paths, &long_session).is_err());
+        drop(first);
+        assert!(SessionLease::acquire(&long_paths, &long_session).is_ok());
+    }
+
     #[test]
     fn retries_only_temporary_io_and_stops_at_bound() {
         let mut calls = 0;

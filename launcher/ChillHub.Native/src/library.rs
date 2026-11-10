@@ -59,15 +59,9 @@ pub fn validate_games_location(
         return Err("Выберите отдельную папку для игр, например D:\\Games\\ChillHub".into());
     }
     crate::manifest::check_no_links(folder).map_err(|e| e.to_string())?;
-    let normalized = |p: &Path| {
-        p.to_string_lossy()
-            .trim_end_matches(['\\', '/'])
-            .replace('/', "\\")
-            .to_lowercase()
-    };
-    let folder = normalized(folder);
+    let folder = location_identity(folder)?;
     for protected in [paths.data_dir.as_path(), install] {
-        let protected = normalized(protected);
+        let protected = location_identity(protected)?;
         if folder == protected
             || folder.starts_with(&format!("{protected}\\"))
             || protected.starts_with(&format!("{folder}\\"))
@@ -76,6 +70,42 @@ pub fn validate_games_location(
         }
     }
     Ok(())
+}
+
+pub(crate) fn location_identity(path: &Path) -> Result<String, String> {
+    if let Some(identity) = crate::paths::path_identity(path) {
+        return Ok(identity);
+    }
+    // Settings may name an unplugged/nonexistent drive. It cannot alias a live
+    // directory on another drive; do not extend this fallback to access denied,
+    // UNC aliases or an unresolved ancestor on a mounted volume.
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut parts = path.components();
+        if let Some(Component::Prefix(prefix)) = parts.next()
+            && let Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) = prefix.kind()
+            && matches!(parts.next(), Some(Component::RootDir))
+            && parts
+                .clone()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
+            let root = PathBuf::from(format!("{}:\\", drive as char));
+            if fs::metadata(root).is_err_and(|e| {
+                e.kind() == std::io::ErrorKind::NotFound
+                    || matches!(e.raw_os_error(), Some(21 | 1167))
+            }) {
+                let suffix = parts
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("\\");
+                return Ok(format!("{}:\\{suffix}", drive as char)
+                    .trim_end_matches('\\')
+                    .to_lowercase());
+            }
+        }
+    }
+    Err("Не удалось проверить расположение папки. Проверьте доступ к диску".into())
 }
 #[cfg(test)]
 mod tests {
@@ -112,5 +142,69 @@ mod tests {
         assert!(validate_games_location(&paths.data_dir, &paths, &install).is_err());
         assert!(validate_games_location(temp.path(), &paths, &install).is_err());
         assert!(validate_games_location(&install.join("games"), &paths, &install).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn aliases_cannot_place_games_inside_install_or_settings_even_before_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("Long shared application directory");
+        fs::create_dir(&parent).unwrap();
+        let short = crate::paths::short_test_path(&parent);
+        let long = fs::canonicalize(&parent).unwrap();
+        let paths = AppPaths {
+            data_dir: long.join("Settings still missing"),
+            legacy_dir: None,
+            games_dir: long.join("Separate games"),
+        };
+        let install = long.join("Launcher still missing");
+        for folder in [
+            short.clone(),
+            short.join("Settings still missing"),
+            short.join("Settings still missing/Games"),
+            short.join("Launcher still missing/Games"),
+        ] {
+            assert!(validate_games_location(&folder, &paths, &install).is_err());
+        }
+        assert!(validate_games_location(&short.join("Separate games"), &paths, &install).is_ok());
+        assert!(!paths.data_dir.exists());
+        assert!(!install.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unavailable_drive_setting_does_not_create_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::isolated(temp.path());
+        let drive = (b'D'..=b'Z').rev().find(|drive| {
+            fs::metadata(format!("{}:\\", *drive as char))
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        });
+        if let Some(drive) = drive {
+            let folder = PathBuf::from(format!("{}:\\ChillHub Alias Test\\Games", drive as char));
+            let install = temp.path().join("install");
+            fs::create_dir(&install).unwrap();
+            assert!(validate_games_location(&folder, &paths, &install).is_ok());
+            let update = crate::update::UpdatePaths {
+                install,
+                config: paths.data_dir.clone(),
+                games: folder.clone(),
+                staging: temp.path().join("staging"),
+            };
+            assert!(
+                update.validate().is_ok(),
+                "a disconnected games disk must not block a launcher update"
+            );
+            let mut invalid = update.clone();
+            invalid.install = folder.clone();
+            assert!(invalid.validate().is_err());
+            invalid = update.clone();
+            invalid.config = folder.clone();
+            assert!(invalid.validate().is_err());
+            invalid = update;
+            invalid.staging = folder.clone();
+            assert!(invalid.validate().is_err());
+            assert!(!folder.exists());
+        }
     }
 }

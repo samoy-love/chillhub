@@ -53,10 +53,17 @@ impl UpdatePaths {
             }
             check_no_links(path).map_err(|e| e.to_string())?;
         }
-        let all = [&self.install, &self.config, &self.games, &self.staging];
+        // Games are only excluded from update targets. An unplugged local games
+        // drive must not block repairing the launcher on an available drive.
+        let all = [
+            path_key(&self.install)?,
+            path_key(&self.config)?,
+            crate::library::location_identity(&self.games)?,
+            path_key(&self.staging)?,
+        ];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
-                if within(a, b) || within(b, a) {
+                if a == b || a.starts_with(&format!("{b}\\")) || b.starts_with(&format!("{a}\\")) {
                     return Err("Установка, настройки, игры и временный пакет должны находиться в разных папках".into());
                 }
             }
@@ -500,7 +507,7 @@ pub fn read_job(path: &Path, expected_hash: &str) -> Result<UpdateJob, String> {
 /// Called by the separate updater. The parent is identified while still alive;
 /// a process handle prevents PID reuse from turning a timeout into a false success.
 pub fn execute_job(job: &UpdateJob, progress: &(dyn Fn(&str, f32) + Sync)) -> Result<(), String> {
-    let _install = ProcessLock::acquire(&update_mutex_name(&job.staged.paths.install))?;
+    let _install = ProcessLock::acquire(&update_mutex_name(&job.staged.paths.install)?)?;
     let _security = ProcessLock::acquire("Local\\ChillHub.SecurityUi")?;
     let _security_lifetime = crate::security::update_lease(&job.staged.paths.config)?;
     let _session = maintenance::SessionLease::acquire(&job.staged.paths, &job.staged.session)?;
@@ -595,7 +602,7 @@ pub fn previous_outcome(paths: &UpdatePaths) -> Option<UpdateOutcome> {
 fn outcome_lock(paths: &UpdatePaths) -> Result<ProcessLock, String> {
     ProcessLock::acquire(&format!(
         "Local\\ChillHub.UpdateOutcome.{:x}",
-        Sha256::digest(path_key(&paths.config).as_bytes())
+        Sha256::digest(path_key(&paths.config)?.as_bytes())
     ))
 }
 
@@ -992,31 +999,25 @@ fn verify(path: &Path, expected: &ManifestFile) -> Result<(), String> {
     Ok(())
 }
 
-fn path_key(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase()
-        .trim_start_matches("\\\\?\\")
-        .to_owned()
+fn path_key(path: &Path) -> Result<String, String> {
+    crate::paths::path_identity(path)
+        .ok_or_else(|| "Не удалось проверить расположение папки обновления".into())
 }
 fn same_path(a: &Path, b: &Path) -> bool {
-    path_key(a) == path_key(b)
+    matches!((path_key(a), path_key(b)), (Ok(a), Ok(b)) if a == b)
 }
 fn within(path: &Path, root: &Path) -> bool {
-    let p = path_key(path);
-    let r = path_key(root);
-    p == r || p.starts_with(&(r + "\\"))
+    matches!((path_key(path), path_key(root)), (Ok(p), Ok(r)) if p == r || p.starts_with(&format!("{r}\\")))
 }
-pub fn update_mutex_name(install: &Path) -> String {
-    let hash = Sha256::digest(path_key(install).as_bytes());
-    format!(
+pub fn update_mutex_name(install: &Path) -> Result<String, String> {
+    let hash = Sha256::digest(path_key(install)?.as_bytes());
+    Ok(format!(
         "Local\\ChillHub.Updater.{}",
         hash[..8]
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>()
-    )
+    ))
 }
 
 #[cfg(windows)]
@@ -1134,6 +1135,45 @@ impl ParentProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn aliases_share_update_identity_and_cannot_bypass_separate_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("Long shared updater directory");
+        fs::create_dir(&parent).unwrap();
+        let short = crate::paths::short_test_path(&parent);
+        let canonical = fs::canonicalize(&parent).unwrap();
+        let install = canonical.join("Launcher installation");
+        fs::create_dir(&install).unwrap();
+        let aliased_install = short.join("Launcher installation");
+        assert_eq!(
+            update_mutex_name(&install).unwrap(),
+            update_mutex_name(&aliased_install).unwrap()
+        );
+        assert!(same_path(
+            &install.join("Missing.exe"),
+            &aliased_install.join("Missing.exe")
+        ));
+        assert!(!same_path(Path::new("relative"), Path::new("relative")));
+        assert!(update_mutex_name(Path::new("relative")).is_err());
+        let mut paths = UpdatePaths {
+            install: install.clone(),
+            config: canonical.join("Settings"),
+            games: short.join("Games"),
+            staging: short.join("Staging"),
+        };
+        assert!(paths.validate().is_ok());
+        paths.games = aliased_install.join("Future games");
+        assert!(paths.validate().is_err());
+        paths.games = short.join("Settings/Future games");
+        assert!(paths.validate().is_err());
+        paths.games = short.join("Games");
+        paths.staging = short.join("Settings/Future updates");
+        assert!(paths.validate().is_err());
+        assert!(!install.join("Future games").exists());
+        assert!(!paths.config.exists());
+    }
+
     #[test]
     fn downgrade_and_bad_versions() {
         assert!(version_parts("1.7.20").unwrap() < version_parts("1.8.0").unwrap());

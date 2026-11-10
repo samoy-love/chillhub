@@ -1,6 +1,83 @@
 use std::path::{Component, Path, PathBuf};
 use std::{fs, io};
 
+/// Resolve aliases in existing ancestors without creating a missing suffix.
+/// This is an identity operation, not a replacement for traversal/reparse guards.
+pub fn canonical_path_with_missing(path: &Path) -> io::Result<PathBuf> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid absolute path",
+        ));
+    }
+    let mut existing = path;
+    let mut missing = Vec::new();
+    loop {
+        match fs::canonicalize(existing) {
+            Ok(mut canonical) => {
+                if !missing.is_empty() && !fs::metadata(&canonical)?.is_dir() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotADirectory,
+                        "Ancestor is not a directory",
+                    ));
+                }
+                for part in missing.into_iter().rev() {
+                    canonical.push(part);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(
+                    existing
+                        .file_name()
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::NotFound, "No existing ancestor")
+                        })?
+                        .to_owned(),
+                );
+                existing = existing.parent().ok_or(error)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Windows path identity for comparison only. Unknown identities never compare equal.
+pub fn path_identity(path: &Path) -> Option<String> {
+    let canonical = canonical_path_with_missing(path).ok()?;
+    let text = canonical.to_str()?.replace('/', "\\");
+    let text = if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+    };
+    Some(text.trim_end_matches('\\').to_lowercase())
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn short_test_path(path: &Path) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let source: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut output = vec![0; 32768];
+    let count = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            source.as_ptr(),
+            output.as_mut_ptr(),
+            output.len() as u32,
+        )
+    } as usize;
+    assert!(
+        count > 0 && count < output.len(),
+        "GetShortPathNameW failed: {}",
+        io::Error::last_os_error()
+    );
+    std::ffi::OsString::from_wide(&output[..count]).into()
+}
+
 #[derive(Clone, Debug)]
 pub struct AppPaths {
     pub data_dir: PathBuf,
@@ -178,6 +255,36 @@ fn replace_file(source: &Path, dest: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn identity_resolves_short_and_verbatim_ancestors_without_creating_missing_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Long game directory name");
+        fs::create_dir(&root).unwrap();
+        let short = short_test_path(&root);
+        let canonical = fs::canonicalize(&root).unwrap();
+        let suffix = Path::new("Missing Game").join("Game.exe");
+        assert_eq!(path_identity(&short), path_identity(&root));
+        assert_eq!(path_identity(&canonical), path_identity(&root));
+        assert_eq!(
+            path_identity(&short.join(&suffix)),
+            path_identity(&canonical.join(&suffix))
+        );
+        assert_eq!(
+            canonical_path_with_missing(&short.join(&suffix)).unwrap(),
+            canonical.join(&suffix)
+        );
+        assert!(!root.join("Missing Game").exists());
+        assert!(path_identity(&short.join("../outside")).is_none());
+        assert!(path_identity(Path::new("relative/Game.exe")).is_none());
+        let file = root.join("existing-file");
+        fs::write(&file, b"fixture").unwrap();
+        assert!(path_identity(&file.join("child")).is_none());
+        assert_ne!(
+            path_identity(&root.join("one")),
+            path_identity(&root.join("two"))
+        );
+    }
     #[test]
     fn rejects_windows_path_escapes_and_device_names() {
         for p in [

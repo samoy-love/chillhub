@@ -68,13 +68,7 @@ impl Services {
     }
     pub fn verify_game_status(&self, game: &GameRecord) -> Result<bool, String> {
         let root = self.paths.game_root(&game.game_id)?;
-        if self.queue.snapshot().iter().any(|item| {
-            item.request.root == root
-                && !matches!(
-                    item.state,
-                    QueueState::Completed | QueueState::Failed | QueueState::Cancelled
-                )
-        }) {
+        if self.queue.has_pending_for_root(&root) {
             return Ok(false);
         }
         crate::integrity::check(game, &self.paths, &self.api)
@@ -109,13 +103,7 @@ impl Services {
         } else {
             self.paths.game_root(&game.game_id)?
         };
-        if self.queue.snapshot().iter().any(|item| {
-            item.request.root == root
-                && !matches!(
-                    item.state,
-                    QueueState::Completed | QueueState::Failed | QueueState::Cancelled
-                )
-        }) {
+        if self.queue.has_pending_for_root(&root) {
             return Err(
                 "Для этой папки уже есть загрузка. Завершите или отмените её в очереди".into(),
             );
@@ -305,13 +293,7 @@ impl Services {
         if root.as_os_str().is_empty() || target == LaunchTarget::SteamVanilla {
             return Err("Размер установки недоступен".into());
         }
-        if self.queue.snapshot().iter().any(|item| {
-            item.request.root == root
-                && !matches!(
-                    item.state,
-                    QueueState::Completed | QueueState::Failed | QueueState::Cancelled
-                )
-        }) {
+        if self.queue.has_pending_for_root(&root) {
             return Err("Размер уточняется после текущей загрузки".into());
         }
         let prefs = self.config.load()?;
@@ -434,13 +416,7 @@ impl Services {
         if !root.exists() {
             return Ok(());
         }
-        if self.queue.snapshot().iter().any(|i| {
-            i.request.root == root
-                && !matches!(
-                    i.state,
-                    QueueState::Completed | QueueState::Cancelled | QueueState::Failed
-                )
-        }) {
+        if self.queue.has_pending_for_root(&root) {
             return Err("Сначала отмените загрузку этой игры".into());
         }
         if !crate::playtime::processes_in(&root)?.is_empty() {
@@ -700,5 +676,72 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         assert!(delete_game_directory(&library, &outside, "outside").is_err());
         assert!(outside.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn paused_alias_task_blocks_delete_enqueue_estimate_and_integrity_checks() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut paths = AppPaths::isolated(temp.path());
+        let library = temp.path().join("Long game library directory");
+        let root = library.join("fixture");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&paths.data_dir).unwrap();
+        std::fs::write(root.join("Game.exe"), b"inert fixture, not an executable").unwrap();
+        paths.games_dir = std::fs::canonicalize(&library).unwrap();
+        let prefs = AppConfig {
+            games_path: paths.games_dir.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        ConfigStore::new(paths.clone()).save(&prefs).unwrap();
+        let item = crate::queue::QueueItem {
+            id: "paused".into(),
+            request: TransferRequest {
+                game_id: "fixture".into(),
+                root: crate::paths::short_test_path(&library).join("fixture"),
+                ..Default::default()
+            },
+            state: QueueState::Paused,
+            progress: None,
+            outcome: None,
+            error: None,
+            cleanup_paths: vec![],
+            report: Default::default(),
+        };
+        std::fs::write(
+            paths.data_dir.join("download-queue.json"),
+            serde_json::to_vec(&vec![item]).unwrap(),
+        )
+        .unwrap();
+        let (services, _) = Services::new(paths).unwrap();
+        let game = GameRecord {
+            game_id: "fixture".into(),
+            has_latest: true,
+            latest_version: "1.0.0".into(),
+            exe_relative_path: "Game.exe".into(),
+            ..Default::default()
+        };
+        assert!(
+            services
+                .delete_local(&game)
+                .unwrap_err()
+                .contains("отмените")
+        );
+        assert!(
+            services
+                .enqueue_game(&game, LaunchTarget::LocalVanilla, None, false, false)
+                .unwrap_err()
+                .contains("уже есть загрузка")
+        );
+        assert!(
+            services
+                .estimate_download(&game, LaunchTarget::LocalVanilla)
+                .unwrap_err()
+                .contains("после текущей загрузки")
+        );
+        assert!(!services.verify_game_status(&game).unwrap());
+        assert!(root.join("Game.exe").is_file());
+        assert_eq!(services.queue.snapshot()[0].state, QueueState::Paused);
+        services.queue.shutdown();
     }
 }

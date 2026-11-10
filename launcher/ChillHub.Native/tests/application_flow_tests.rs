@@ -385,6 +385,46 @@ fn background_integrity_detects_missing_dll_offline_and_preserves_user_files() {
         requests_before,
         "cached manifest permits offline checks without another network request"
     );
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let input: Vec<u16> = paths
+            .games_dir
+            .as_os_str()
+            .encode_wide()
+            .chain([0])
+            .collect();
+        let mut output = vec![0; 32768];
+        let length = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+                input.as_ptr(),
+                output.as_mut_ptr(),
+                output.len() as u32,
+            )
+        } as usize;
+        assert!(length > 0 && length < output.len());
+        let short = std::path::PathBuf::from(std::ffi::OsString::from_wide(&output[..length]));
+        let mut aliased = services.clone();
+        aliased.paths.games_dir = short;
+        assert_eq!(
+            aliased
+                .option(&game, LaunchTarget::LocalVanilla)
+                .unwrap()
+                .action,
+            LaunchAction::UpdateGame,
+            "the same broken game remains broken through its short path",
+        );
+        let aliased_root = aliased.paths.game_root("fixture").unwrap();
+        chillhub_native::integrity::invalidate(&aliased_root);
+        assert!(!chillhub_native::integrity::needs_repair(&root, "1.0.0"));
+        assert!(aliased.verify_game_status(&game).unwrap());
+        assert!(chillhub_native::integrity::needs_repair(&root, "1.0.0"));
+        assert_eq!(
+            server.requests.lock().unwrap().len(),
+            requests_before,
+            "changing only the directory spelling reuses the offline manifest"
+        );
+    }
     chillhub_native::integrity::invalidate(&root); // Simulate an application restart.
     assert!(services.verify_game_status(&game).unwrap());
     fs::write(root.join("UnityPlayer.dll"), dll).unwrap();

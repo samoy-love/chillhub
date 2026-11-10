@@ -220,7 +220,8 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
                     .totals(&game.game_id)
                     .unwrap_or_default()
                     .total_seconds;
-                (option, running, version, time, files)
+                let queued = services.queue.has_pending_for_root(&option.game_dir);
+                (option, running, version, time, files, queued)
             });
             let saved = services.config.update(|c| {
                 if epoch.load(Ordering::SeqCst) == generation {
@@ -236,15 +237,7 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
             }
             ui.set_busy(false);
             match result {
-                Ok((option, running, version, time, files)) => {
-                    let tasks = state.borrow().tasks.clone();
-                    let queued = tasks.iter().any(|t| {
-                        t.request.root == option.game_dir
-                            && !matches!(
-                                t.state,
-                                QueueState::Completed | QueueState::Failed | QueueState::Cancelled
-                            )
-                    });
+                Ok((option, running, version, time, files, queued)) => {
                     let blocked = service::blocked(&state.borrow().maintenance, &option.action);
                     ui.set_can_verify_game(files[0] && !queued && running.is_none());
                     ui.set_can_verify_mods(files[1] && !queued && running.is_none());

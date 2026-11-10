@@ -418,6 +418,25 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     if paths.game_root("old-one")?.exists()||!paths.game_root("old-two")?.join(".version").exists(){return Err("bulk cleanup changed an unselected folder or left selected game".into());}
                     if !ui.get_orphans().iter().any(|r|r.result=="Удалено"){return Err("bulk cleanup omitted per-folder result".into());}
                     ui.invoke_panel_closed();
+                    // Restore paused intent using the canonical Windows spelling while
+                    // the selected library retains its ordinary path spelling.
+                    let alias_root=fs::canonicalize(&paths.games_dir).map_err(|e|e.to_string())?.join("plain");
+                    let paused=chillhub_native::queue::QueueItem {
+                        id:"alias-paused".into(),
+                        request:chillhub_native::transfer::TransferRequest {game_id:"plain".into(),root:alias_root,..Default::default()},
+                        state:QueueState::Paused,progress:None,outcome:None,error:None,cleanup_paths:vec![],report:Default::default(),
+                    };
+                    let queue_file=paths.data_dir.join("alias-controller-queue.json");
+                    fs::write(&queue_file,serde_json::to_vec(&vec![paused]).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+                    captured.borrow().services.queue.shutdown();
+                    captured.borrow_mut().services.queue=Arc::new(chillhub_native::queue::DownloadQueue::new(queue_file).map_err(|e|e.to_string())?);
+                    controller::refresh_choice(&ui,&captured);
+                    *stage.borrow_mut()=(83,0);
+                }
+                83 if !ui.get_busy() => {
+                    if ui.get_can_play()||ui.get_play_label()!="В очереди" {
+                        return Err("paused queue task became invisible through a filesystem alias".into());
+                    }
                     ui.set_panel_kind("gallery".into());
                     controller::test_empty_catalog(&ui, &captured);
                     if !ui.get_panel_kind().is_empty() || !ui.get_game_title().is_empty() || ui.get_can_play() {

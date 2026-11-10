@@ -227,9 +227,17 @@ fn validate_for_operation(
     }
     let mut result: Vec<PathBuf> = Vec::new();
     for path in paths {
-        let path = validate_directory_policy(path, operation == SecurityOperation::Add)?;
-        if !result.iter().any(|p| same_path(p, &path)) {
-            result.push(path);
+        let canonical = validate_directory_policy(path, operation == SecurityOperation::Add)?;
+        let registered = if operation == SecurityOperation::Remove {
+            path.clone()
+        } else {
+            canonical
+        };
+        if !result
+            .iter()
+            .any(|p| result_path_matches(operation, p, &registered))
+        {
+            result.push(registered);
         }
     }
     Ok(result)
@@ -304,20 +312,36 @@ fn filter_owned_removals(
     request: &SecurityRequest,
     journal: &Path,
 ) -> Result<SecurityRequest, String> {
-    if request.operation == SecurityOperation::Remove {
-        let owned = read_journal(journal)?;
-        if request
-            .paths
+    if request.operation != SecurityOperation::Remove {
+        return Ok(request.clone());
+    }
+    let owned = read_journal(journal)?;
+    let mut registered: Vec<PathBuf> = Vec::new();
+    for requested in &request.paths {
+        let mut matched = false;
+        for path in owned
+            .added_paths
             .iter()
-            .any(|path| !owned.added_paths.iter().any(|p| same_path(p, path)))
+            .filter(|path| same_path(path, requested))
         {
+            matched = true;
+            if !registered.iter().any(|p| same_registered_path(p, path)) {
+                registered.push(path.clone());
+            }
+        }
+        if !matched {
             return Err(
                 "Можно удалить только исключения, добавленные Chill Hub. Другие записи не изменены"
                     .into(),
             );
         }
     }
-    Ok(request.clone())
+    // Physical equivalence authorizes selecting our own recorded entries only.
+    // Defender removes exact strings; never substitute a foreign spelling.
+    Ok(SecurityRequest {
+        paths: validate_for_operation(&registered, SecurityOperation::Remove)?,
+        operation: SecurityOperation::Remove,
+    })
 }
 
 fn prepare_directories(request: &SecurityRequest) -> Result<(), String> {
@@ -453,11 +477,21 @@ fn record_results(path: &Path, results: &[ExclusionResult]) -> Result<(), String
     let mut journal = read_journal(path)?;
     for result in results {
         let item = PathBuf::from(&result.path);
-        if result.added && !journal.added_paths.iter().any(|p| same_path(p, &item)) {
+        // A confirmed result remains recordable if a removable drive vanished
+        // after the operation. Exact journal text is sufficient for bookkeeping;
+        // request ownership and filesystem mutation still require verified identity.
+        if result.added
+            && !journal
+                .added_paths
+                .iter()
+                .any(|p| same_registered_path(p, &item))
+        {
             journal.added_paths.push(item.clone());
         }
         if result.status == "removed" {
-            journal.added_paths.retain(|p| !same_path(p, &item));
+            journal
+                .added_paths
+                .retain(|p| !same_registered_path(p, &item));
         }
     }
     crate::paths::atomic_write(
@@ -469,10 +503,9 @@ fn record_results(path: &Path, results: &[ExclusionResult]) -> Result<(), String
 
 fn journal_lock(path: &Path) -> Result<crate::update::ProcessLock, String> {
     use sha2::{Digest, Sha256};
-    let key = format!(
-        "{:X}",
-        Sha256::digest(path.to_string_lossy().to_uppercase().as_bytes())
-    );
+    let identity = crate::paths::path_identity(path)
+        .ok_or("Не удалось проверить расположение журнала исключений")?;
+    let key = format!("{:X}", Sha256::digest(identity.as_bytes()));
     crate::update::ProcessLock::acquire(&format!("Local\\ChillHub.SecurityJournal.{key}"))
 }
 
@@ -619,17 +652,7 @@ fn apply_with_sink(
         paths: validate_for_operation(&request.paths, request.operation)?,
         operation: request.operation,
     };
-    let _guards: Vec<_> = request
-        .paths
-        .iter()
-        .map(|path| {
-            let mut existing = path.as_path();
-            while !existing.exists() {
-                existing = existing.parent().ok_or("Не найдена папка")?;
-            }
-            crate::manifest::DirectoryGuard::acquire(existing, false).map_err(|e| e.to_string())
-        })
-        .collect::<Result<_, _>>()?;
+    let _guards = mutation_guards(&request.paths)?;
     let mut results = Vec::new();
     for path in &request.paths {
         let one = SecurityRequest {
@@ -641,7 +664,9 @@ fn apply_with_sink(
             .and_then(|text| {
                 let mut parsed: Vec<ExclusionResult> = serde_json::from_str(&text)
                     .map_err(|e| format!("Не удалось прочитать результат настройки: {e}"))?;
-                if parsed.len() != 1 || !same_path(Path::new(&parsed[0].path), path) {
+                if parsed.len() != 1
+                    || !result_path_matches(request.operation, path, Path::new(&parsed[0].path))
+                {
                     return Err("Некорректный ответ Windows".into());
                 }
                 Ok(parsed.remove(0))
@@ -815,21 +840,55 @@ pub(crate) fn powershell(_: &str, _: Option<&[u8]>) -> Result<String, String> {
     Err("Диагностика доступна только в Windows".into())
 }
 
-fn path_key(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase()
-        .trim_start_matches("\\\\?\\")
-        .to_owned()
-}
 fn same_path(a: &Path, b: &Path) -> bool {
-    path_key(a) == path_key(b)
+    crate::paths::path_identity(a)
+        .zip(crate::paths::path_identity(b))
+        .is_some_and(|(a, b)| a == b)
+}
+fn same_registered_path(a: &Path, b: &Path) -> bool {
+    a.as_os_str() == b.as_os_str()
+}
+fn result_path_matches(operation: SecurityOperation, expected: &Path, actual: &Path) -> bool {
+    if operation == SecurityOperation::Remove {
+        same_registered_path(expected, actual)
+    } else {
+        same_path(expected, actual)
+    }
+}
+fn result_path_key(operation: SecurityOperation, path: &Path) -> Result<String, String> {
+    let identity = crate::paths::path_identity(path).ok_or("Помощник вернул недоступный путь")?;
+    if operation == SecurityOperation::Remove {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "Некорректный путь результата".into())
+    } else {
+        Ok(identity)
+    }
+}
+fn mutation_guards(paths: &[PathBuf]) -> Result<Vec<crate::manifest::DirectoryGuard>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut guards = Vec::new();
+    for path in paths {
+        let mut existing = path.as_path();
+        while !existing.exists() {
+            existing = existing.parent().ok_or("Не найдена папка")?;
+        }
+        let identity = crate::paths::path_identity(existing).ok_or("Не удалось проверить папку")?;
+        if seen.insert(identity) {
+            guards.push(
+                crate::manifest::DirectoryGuard::acquire(existing, false)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+    }
+    Ok(guards)
 }
 fn within(path: &Path, root: &Path) -> bool {
-    let p = path_key(path);
-    let r = path_key(root);
-    p == r || p.starts_with(&(r + "\\"))
+    // If identity cannot be established, do not allow a broad exclusion or
+    // claim an extra Steam folder lies outside the protected games root.
+    crate::paths::path_identity(path)
+        .zip(crate::paths::path_identity(root))
+        .is_none_or(|(p, r)| p == r || p.starts_with(&(r + "\\")))
 }
 
 #[cfg(test)]
@@ -854,12 +913,170 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let game = tmp.path().join("Games/ChillHub/peak");
         fs::create_dir_all(&game).unwrap();
+        let canonical = fs::canonicalize(&game).unwrap();
+        let canonical_text = canonical.to_string_lossy();
+        let expected = PathBuf::from(
+            canonical_text
+                .strip_prefix(r"\\?\")
+                .unwrap_or(&canonical_text),
+        );
         let request = SecurityRequest {
             paths: vec![game],
             operation: SecurityOperation::Add,
         };
         let roundtrip = decode_request(&encode_request(&request).unwrap()).unwrap();
-        assert_eq!(roundtrip.paths, request.paths);
+        assert_eq!(roundtrip.paths, vec![expected]);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn protected_and_offered_directory_aliases_have_one_identity() {
+        for name in ["TEMP", "USERPROFILE"] {
+            let protected = PathBuf::from(std::env::var_os(name).unwrap());
+            let alias = crate::paths::short_test_path(&protected);
+            assert!(validate_directory(&alias).is_err(), "{name}");
+            assert!(within(&alias, &protected));
+            assert!(within(&protected, &alias));
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let games = temp.path().join("Long Games Directory");
+        fs::create_dir(&games).unwrap();
+        let alias = crate::paths::short_test_path(&games);
+        let journal = temp.path().join("security-exclusions.json");
+        assert!(!should_offer_in(&journal, Some(&alias.join("Missing game")), &games).unwrap());
+        assert!(!alias.join("Missing game").exists());
+        assert!(!journal.exists());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn journal_lock_serializes_short_aliases_before_the_journal_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Long journal directory");
+        fs::create_dir(&root).unwrap();
+        let journal = fs::canonicalize(&root)
+            .unwrap()
+            .join("Missing/security.json");
+        let alias = crate::paths::short_test_path(&root).join("Missing/security.json");
+        let guard = journal_lock(&journal).unwrap();
+        let other = alias.clone();
+        assert!(
+            std::thread::spawn(move || journal_lock(&other).is_err())
+                .join()
+                .unwrap()
+        );
+        drop(guard);
+        assert!(journal_lock(&alias).is_ok());
+        assert!(!root.join("Missing").exists());
+    }
+    #[cfg(windows)]
+    fn registered_alias_fixture(root: &Path) -> (PathBuf, PathBuf) {
+        fs::create_dir_all(root).unwrap();
+        let long = validate_directory(root).unwrap();
+        let mut short = crate::paths::short_test_path(root);
+        if same_registered_path(&short, &long) {
+            // Volumes may disable 8.3 generation; use a distinct input spelling
+            // for the exact-string boundary test without querying Defender.
+            short = PathBuf::from(long.to_string_lossy().replace('\\', "/"));
+        }
+        assert!(same_path(&short, &long));
+        assert!(!same_registered_path(&short, &long));
+        (short, long)
+    }
+    #[cfg(windows)]
+    #[test]
+    fn removal_selects_owned_registered_alias_without_substituting_foreign_spelling() {
+        let temp = tempfile::tempdir().unwrap();
+        let (owned, foreign) = registered_alias_fixture(&temp.path().join("Long Game Directory"));
+        let journal = temp.path().join("security.json");
+        record_results(
+            &journal,
+            &[ExclusionResult {
+                path: owned.display().to_string(),
+                status: "applied".into(),
+                detail: String::new(),
+                added: true,
+            }],
+        )
+        .unwrap();
+        let selected = filter_owned_removals(
+            &SecurityRequest {
+                paths: vec![foreign.clone()],
+                operation: SecurityOperation::Remove,
+            },
+            &journal,
+        )
+        .unwrap();
+        assert_eq!(selected.paths.len(), 1);
+        assert!(same_registered_path(&selected.paths[0], &owned));
+        assert!(!same_registered_path(&selected.paths[0], &foreign));
+        // This is the same revalidation performed by the elevated boundary.
+        let validated = validate_for_operation(&selected.paths, SecurityOperation::Remove).unwrap();
+        assert!(same_registered_path(&validated[0], &owned));
+        assert!(!result_path_matches(
+            SecurityOperation::Remove,
+            &owned,
+            &foreign
+        ));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn multiple_owned_aliases_keep_separate_results_and_share_one_filesystem_guard() {
+        let temp = tempfile::tempdir().unwrap();
+        let (first, second) = registered_alias_fixture(&temp.path().join("Long Game Directory"));
+        let journal = temp.path().join("security.json");
+        for path in [&first, &second] {
+            record_results(
+                &journal,
+                &[ExclusionResult {
+                    path: path.display().to_string(),
+                    status: "applied".into(),
+                    detail: String::new(),
+                    added: true,
+                }],
+            )
+            .unwrap();
+        }
+        let selected = filter_owned_removals(
+            &SecurityRequest {
+                paths: vec![second.clone()],
+                operation: SecurityOperation::Remove,
+            },
+            &journal,
+        )
+        .unwrap();
+        assert_eq!(selected.paths.len(), 2);
+        let keys = selected
+            .paths
+            .iter()
+            .map(|path| result_path_key(SecurityOperation::Remove, path).unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(keys.len(), 2);
+        let guards = mutation_guards(&selected.paths).unwrap();
+        assert_eq!(guards.len(), 1);
+        drop(guards);
+        record_results(
+            &journal,
+            &[ExclusionResult {
+                path: first.display().to_string(),
+                status: "removed".into(),
+                detail: String::new(),
+                added: false,
+            }],
+        )
+        .unwrap();
+        let remaining = read_journal(&journal).unwrap();
+        assert_eq!(remaining.added_paths.len(), 1);
+        assert!(same_registered_path(&remaining.added_paths[0], &second));
+        record_results(
+            &journal,
+            &[ExclusionResult {
+                path: second.display().to_string(),
+                status: "removed".into(),
+                detail: String::new(),
+                added: false,
+            }],
+        )
+        .unwrap();
+        assert!(read_journal(&journal).unwrap().added_paths.is_empty());
     }
     #[test]
     fn entire_steam_library_is_rejected() {

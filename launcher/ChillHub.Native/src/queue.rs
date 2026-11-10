@@ -207,6 +207,32 @@ impl DownloadQueue {
             .items
             .clone()
     }
+    /// Resolves filesystem aliases; call from an operation/background worker.
+    /// Exact paths still match when a removable drive is currently unavailable.
+    pub fn has_pending_for_root(&self, root: &Path) -> bool {
+        let pending: Vec<PathBuf> = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .items
+            .iter()
+            .filter(|item| !item.state.terminal())
+            .map(|item| item.request.root.clone())
+            .collect();
+        if pending.iter().any(|path| path == root) {
+            return true;
+        }
+        if pending.is_empty() {
+            return false;
+        }
+        let Some(identity) = crate::paths::path_identity(root) else {
+            return false;
+        };
+        pending
+            .iter()
+            .any(|path| crate::paths::path_identity(path).as_deref() == Some(identity.as_str()))
+    }
     pub fn recovery_error(&self) -> Option<String> {
         self.shared
             .state
@@ -235,6 +261,7 @@ impl DownloadQueue {
         rx
     }
     pub fn enqueue(&self, request: TransferRequest) -> Result<String, TransferError> {
+        let root_identity = crate::paths::path_identity(&request.root);
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.stopping {
             return Err(TransferError::Cancelled);
@@ -242,9 +269,12 @@ impl DownloadQueue {
         require_writable(&state)?;
         if let Some(existing) = state.items.iter().find(|item| {
             !item.state.terminal()
-                && item.request.root == request.root
                 && item.request.scope == request.scope
                 && item.request.game_id.eq_ignore_ascii_case(&request.game_id)
+                && (item.request.root == request.root
+                    || root_identity.as_deref().is_some_and(|identity| {
+                        crate::paths::path_identity(&item.request.root).as_deref() == Some(identity)
+                    }))
         }) {
             if existing.request.version != request.version
                 || existing.request.manifest_url != request.manifest_url
@@ -1013,6 +1043,47 @@ mod tests {
                 .unwrap()
                 .contains("download.recovery")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restored_queue_matches_short_and_canonical_ancestors_before_game_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("Long library directory for queued games");
+        fs::create_dir_all(&library).unwrap();
+        let short = crate::paths::short_test_path(&library);
+        let canonical = fs::canonicalize(&library).unwrap();
+        let path = temp.path().join("queue.json");
+        let mut paused = item("paused", QueueState::Paused);
+        paused.request.root = short.join("not-installed-yet");
+        fs::write(&path, serde_json::to_vec(&vec![paused.clone()]).unwrap()).unwrap();
+        let queue = DownloadQueue::new(&path).unwrap();
+        for alias in [&library, &canonical] {
+            let mut request = paused.request.clone();
+            request.root = alias.join("not-installed-yet");
+            assert!(queue.has_pending_for_root(&request.root));
+            assert_eq!(queue.enqueue(request.clone()).unwrap(), "paused");
+            request.version = "another-version".into();
+            assert!(matches!(queue.enqueue(request), Err(TransferError::Busy)));
+        }
+        assert!(!queue.has_pending_for_root(&library.join("different-game")));
+        assert_eq!(queue.snapshot().len(), 1);
+        assert_eq!(queue.snapshot()[0].state, QueueState::Paused);
+        assert!(!library.join("not-installed-yet").exists());
+        queue.shutdown();
+    }
+
+    #[test]
+    fn unresolved_queue_identities_never_match_other_unknown_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("queue.json");
+        let mut paused = item("paused", QueueState::Paused);
+        paused.request.root = PathBuf::from("unknown-one");
+        fs::write(&path, serde_json::to_vec(&vec![paused]).unwrap()).unwrap();
+        let queue = DownloadQueue::new(&path).unwrap();
+        assert!(queue.has_pending_for_root(Path::new("unknown-one")));
+        assert!(!queue.has_pending_for_root(Path::new("unknown-two")));
+        queue.shutdown();
     }
 
     #[test]

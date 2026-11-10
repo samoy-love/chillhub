@@ -180,12 +180,19 @@ fn create_at(
         let links = read_links(std::slice::from_ref(&output))?;
         if links.iter().any(|link| {
             link.path == output
-                && path_key(&link.target) == path_key(launcher)
+                && path_key(&link.target)
+                    .zip(path_key(launcher))
+                    .is_some_and(|(a, b)| a == b)
                 && arguments(&link.arguments)
                     .and_then(|args| ShortcutRequest::parse_args(&args).ok().flatten())
                     .is_some_and(|stored| {
                         stored.game_id == request.game_id
-                            && stored.exe_path.as_ref().and_then(|p| path_key(p)) == path_key(exe)
+                            && stored
+                                .exe_path
+                                .as_ref()
+                                .and_then(|p| path_key(p))
+                                .zip(path_key(exe))
+                                .is_some_and(|(a, b)| a == b)
                     })
         }) {
             return Ok(output);
@@ -231,19 +238,7 @@ $l.IconLocation=[string]$r.icon; $l.Save()
 }
 
 fn path_key(path: &Path) -> Option<String> {
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|p| matches!(p, std::path::Component::ParentDir))
-    {
-        return None;
-    }
-    Some(
-        path.to_string_lossy()
-            .replace('/', "\\")
-            .trim_end_matches('\\')
-            .to_lowercase(),
-    )
+    crate::paths::path_identity(path)
 }
 fn inside_exe(path: &Path, root: &Path) -> bool {
     path.extension()
@@ -368,48 +363,56 @@ mod tests {
     }
     #[test]
     fn ownership_requires_target_and_matching_local_arguments() {
-        let launcher = Path::new(r"C:\Apps\ChillHub.exe");
-        let root = Path::new(r"D:\Games\peak");
+        let temp = tempfile::tempdir().unwrap();
+        let launcher = temp.path().join("Apps/ChillHub.exe");
+        let root = temp.path().join("Games/peak");
+        let game_args = format!(
+            "--game peak --exe {}",
+            crate::launch::quote_windows_argument(&root.join("Game.exe").to_string_lossy())
+        );
         let link = |target: &str, args: &str| Link {
             path: "ignored.lnk".into(),
             target: target.into(),
             arguments: args.into(),
         };
         assert!(owned(
-            &link(r"d:\games\PEAK\bin\Game.exe", ""),
-            launcher,
+            &link(
+                &root.join("bin/Game.exe").to_string_lossy().to_uppercase(),
+                ""
+            ),
+            &launcher,
             "peak",
-            root
-        ));
-        assert!(!owned(
-            &link(r"D:\Games\peak-2\Game.exe", ""),
-            launcher,
-            "peak",
-            root
+            &root
         ));
         assert!(!owned(
             &link(
-                r"C:\Windows\notepad.exe",
-                r#"--game peak --exe "D:\Games\peak\Game.exe""#
+                &temp.path().join("Games/peak-2/Game.exe").to_string_lossy(),
+                ""
             ),
-            launcher,
+            &launcher,
             "peak",
-            root
+            &root
+        ));
+        assert!(!owned(
+            &link(&temp.path().join("Other.exe").to_string_lossy(), &game_args),
+            &launcher,
+            "peak",
+            &root
         ));
         assert!(owned(
-            &link(
-                r"C:\Apps\ChillHub.exe",
-                r#"--game peak --exe "D:\Games\peak\Game.exe""#
-            ),
-            launcher,
+            &link(&launcher.to_string_lossy(), &game_args),
+            &launcher,
             "peak",
-            root
+            &root
         ));
         assert!(!owned(
-            &link(r"C:\Apps\ChillHub.exe", "--game peak --target SteamVanilla"),
-            launcher,
+            &link(
+                &launcher.to_string_lossy(),
+                "--game peak --target SteamVanilla"
+            ),
+            &launcher,
             "peak",
-            root
+            &root
         ));
     }
     #[test]
@@ -434,6 +437,16 @@ mod tests {
         let original = fs::read(&link).unwrap();
         fs::write(desktop.join("note.txt"), b"keep").unwrap();
         assert_eq!(create_at(&desktop, &launcher, &request).unwrap(), link);
+        let short_launcher = crate::paths::short_test_path(&launcher);
+        let short_exe = crate::paths::short_test_path(request.exe_path.as_ref().unwrap());
+        let alias_request = ShortcutRequest {
+            exe_path: Some(short_exe),
+            ..request.clone()
+        };
+        assert_eq!(
+            create_at(&desktop, &short_launcher, &alias_request).unwrap(),
+            link
+        );
         assert_eq!(fs::read(&link).unwrap(), original);
         assert_eq!(
             remove_at(&desktop, &launcher, "different", &root).unwrap(),
