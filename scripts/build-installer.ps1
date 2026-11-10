@@ -408,7 +408,7 @@ function Publish-UpdaterAot {
 
     $aotOut = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-updater-aot-" + [Guid]::NewGuid().ToString('N'))
     try {
-        & dotnet publish $UpdaterCsproj -c $Configuration -r $Runtime -p:PublishAot=true -o $aotOut
+        & $script:BuildDotnet publish $UpdaterCsproj -c $Configuration -r $Runtime -p:PublishAot=true -o $aotOut
         Assert-NativeSuccess "dotnet publish (updater, Native AOT)" $LASTEXITCODE
 
         $aotExe = Join-Path $aotOut "ChillHub.Updater.exe"
@@ -465,12 +465,9 @@ try {
     [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($true)
 } catch {}
 
-# Preflight: dotnet SDK and csproj path
-try {
-    $dc = Get-Command dotnet -ErrorAction Stop
-    $dv = (& dotnet --version)
-    if ($dv) { Write-Host "dotnet: $dv ($($dc.Path))" -ForegroundColor DarkCyan }
-} catch { throw "dotnet SDK not found. Please install .NET 8 SDK and ensure 'dotnet' is in PATH." }
+# Use the same patched portable SDK in CI and deployment, never a stale runner default.
+$script:BuildDotnet = & (Join-Path $PSScriptRoot 'ci/ensure-dotnet8.ps1')
+Write-Host "dotnet: $script:BuildDotnet" -ForegroundColor DarkCyan
 
 if (-not (Test-Path -LiteralPath $Csproj)) {
     throw "CSProj not found at '$Csproj'. Adjust -Csproj argument."
@@ -535,7 +532,7 @@ function Find-Makensis {
 }
 
 Write-Host "[1/3] Restoring .NET packages..." -ForegroundColor Cyan
-& dotnet restore $Csproj
+& $script:BuildDotnet restore $Csproj
 Assert-NativeSuccess "dotnet restore" $LASTEXITCODE
 
 # Б8, вторая половина. Версия доезжала до установщика (/DAPP_VERSION), но НЕ до
@@ -608,7 +605,7 @@ if ($Publish) {
     $ProjectDir = Split-Path -Parent $Csproj
     $PublishDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows/$Runtime/publish"
     Clear-GeneratedPublishDirectory -Path $PublishDir -AllowedRoot (Join-Path $ProjectDir 'bin')
-    & dotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc @versionStamp
+    & $script:BuildDotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc @versionStamp
     Assert-NativeSuccess "dotnet publish" $LASTEXITCODE
     # Compute publish output path (informational)
     $ProjectDir = Split-Path -Parent $Csproj
@@ -617,7 +614,7 @@ if ($Publish) {
     $BuildOutputDir = $PublishDir
 } else {
     Write-Host "[2/3] Building ($Configuration)..." -ForegroundColor Cyan
-    & dotnet build $Csproj -c $Configuration @versionStamp
+    & $script:BuildDotnet build $Csproj -c $Configuration @versionStamp
     Assert-NativeSuccess "dotnet build" $LASTEXITCODE
     $ProjectDir = Split-Path -Parent $Csproj
     $BuildOutputDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows"
@@ -630,7 +627,7 @@ if ($Publish) {
     $securityHelperProject = Join-Path $ProjectDir '..\ChillHub.SecurityHelper\ChillHub.SecurityHelper.csproj'
     $securityHelperOutput = Join-Path $ProjectDir "obj/security-helper-publish/$Configuration/$Runtime/$sc"
     Clear-GeneratedPublishDirectory -Path $securityHelperOutput -AllowedRoot (Join-Path $ProjectDir 'obj/security-helper-publish')
-    & dotnet publish $securityHelperProject -c $Configuration -r $Runtime --self-contained $sc -o $securityHelperOutput @versionStamp
+    & $script:BuildDotnet publish $securityHelperProject -c $Configuration -r $Runtime --self-contained $sc -o $securityHelperOutput @versionStamp
     Assert-NativeSuccess 'dotnet publish SecurityHelper' $LASTEXITCODE
     $securityHelperRoot = [IO.Path]::GetFullPath($securityHelperOutput)
     foreach ($helperFile in Get-ChildItem -LiteralPath $securityHelperRoot -File -Recurse) {

@@ -46,8 +46,7 @@ namespace ChillHub.Core.Changelog {
             new ChangelogRelease {
                 Version = "1.7.21",
                 Date = "2026-11-10",
-                Changes = System.Array.Empty<string>(),
-                Technical = true,
+                Changes = new[] { "Обновлены компоненты безопасности лаунчера." },
             },
             new ChangelogRelease {
                 Version = "1.7.20",

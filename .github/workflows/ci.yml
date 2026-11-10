@@ -793,17 +793,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # setup-dotnet нет по той же причине, что и в dotnet-lint выше:
-      # SDK приезжает с образом раннера, а скачивание действия стоило дороже
-      # самой проверки. Подробности — в комментарии там.
-      - name: Проверить .NET 8 SDK на раннере
+      # Тот же закреплённый SDK вызывает build-installer.ps1 при выкатке.
+      # Старый SDK образа выбирал уязвимый AOT compiler даже после restore.
+      - name: Подготовить исправленный .NET 8 SDK
         shell: pwsh
-        run: |
-          $sdks = dotnet --list-sdks
-          $sdks
-          if (-not ($sdks | Select-String -Pattern '^8\.0\.')) {
-            throw ".NET 8 SDK на раннере нет: он должен приезжать с образом машины, а не ставиться прогоном"
-          }
+        run: ./scripts/ci/ensure-dotnet8.ps1
       # Кэша NSIS здесь больше нет.
       #
       # Он существовал ради одного: каталог .tools/ лежал ВНУТРИ рабочей
@@ -868,9 +862,9 @@ jobs:
       - name: Native — формат, Clippy, тесты и три Release-приложения
         if: needs.changes.result != 'success' || needs.changes.outputs.native == 'true'
         shell: pwsh
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/native-ci-target
-        run: ./scripts/native-ci.ps1 -ValidationOnly
+        run: |
+          $env:CARGO_TARGET_DIR = Join-Path $env:LOCALAPPDATA 'chillhub-tools/build-cache/chillhub-native'
+          ./scripts/native-ci.ps1 -ValidationOnly
       - name: Сохранить журналы и снимки Native
         if: always() && (needs.changes.result != 'success' || needs.changes.outputs.native == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
@@ -966,7 +960,7 @@ jobs:
           # launcher/ChillHub/ChillHub.csproj, launcher/tests/ в установщик не
           # входит и ни одного раздаваемого байта не меняет. Взятый целиком, он
           # требовал релиза клиента ради обновления тестового пакета.
-          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|ensure-webview2-bootstrapper\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
+          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|ensure-webview2-bootstrapper\.ps1|installer\.nsi|app\.ico|ci/ensure-(nsis|dotnet8)\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
             echo "PR не трогает ни launcher/updater, ни триггеры полной выкатки — версия клиента ни при чём"
             exit 0
           fi
