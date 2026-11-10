@@ -7,13 +7,14 @@
     "version": "1.7.20",
     "repository": "https://github.com/samoy-love/chillhub"
   },
-  "reviewCompletedUtc": "2026-11-10T10:01:08.378Z",
+  "reviewCompletedUtc": "2026-11-10T18:56:02.443Z",
   "status": {
     "source": "source-read-complete",
     "automatedValidation": "passed",
-    "liveValidation": "not-complete"
+    "liveValidation": "not-complete",
+    "windowsMsvc": "passed"
   },
-  "conclusion": "Все текстовые файлы согласованной области прочитаны и сопоставлены с Native. Общие автоматические проверки и сборка пройдены. Оставшиеся отличия и непроверенные живые сценарии перечислены отдельно: полный функциональный паритет и готовность к публичной замене клиента пока не заявляются.",
+  "conclusion": "Полный аудит прежнего C# завершён. Функциональные исправления прошли текущие локальные проверки и упаковку. В отчёте отдельно указаны результат CI, оставшееся отличие оформления NSIS и реальные сценарии, которые ещё не подтверждены. Полная готовность к массовой замене клиента не заявляется.",
   "coverage": {
     "totalFiles": 432,
     "textFilesFullyRead": 430,
@@ -195,30 +196,13 @@
   "validation": {
     "completed": [
       {
-        "name": "Общий Native: основное приложение и помощники",
-        "passed": 287,
-        "total": 287,
-        "uniquePassedTests": 185,
-        "parts": {
-          "launcher": {
-            "library": 116,
-            "controller": 25,
-            "applicationFlow": 15,
-            "catalog": 3,
-            "transfer": 21,
-            "uiMatrix": 1,
-            "total": 181
-          },
-          "helpers": {
-            "library": 104,
-            "securityHelper": 1,
-            "updater": 1,
-            "total": 106
-          }
-        },
-        "log": ".cache/native-final-tests-all.log",
-        "scope": "287 успешных выполнений, 185 уникальных имён тестов. Библиотечные тесты частично повторяются в разных конфигурациях. 155 изображений интерфейса проверены без живых окон Windows.",
-        "isFinalNative": true
+        "name": "Общий Native: приложение и помощники",
+        "passed": 357,
+        "total": 357,
+        "uniquePassedTests": 224,
+        "isFinalNative": true,
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log",
+        "scope": "Оба профиля; повторяющиеся библиотечные тесты не считаются уникальными."
       },
       {
         "name": "Исходный C# — отдельный прогон",
@@ -234,24 +218,18 @@
         "source": "Свидетельство .cache/legacy-audit-toolchain.json"
       },
       {
-        "name": "Проверка пакета Native",
+        "name": "Проверка свежего пакета Native",
         "passed": 6,
         "total": 6,
-        "log": ".cache/native-final-package-checks.json",
-        "scope": "Подмена и отсутствие файлов, PE, ресурсы и происхождение библиотек; exe не запускались."
+        "log": ".cache/native-latest-validation-summary.json",
+        "scope": "PE, ресурсы, происхождение зависимостей, отсутствие и подмена файлов. В рамках этих проверок exe не запускались."
       },
       {
         "name": "Подготовка установщика WebView2",
         "passed": 4,
         "total": 4,
-        "log": ".cache/native-bootstrapper-tests.json",
-        "scope": "Подпись и метаданные Microsoft, проверка повторного использования. WebView2 не устанавливался."
-      },
-      {
-        "name": "Версия и список изменений C#",
-        "passed": 11,
-        "total": 11,
-        "log": ".cache/legacy-version-changelog-tests.log"
+        "log": ".cache/native-latest-validation-summary.json",
+        "scope": "Подпись и метаданные Microsoft, повторное использование проверенного загрузчика. WebView2 не устанавливался."
       }
     ],
     "pending": [],
@@ -261,7 +239,6 @@
       "LIVE-003",
       "LIVE-004",
       "LIVE-005",
-      "LIVE-006",
       "LIVE-007",
       "LIVE-008",
       "LIVE-009"
@@ -282,31 +259,187 @@
       {
         "name": "Форматирование Rust",
         "state": "passed",
-        "log": ".cache/native-final-format.log"
+        "log": ".cache/native-alias-final-format.log"
       },
       {
-        "name": "Строгий Clippy без предупреждений",
+        "name": "Строгий Clippy",
         "state": "passed",
-        "log": ".cache/native-final-clippy-strict.log"
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/strict-clippy.log"
       },
       {
-        "name": "Release: приложение и два помощника",
+        "name": "Release и упаковка",
         "state": "passed",
-        "log": ".cache/native-final-release.log"
-      },
-      {
-        "name": "Упаковка ZIP и установщика NSIS",
-        "state": "passed",
-        "log": ".cache/native-final-package.log"
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/release.log"
       }
     ],
-    "invocationNotice": "Общий прогон: 185 уникальных имён тестов и 287 успешных выполнений. Библиотечные проверки частично повторяются в основном приложении и помощниках; эти числа нельзя складывать. Проверены 155 изображений интерфейса без живых окон Windows.",
+    "invocationNotice": "224 уникальных проверок, 357 успешных выполнений; библиотечные проверки повторяются в двух профилях.",
+    "visualQa": {
+      "indexRecords": 161,
+      "uniquePng": 159,
+      "duplicateRecords": 2,
+      "interactiveUiVerified": "partial; see LIVE-001 and LIVE-002"
+    },
     "parityContract": {
+      "schemaVersion": 1,
+      "baseline": "14154a29dbab381b6c7dd314e3de9a898615a16e",
+      "checkedUtc": "2026-11-10T18:32:29.2671511Z",
+      "uniquePassedTests": 224,
       "automatedValid": true,
       "releaseReady": false,
-      "uniquePassedTests": 185,
-      "pendingReviewCount": 9,
-      "pendingChecks": [
+      "pendingReviewCount": 8,
+      "checks": [
+        {
+          "id": "launch-four-targets",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "launch-incomplete-and-exe",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "steam-discovery",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "plain-modded-isolation",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "config-migration",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "settings",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "playtime",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "shortcut-path-safety",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "offline-catalog",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "transfer-integrity",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "transfer-queue",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "transfer-cleanup",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "transfer-boundaries",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "delete-game",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "maintenance",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "self-update-transaction",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "security-consent",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "feedback-and-diagnostics",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "launcher-changelog",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
         {
           "id": "existing-install-adoption",
           "automated": "passed",
@@ -364,11 +497,35 @@
           "package": null
         },
         {
-          "id": "karaoke-header",
+          "id": "news-removal",
           "automated": "not-applicable",
           "missingTests": [],
           "manual": null,
-          "disposition": "intentional-legacy-omission",
+          "disposition": "intentional-user-request",
+          "package": null
+        },
+        {
+          "id": "karaoke-header",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "controller-callback-flow",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
+        },
+        {
+          "id": "helper-local-errors",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
           "package": null
         },
         {
@@ -378,17 +535,322 @@
           "manual": "pending: real packaged YouTube playback, author-denied video, missing runtime fallback, Escape/focus, close-before-ready and browser-process exit after closing; unit tests do not establish these native behaviours",
           "disposition": null,
           "package": null
+        },
+        {
+          "id": "automatic-error-reports",
+          "automated": "passed",
+          "missingTests": [],
+          "manual": null,
+          "disposition": null,
+          "package": null
         }
       ]
     },
     "completedSmokes": [
       {
-        "name": "Ограниченный запуск готового приложения",
+        "name": "Запуск свежей проверочной копии",
         "state": "passed",
-        "scope": "Сборка 1.8.1 запущена в отдельном профиле: окно ChillHub отвечает, каталог получен с HTTP 200, значок How To Fish загружен. После старта повторная проверка подтвердила все 130 файлов пакета.",
+        "scope": "Пакет 1.8.1-20261110-130008-cbece815 запущен в отдельном профиле. Окно «Chill Hub» отвечает; каталог получен с HTTP 200, загружены значки всех девяти игр, включая How To Fish — 66639 байт за 11 мс. Все 130 файлов пакета после старта неизменны.",
+        "pid": 32364,
+        "title": "Chill Hub",
+        "startedUtc": "2026-11-10T13:03:03.5717456Z",
+        "catalogHttpStatus": 200,
+        "iconsLoaded": 9,
         "iconBytes": 66639,
-        "packageRevalidation": ".cache/native-package-after-start.json",
-        "limits": "Проверен только старт. Видео, изменение размера, установщик, UAC и настоящие игры этим не проверены."
+        "iconElapsedMs": 11,
+        "payloadChangedAfterLaunch": 0,
+        "interactiveUiVerified": false,
+        "packageRevalidation": ".cache/native-latest-package-after-start.json",
+        "limits": "Проверен только старт. Видео, изменение размера окна, установщик, UAC и настоящие игры этим не проверены."
+      },
+      {
+        "name": "Полнота публичного каталога",
+        "state": "passed",
+        "checkedUtc": "2026-11-10T13:02:03.2760536Z",
+        "scope": "У всех девяти игр есть описание, три скриншота, официальный трейлер 1080p и игровой ролик. Четыре модпака содержат 492 структурированные записи модов.",
+        "limits": "Это проверка структуры и полноты ответа каталога; она не подтверждает воспроизведение каждого видео в живом окне.",
+        "evidence": ".cache/live-catalog-current-validation.json"
+      }
+    ],
+    "testedHead": "c5629ee63574de344f779e57d49e541076b398f6",
+    "previousFullGate": {
+      "tests": {
+        "name": "Общий Native: основное приложение и помощники",
+        "passed": 287,
+        "total": 287,
+        "uniquePassedTests": 185,
+        "parts": {
+          "launcher": {
+            "library": 116,
+            "controller": 25,
+            "applicationFlow": 15,
+            "catalog": 3,
+            "transfer": 21,
+            "uiMatrix": 1,
+            "total": 181
+          },
+          "helpers": {
+            "library": 104,
+            "securityHelper": 1,
+            "updater": 1,
+            "total": 106
+          }
+        },
+        "log": ".cache/native-final-tests-all.log",
+        "scope": "287 успешных выполнений, 185 уникальных имён тестов. Библиотечные тесты частично повторяются в разных конфигурациях. 155 изображений интерфейса проверены без живых окон Windows."
+      },
+      "qualityGates": [
+        {
+          "name": "Форматирование Rust",
+          "state": "passed",
+          "log": ".cache/native-final-format.log"
+        },
+        {
+          "name": "Строгий Clippy без предупреждений",
+          "state": "passed",
+          "log": ".cache/native-final-clippy-strict.log"
+        },
+        {
+          "name": "Release: приложение и два помощника",
+          "state": "passed",
+          "log": ".cache/native-final-release.log"
+        },
+        {
+          "name": "Упаковка ZIP и установщика NSIS",
+          "state": "passed",
+          "log": ".cache/native-final-package.log"
+        }
+      ],
+      "packaging": {
+        "directory": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-095442-92209553",
+        "payloadFiles": 130,
+        "payloadBytes": 201914610,
+        "zipBytes": 98775920,
+        "installerBytes": 69558858,
+        "installerCompression": "solid LZMA",
+        "webView2Prerequisite": true,
+        "releaseReady": false,
+        "pendingContractReviews": 9,
+        "parityResult": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-095442-92209553/parity-result.json",
+        "executables": [
+          {
+            "name": "ChillHub.exe",
+            "bytes": 28375040,
+            "reductionFromNative180Percent": 52.27
+          },
+          {
+            "name": "ChillHub.Updater.exe",
+            "bytes": 12248064,
+            "reductionFromNative180Percent": 78.65
+          },
+          {
+            "name": "ChillHub.SecurityHelper.exe",
+            "bytes": 12237312,
+            "reductionFromNative180Percent": 78.68
+          }
+        ],
+        "sizeNote": "Это размеры файлов на диске относительно Native 1.8.0, а не расход памяти, CPU, GPU или сравнение со старым C# клиентом."
+      }
+    },
+    "ci": {
+      "state": "passed",
+      "liveId": "LIVE-006",
+      "lastRun": {
+        "number": 707,
+        "url": "https://github.com/samoy-love/chillhub/actions/runs/42798798175",
+        "head": "3f735fa515b73399323385ff416cf15614ff3f77",
+        "nativeState": "failed",
+        "nativeLibrary": {
+          "passed": 113,
+          "failed": 3,
+          "total": 116
+        },
+        "reason": "Три проверки выявили реальные различия короткого и полного пути TEMP в Windows; исправления охватили и другие связанные операции.",
+        "legacyInstaller": {
+          "dotnetSdk": "8.0.427",
+          "runtime": "8.0.33",
+          "build": "passed",
+          "smoke": "passed"
+        }
+      },
+      "nextRun": {
+        "number": 719,
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "state": "passed",
+        "nativeState": "passed",
+        "nativeInstallerSmoke": "passed",
+        "url": "https://github.com/samoy-love/chillhub/actions/runs/42875113793",
+        "jobId": 130036363014,
+        "checkedUtc": "2026-11-10T18:49:34.5711488Z",
+        "previousPassedRun": "https://github.com/samoy-love/chillhub/actions/runs/42870579645"
+      },
+      "attempts": [
+        {
+          "number": 707,
+          "url": "https://github.com/samoy-love/chillhub/actions/runs/42798798175",
+          "head": "3f735fa515b73399323385ff416cf15614ff3f77",
+          "nativeState": "failed",
+          "nativeLibrary": {
+            "passed": 113,
+            "failed": 3,
+            "total": 116
+          },
+          "reason": "Три проверки выявили реальные различия короткого и полного пути TEMP в Windows; исправления охватили и другие связанные операции.",
+          "legacyInstaller": {
+            "dotnetSdk": "8.0.427",
+            "runtime": "8.0.33",
+            "build": "passed",
+            "smoke": "passed"
+          }
+        },
+        {
+          "number": 708,
+          "url": "https://github.com/samoy-love/chillhub/actions/runs/42809080841",
+          "head": "316434466a286df1228bd29116cd65cbb9553e49",
+          "state": "failed",
+          "nativeState": "failed",
+          "nativeLibrary": {
+            "passed": 127,
+            "failed": 1,
+            "total": 128
+          },
+          "failedTest": "shortcuts::tests::temp_shell_shortcuts_roundtrip_and_remove_only_owned",
+          "failureLocation": {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs",
+            "line": 439
+          },
+          "failure": "Существующий собственный ярлык ошибочно распознан как чужой при повторном создании",
+          "format": "passed",
+          "strictClippyAll": "passed",
+          "remainingProfiles": "not-executed",
+          "log": ".cache/native-ci708-tests.log",
+          "artifactId": 13760144770
+        },
+        {
+          "number": 709,
+          "url": "https://github.com/samoy-love/chillhub/actions/runs/42812341526",
+          "head": "e799d8c8368f44c907ca9d084577fc6d6f8e048c",
+          "state": "failed",
+          "nativeState": "failed",
+          "nativeLibrary": {
+            "passed": 127,
+            "failed": 1,
+            "total": 128
+          },
+          "failedTest": "shortcuts::tests::temp_shell_shortcuts_roundtrip_and_remove_only_owned",
+          "failureLocation": {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs",
+            "line": 451
+          },
+          "failure": "WScript returns empty target, arguments and working directory for a Cyrillic .lnk under Windows-1252 despite correct UTF-8 input/output and physical identity",
+          "diagnosticReadback": {
+            "inputEncoding": "utf-8",
+            "outputEncoding": "utf-8",
+            "systemCodePage": "Windows-1252",
+            "fileExists": true,
+            "physicalIdentityCorrect": true,
+            "emptyFields": [
+              "target",
+              "arguments",
+              "working"
+            ]
+          },
+          "remainingProfiles": "not-executed",
+          "log": ".cache/native-ci709-tests.log",
+          "artifactId": 13763122515
+        },
+        {
+          "number": 710,
+          "url": "https://github.com/samoy-love/chillhub/actions/runs/42820129398",
+          "head": "1a1d8761b6ea9f75694cbc820ee637ab6e01bf3f",
+          "state": "pending-result",
+          "observedState": "in_progress"
+        }
+      ],
+      "candidateHead": "c5629ee63574de344f779e57d49e541076b398f6"
+    },
+    "currentPackageLaunch": {
+      "package": "1.8.1-20261110-183222-a841a1a7",
+      "sourceCommit": "c5629ee63574de344f779e57d49e541076b398f6",
+      "launch": "passed: isolated preview process 7688 and window 3278050 discovered",
+      "catalog": "accessibility tree contains all nine current game cards and first-run changelog",
+      "visualControl": "restored after Windows unlock; repeated external user-input detections and foreground changes interrupt later clicks",
+      "interactiveValidationOfThisPackage": "partial",
+      "checks": [
+        {
+          "name": "library modpack filter",
+          "result": "passed",
+          "observed": "four filtered games: Lethal Company, How To Fish, R.E.P.O., PEAK"
+        },
+        {
+          "name": "How To Fish icon",
+          "result": "passed",
+          "observed": "game icon visible in library and selected game page"
+        },
+        {
+          "name": "modpack benefits",
+          "result": "passed",
+          "observed": "Lethal Company compact three-benefit card and All mods 161 reachable by scrolling"
+        },
+        {
+          "name": "mod category live selection",
+          "result": "not completed",
+          "observed": "input rejected repeatedly with user input was detected in this window; headless keyboard/category test passed separately"
+        },
+        {
+          "name": "fresh package media and resize",
+          "result": "not completed",
+          "observed": "foreground changed during interaction; previous package live evidence retained separately"
+        }
+      ],
+      "headlessValidation": "357 passed invocations, 224 unique tests; 161 render records, 159 unique PNG files",
+      "newLayoutReview": "compact mod category selector and its last item visible at 900x500; keyboard selection test passed; Steam-unavailable status fits",
+      "previousLiveEvidence": ".cache/native-live-review.json",
+      "youtubeDiagnosticEvidence": ".cache/youtube-embedding-diagnostics-control.json"
+    },
+    "productionClient": {
+      "checkedUtc": "2026-11-10T18:42:28.0998807Z",
+      "version": "1.7.20",
+      "url": "https://launcher.samoy.love/manifests/launcher/latest.json"
+    },
+    "additionalRegression": {
+      "description": "CI #715 выявил ошибку завершения UTF-16 имени при удалении игры. Ошибка воспроизведена локально на восьми длинах пути и устранена; проверка сохраняет соседние папки.",
+      "source": "launcher/ChillHub.Native/src/service.rs",
+      "test": "service::tests::delete_handles_every_utf16_path_alignment"
+    },
+    "buildEnvironmentCorrection": {
+      "description": "CI #716 прошёл удаление, но обнаружил пустую переменную GNU linker в проверке MSVC. Восстановление отсутствующих переменных теперь действительно удаляет их, а GNU-параметры применяются только к GNU fixture.",
+      "sources": [
+        "launcher/ChillHub.Native/build.ps1",
+        "launcher/ChillHub.Native/tests/application_flow_tests.rs"
+      ]
+    },
+    "previousNativeGate": [
+      {
+        "name": "Общий Native: основное приложение и помощники",
+        "passed": 340,
+        "total": 340,
+        "uniquePassedTests": 215,
+        "parts": {
+          "launcher": {
+            "library": 143,
+            "controller": 26,
+            "applicationFlow": 15,
+            "catalog": 3,
+            "transfer": 21,
+            "uiMatrix": 1,
+            "total": 209
+          },
+          "helpers": {
+            "library": 129,
+            "securityHelper": 1,
+            "updater": 1,
+            "total": 131
+          }
+        },
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "scope": "340 успешных выполнений, 215 уникальных имён тестов. Библиотечные проверки частично повторяются в разных конфигурациях. 155 записей состояний интерфейса, 153 уникальных PNG; живые окна Windows этим не проверены.",
+        "isFinalNative": true
       }
     ]
   },
@@ -399,15 +861,17 @@
     "requested-removal": "Убрано по запросу",
     "changed-behavior": "Изменённое поведение",
     "new-feature": "Добавлено",
-    "unverified-live": "Не проверено вживую"
+    "unverified-live": "Не проверено вживую",
+    "confirmed-parity": "Контракт сохранён"
   },
   "counts": {
-    "fixed": 64,
-    "remaining": 9,
+    "fixed": 80,
+    "remaining": 1,
     "requested-removal": 4,
     "changed-behavior": 24,
     "new-feature": 7,
-    "unverified-live": 9
+    "unverified-live": 8,
+    "confirmed-parity": 3
   },
   "findings": [
     {
@@ -477,12 +941,12 @@
     {
       "id": "ROOT-002",
       "area": "Оболочка и общие службы",
-      "category": "remaining",
+      "category": "changed-behavior",
       "originalStatus": "changed-design",
       "title": "Музыкальная строка",
       "legacyBehavior": "Karaoke в шапке окна",
-      "currentBehavior": "Не перенесена в новый дизайн; пользователь отдельно не просил её удалять",
-      "description": "Музыкальная строка не перенесена. Отдельного запроса удалить её не было: это оставшееся расхождение, а не согласованное удаление.",
+      "currentBehavior": "Музыкальная строка перенесена вместе с полным текстом и русскими символами. Включается настройкой, по умолчанию выключена. Таймер останавливается при сворачивании, потере активности, открытой панели и узком окне; при уменьшенном движении строка статична. Это осознанное отличие ради расхода ресурсов.",
+      "description": "Музыкальная строка перенесена вместе с полным текстом и русскими символами. Включается настройкой, по умолчанию выключена. Таймер останавливается при сворачивании, потере активности, открытой панели и узком окне; при уменьшенном движении строка статична. Это осознанное отличие ради расхода ресурсов.",
       "evidence": {
         "legacy": [
           {
@@ -505,6 +969,12 @@
         "native": [
           {
             "path": "launcher/ChillHub.Native/ui/app.slint"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/karaoke.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/ui/app.slint"
           }
         ],
         "tests": []
@@ -519,7 +989,16 @@
       },
       "relatedIds": [
         "UI-DESIGN-003"
-      ]
+      ],
+      "previousReview": {
+        "category": "remaining",
+        "description": "Музыкальная строка не перенесена. Отдельного запроса удалить её не было: это оставшееся расхождение, а не согласованное удаление."
+      },
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
+      }
     },
     {
       "id": "ROOT-003",
@@ -628,7 +1107,10 @@
         "subject": "Повторный запуск при закрытии",
         "legacy": "До 7 секунд ожидания освобождения mutex",
         "native": "Подтверждение активации или захват освобождённого mutex; очередь запросов ярлыков"
-      }
+      },
+      "relatedIds": [
+        "PATH-006"
+      ]
     },
     {
       "id": "ROOT-006",
@@ -877,8 +1359,8 @@
       "originalStatus": "changed-behavior",
       "title": "Ротация журналов",
       "legacyBehavior": "5 MiB + 3 архивных файла",
-      "currentBehavior": "Native 2 MiB + 1 архив; структурированные события и удаление приватных данных; TEMP/current-directory fallback пока нет",
-      "description": "Native 2 MiB + 1 архив; структурированные события и удаление приватных данных; TEMP/current-directory fallback пока нет",
+      "currentBehavior": "Native ограничивает основной журнал 2 MiB и одним архивом, записывает структурированные события и удаляет приватные данные. При недоступной папке данных используется отдельная папка в TEMP. Текущая рабочая папка для журналов больше не используется.",
+      "description": "Native ограничивает основной журнал 2 MiB и одним архивом, записывает структурированные события и удаляет приватные данные. При недоступной папке данных используется отдельная папка в TEMP. Текущая рабочая папка для журналов больше не используется.",
       "evidence": {
         "legacy": [],
         "native": [
@@ -1004,12 +1486,12 @@
     {
       "id": "ROOT-013",
       "area": "Оболочка и общие службы",
-      "category": "remaining",
+      "category": "fixed",
       "originalStatus": "remaining",
       "title": "Локальная разработка обратной связи",
       "legacyBehavior": "Автоматический fallback localhost:55777",
-      "currentBehavior": "Не перенесён; требуется рабочий endpoint на выбранном API origin; на прод это не влияет",
-      "description": "При локальной разработке больше нет автоматического перехода на запасной адрес обратной связи. Выбранный сервер должен сам предоставлять этот адрес; рабочий сервер проекта этим не затронут.",
+      "currentBehavior": "Для локального API восстановлен резервный адрес обратной связи на loopback:55777. Он используется только после сетевого сбоя, 404 или 5xx и не обходит ограничения 400/429. Для обычного сервера резервный локальный адрес не используется.",
+      "description": "Для локального API восстановлен резервный адрес обратной связи на loopback:55777. Он используется только после сетевого сбоя, 404 или 5xx и не обходит ограничения 400/429. Для обычного сервера резервный локальный адрес не используется.",
       "evidence": {
         "legacy": [
           {
@@ -1018,6 +1500,9 @@
           }
         ],
         "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/feedback.rs"
+          },
           {
             "path": "launcher/ChillHub.Native/src/feedback.rs"
           }
@@ -1031,6 +1516,15 @@
         "subject": "Локальная разработка обратной связи",
         "legacy": "Автоматический fallback localhost:55777",
         "native": "Не перенесён; требуется рабочий endpoint на выбранном API origin; на прод это не влияет"
+      },
+      "previousReview": {
+        "category": "remaining",
+        "description": "При локальной разработке больше нет автоматического перехода на запасной адрес обратной связи. Выбранный сервер должен сам предоставлять этот адрес; рабочий сервер проекта этим не затронут."
+      },
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
       }
     },
     {
@@ -1075,6 +1569,7 @@
         "native": "Добавлены в Rust; game_* метрики не удваиваются для модпака"
       },
       "relatedIds": [
+        "PATH-004",
         "DOMAIN-003",
         "DOMAIN-004",
         "DOMAIN-008"
@@ -1368,8 +1863,8 @@
       "originalStatus": "fixed",
       "title": "Картинки и How To Fish",
       "legacyBehavior": "Определение формата по байтам, cache/retry",
-      "currentBehavior": "Исправлено: декодирование .img без расширения, retry, ETag и Last-Modified, origin-relative URL и общий запрос одного адреса",
-      "description": "Исправлено: декодирование .img без расширения, retry, ETag и Last-Modified, origin-relative URL и общий запрос одного адреса",
+      "currentBehavior": "Восстановлены определение формата картинки по содержимому, повторные запросы, ETag и Last-Modified, адреса от корня сервера и объединение одновременных запросов одной картинки. Ошибки чтения и записи служебного файла .meta теперь попадают в диагностику; повреждённые сведения не используются для условного запроса.",
+      "description": "Восстановлены определение формата картинки по содержимому, повторные запросы, ETag и Last-Modified, адреса от корня сервера и объединение одновременных запросов одной картинки. Ошибки чтения и записи служебного файла .meta теперь попадают в диагностику; повреждённые сведения не используются для условного запроса.",
       "evidence": {
         "legacy": [
           {
@@ -1383,9 +1878,63 @@
           },
           {
             "path": "launcher/ChillHub.Native/src/main.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "line": 25,
+            "symbol": "fn validators"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "line": 159,
+            "symbol": "\"image.cache_metadata_read_error\""
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "line": 261,
+            "symbol": "\"image.cache_metadata_write_error\""
           }
         ],
-        "tests": []
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "line": 457,
+            "symbol": "fn oversized_remote_image_preserves_valid_stale_cache"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "line": 556,
+            "symbol": "fn stale_image_is_revalidated_without_downloading_it_again"
+          },
+          {
+            "path": ".cache/native-alias-tests-before-media-diagnostics.log",
+            "line": 133
+          },
+          {
+            "path": ".cache/native-media-diagnostic-full.log",
+            "line": 132
+          },
+          {
+            "path": ".cache/native-media-diagnostic-2.log",
+            "line": 12
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "symbol": "temporary_validator_sharing_violation_keeps_conditional_request"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "symbol": "malformed_and_mismatched_validator_data_is_never_retried_or_trusted"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "symbol": "validator_access_denied_is_not_retried"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/media.rs",
+            "symbol": "persistent_validator_sharing_violation_has_a_fixed_retry_limit"
+          }
+        ]
       },
       "sourceAudit": "root",
       "sourceRecord": {
@@ -1394,6 +1943,45 @@
         "subject": "Картинки и How To Fish",
         "legacy": "Определение формата по байтам, cache/retry",
         "native": "Исправлено: декодирование .img без расширения, retry, ETag и Last-Modified, origin-relative URL и общий запрос одного адреса"
+      },
+      "reviewNote": "В повторных проверках исправлен отдельный дефект тестового сервера: ответ с заведомо большим размером ошибочно передавался частями вместо Content-Length, задерживал запрос и мог исчерпать ожидание соседнего теста. Причина первоначального единичного сбоя ETag не установлена. 21 отдельный повтор и один полный библиотечный прогон из 128 проверок прошли, но это не доказывает связь исходного сбоя с найденным дефектом теста. Окончательный общий локальный прогон после правок пройден; это не устанавливает причину исходного единичного сбоя. Чтение .meta повторяется только при временных Windows-ошибках 32/33: до трёх дополнительных попыток с задержкой 25 мс в фоновом потоке. Реальная блокировка файла с кодом 32 воспроизведена тестом: после освобождения файла условный запрос сохраняет ETag. Отсутствующий файл, отказ доступа, неверный JSON и несовпадение хеша не признаются корректными. Проверки пройдены локально. Механизм временной блокировки подтверждён, но причина первоначального единичного сбоя ETag остаётся неустановленной.",
+      "investigation": {
+        "originalFailure": {
+          "state": "unexplained",
+          "log": ".cache/native-alias-tests-before-media-diagnostics.log",
+          "passed": 127,
+          "failed": 1
+        },
+        "isolatedRechecks": {
+          "passed": 21,
+          "source": "Результаты отдельных запусков подтверждены координатором проверки"
+        },
+        "fullLibraryRecheck": {
+          "passed": 128,
+          "failed": 0,
+          "log": ".cache/native-media-diagnostic-full.log"
+        },
+        "separateFixtureTimeout": {
+          "state": "identified-and-fixed",
+          "log": ".cache/native-media-diagnostic-2.log",
+          "cause": "tiny_http changed the oversized response to chunked transfer; a striped URL lock delayed another test beyond its server wait"
+        },
+        "finalValidation": "local-final-gate-passed",
+        "boundedMetadataRetry": {
+          "state": "local-final-gate-passed",
+          "head": "1a1d8761b6ea9f75694cbc820ee637ab6e01bf3f",
+          "passedInvocations": 340,
+          "uniqueTests": 215,
+          "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+          "windowsMsvc": "pending-recheck",
+          "maxScheduledAdditionalDelayMs": 75,
+          "retryWindowsCodes": [
+            32,
+            33
+          ],
+          "windowsCode32MechanismConfirmed": true,
+          "originalEtagFailureCause": "not-established"
+        }
       },
       "relatedIds": [
         "ROOT-015"
@@ -1513,12 +2101,12 @@
     {
       "id": "ROOT-024",
       "area": "Оболочка и общие службы",
-      "category": "remaining",
+      "category": "fixed",
       "originalStatus": "remaining",
       "title": "Параллельный запуск разных копий",
       "legacyBehavior": "Состояние запуска хранится отдельно для Steam/local × mods/plain; соседняя копия может запускаться, пока первая ждёт Steam",
-      "currentBehavior": "Запущенные процессы различаются по папке; на время одного незавершённого запуска действует общий operation_busy. Одновременное ожидание запуска двух копий не реализовано",
-      "description": "Пока одна копия ожидает запуска, начать второй запуск нельзя: блокировка действует на весь лаунчер. Уже запущенные процессы отслеживаются раздельно по папкам.",
+      "currentBehavior": "Запуски разных игр и разных копий больше не блокируются общей занятостью интерфейса. Повторный запуск той же копии блокируется независимо от режима модов; реальные файловые блокировки сохранены. Ошибка и паника фонового запуска освобождают его состояние.",
+      "description": "Запуски разных игр и разных копий больше не блокируются общей занятостью интерфейса. Повторный запуск той же копии блокируется независимо от режима модов; реальные файловые блокировки сохранены. Ошибка и паника фонового запуска освобождают его состояние.",
       "evidence": {
         "legacy": [
           {
@@ -1536,6 +2124,12 @@
           },
           {
             "path": "launcher/ChillHub.Native/src/launch.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/controller.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/controller_tests.rs"
           }
         ],
         "tests": []
@@ -1547,6 +2141,15 @@
         "subject": "Параллельный запуск разных копий",
         "legacy": "Состояние запуска хранится отдельно для Steam/local × mods/plain; соседняя копия может запускаться, пока первая ждёт Steam",
         "native": "Запущенные процессы различаются по папке; на время одного незавершённого запуска действует общий operation_busy. Одновременное ожидание запуска двух копий не реализовано"
+      },
+      "previousReview": {
+        "category": "remaining",
+        "description": "Пока одна копия ожидает запуска, начать второй запуск нельзя: блокировка действует на весь лаунчер. Уже запущенные процессы отслеживаются раздельно по папкам."
+      },
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
       }
     },
     {
@@ -2785,6 +3388,8 @@
         }
       },
       "relatedIds": [
+        "PATH-002",
+        "PATH-DECISION-001",
         "ROOT-003",
         "UI-001",
         "UI-002",
@@ -2967,7 +3572,7 @@
       "category": "remaining",
       "originalStatus": "remaining",
       "title": "Оформление установщика и деинсталлятора",
-      "description": "Оба окна используют стандартный интерфейс NSIS MUI. Единый графитовый стиль основного приложения и помощников на них не распространён. Это невыполненная часть запроса на согласованный дизайн всех экранов, а не согласованное исключение.",
+      "description": "Установщик и деинсталлятор получили палитру Chill Hub, Segoe UI, фирменную иллюстрацию, тёмный заголовок и поддержку DPI. Страницы приветствия и папки просмотрены в Windows. Кнопки, системное подтверждение и рамки NSIS остаются стандартными Win32: полного визуального совпадения со Slint ещё нет.",
       "evidence": {
         "legacy": [
           {
@@ -3062,14 +3667,20 @@
               8
             ],
             "note": "The shared Slint palette is used by app/auxiliary windows, not by NSIS."
+          },
+          {
+            "path": "scripts/installer.nsi"
+          },
+          {
+            "path": "scripts/native-installer-artwork.ps1"
           }
         ],
         "tests": []
       },
       "validation": {
-        "state": "confirmed-source-review",
-        "method": "Read the complete native installer entrypoint, relevant current/baseline NSIS UI regions and searched the entire current NSIS file for styling hooks. This supplemental review does not extend the original 108-file full-read claim.",
-        "note": "The 155-state headless Slint rendering matrix does not cover NSIS. No installer/uninstaller GUI was launched."
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
       },
       "sourceAudit": "design_review",
       "sourceRecord": {
@@ -3180,7 +3791,12 @@
           "method": "Read the complete native installer entrypoint, relevant current/baseline NSIS UI regions and searched the entire current NSIS file for styling hooks. This supplemental review does not extend the original 108-file full-read claim.",
           "note": "The 155-state headless Slint rendering matrix does not cover NSIS. No installer/uninstaller GUI was launched."
         }
-      }
+      },
+      "previousReview": {
+        "category": "remaining",
+        "description": "Оба окна используют стандартный интерфейс NSIS MUI. Единый графитовый стиль основного приложения и помощников на них не распространён. Это невыполненная часть запроса на согласованный дизайн всех экранов, а не согласованное исключение."
+      },
+      "currentBehavior": "Установщик и деинсталлятор получили палитру Chill Hub, Segoe UI, фирменную иллюстрацию, тёмный заголовок и поддержку DPI. Страницы приветствия и папки просмотрены в Windows. Кнопки, системное подтверждение и рамки NSIS остаются стандартными Win32: полного визуального совпадения со Slint ещё нет."
     },
     {
       "id": "DOMAIN-001",
@@ -3399,6 +4015,7 @@
         "resolution": "Фоновая проверка использует root/version/API-bound манифест, fingerprint и hash cache. Изменившаяся установка проверяется и офлайн; неизменившаяся не перечитывает гигабайты при выборе игры."
       },
       "relatedIds": [
+        "PATH-004",
         "ROOT-014",
         "DOMAIN-003",
         "DOMAIN-008"
@@ -3407,7 +4024,7 @@
     {
       "id": "DOMAIN-005",
       "area": "Игры, модпаки и загрузки",
-      "category": "changed-behavior",
+      "category": "confirmed-parity",
       "originalStatus": "intended-change",
       "title": "Уточнение контракта: основная команда проверки уже восстанавливала файлы",
       "description": "Первоначальное предположение о регрессии отозвано после полного чтения основного queue Verify: исправление повреждённых файлов было частью старого поведения. Native сохраняет восстановление и отдельное подтверждение удаления лишних файлов. Это сохранённый контракт, не незавершённый баг.",
@@ -4139,6 +4756,7 @@
         "resolution": "Реализация launch_ux: создание после успешной установки базы; удаление только actual target + parsed matching local arguments. Чужие одноимённые ссылки и Steam-ссылки сохраняются; hook удаления best effort после физического удаления."
       },
       "relatedIds": [
+        "PATH-007",
         "game-shortcut-lifecycle"
       ]
     },
@@ -4148,7 +4766,7 @@
       "category": "fixed",
       "originalStatus": "fixed",
       "title": "Устаревшая кнопка установки могла неожиданно запустить уже готовую игру",
-      "description": "Перед выполнением запоминается показанное действие кнопки. Если устаревшее «Установить» уже сменилось на «Играть», первое нажатие не запускает игру неожиданно: интерфейс предлагает нажать обновлённую кнопку ещё раз. Контроллерные тесты окончательного прогона пройдены: 25 из 25.",
+      "description": "Перед выполнением запоминается показанное действие кнопки. Если устаревшее «Установить» уже сменилось на «Играть», первое нажатие не запускает игру неожиданно: интерфейс предлагает нажать обновлённую кнопку ещё раз. Этот переход покрыт контроллерной проверкой; результат текущего общего прогона приведён отдельно.",
       "evidence": {
         "legacy": [
           "launcher/ChillHub/Core/Mods/LaunchButtons.cs",
@@ -4442,10 +5060,10 @@
     {
       "id": "updater-icon-refresh",
       "area": "Обновление и сборка",
-      "category": "remaining",
+      "category": "fixed",
       "originalStatus": "remaining",
       "title": "Обновление значков в оболочке Windows",
-      "description": "После обновления Windows получает общее уведомление об изменении значка. Прежний отдельный обход ярлыков рабочего стола, меню Пуск и закреплённых приложений не перенесён; отдельные значки могут обновиться с задержкой.",
+      "description": "Обновлятор находит принадлежащие Chill Hub ярлыки на рабочем столе, в меню Пуск и среди закреплённых, включая переименованные. Обновляет оболочку только после проверки цели; чужие ярлыки сохраняются. Поиск ограничен и не следует ссылкам. Реальный кэш закреплённых значков остаётся отдельной живой проверкой.",
       "evidence": {
         "legacy": [
           {
@@ -4469,6 +5087,12 @@
             "startLine": 468,
             "endLine": 468,
             "anchor": "pub(super) fn refresh_shell_icons(exe:"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts/native.rs"
           }
         ],
         "tests": []
@@ -4510,6 +5134,16 @@
         "status": "remaining",
         "resolution": "Added SHCNE_UPDATEITEM for launcher and SHCNE_ASSOCCHANGED after commit. Targeted shortcut enumeration/ie4uinit fallback remain a narrower behavior than C#.",
         "initialFinding": "Native не обновляет кеш значков desktop/Start/taskbar после успешного self-update; C# посылает SHChangeNotify и запускает штатный ie4uinit -show."
+      },
+      "previousReview": {
+        "category": "remaining",
+        "description": "После обновления Windows получает общее уведомление об изменении значка. Прежний отдельный обход ярлыков рабочего стола, меню Пуск и закреплённых приложений не перенесён; отдельные значки могут обновиться с задержкой."
+      },
+      "currentBehavior": "Обновлятор находит принадлежащие Chill Hub ярлыки на рабочем столе, в меню Пуск и среди закреплённых, включая переименованные. Обновляет оболочку только после проверки цели; чужие ярлыки сохраняются. Поиск ограничен и не следует ссылкам. Реальный кэш закреплённых значков остаётся отдельной живой проверкой.",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
       }
     },
     {
@@ -4692,6 +5326,7 @@
         "resolution": "Fail-closed identity/lock/parent-exit checks intentionally replace old permissive fallback; security-session shared lease blocks updater throughout helper lifetime."
       },
       "relatedIds": [
+        "PATH-005",
         "ROOT-019",
         "security-window-lifetime"
       ]
@@ -4699,10 +5334,10 @@
     {
       "id": "updater-log-and-outcome-format",
       "area": "Обновление и сборка",
-      "category": "remaining",
+      "category": "fixed",
       "originalStatus": "remaining",
-      "title": "Старый результат обновления и запасной журнал",
-      "description": "Новый помощник хранит ограниченные журналы и результат обновления в новом формате. Результат, оставшийся от старого C# обновлятора, не импортируется и не показывается. Если папка данных недоступна, запасной журнал во временной папке не создаётся.",
+      "title": "Старый результат самообновления",
+      "description": "Native читает оставшийся результат C# обновлятора с ограничением размера и проверкой пути. Подтверждение привязано к конкретной записи: новый результат не теряется, старый файл не удаляется. Собственный результат Native имеет приоритет; резервные журналы сохраняются в TEMP.",
       "evidence": {
         "legacy": [
           {
@@ -4730,6 +5365,9 @@
             "path": "launcher/ChillHub.Native/src/helper_runtime.rs",
             "startLine": 34,
             "endLine": 34
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs"
           }
         ],
         "tests": [
@@ -4788,7 +5426,17 @@
       "relatedIds": [
         "ROOT-009",
         "LIMIT-001"
-      ]
+      ],
+      "previousReview": {
+        "category": "remaining",
+        "description": "Результат, оставшийся от старого C# обновлятора, не импортируется и не показывается. Новые результаты сохраняются. Прежнее дополнительное ограничение запасного журнала устранено: при недоступной папке данных помощники используют TEMP; см. LIMIT-001."
+      },
+      "currentBehavior": "Native читает оставшийся результат C# обновлятора с ограничением размера и проверкой пути. Подтверждение привязано к конкретной записи: новый результат не теряется, старый файл не удаляется. Собственный результат Native имеет приоритет; резервные журналы сохраняются в TEMP.",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
+      }
     },
     {
       "id": "updater-cli-and-preserve",
@@ -4947,6 +5595,7 @@
         "initialFinding": "Старый helper держал install mutex и SecurityUi весь срок окна; Native берёт SecurityUi только на время elevated apply."
       },
       "relatedIds": [
+        "PATH-005",
         "ROOT-019",
         "updater-parent-and-lock"
       ]
@@ -5162,7 +5811,10 @@
         "resolution": "Both encoded and legacy Remove requests require membership in caller AddedPaths; path validation permits removal of owned now-missing folders without recreating them.",
         "validation": "Consolidated Native gate:287 invocations,185 unique passed; linked fixtures plus package/bootstrapper static checks. Real system actions remain unexecuted.",
         "initialFinding": "Legacy --remove и старое окно ограничивают удаление AddedPaths; Native прямой --request Remove не пересекает список с журналом."
-      }
+      },
+      "relatedIds": [
+        "PATH-008"
+      ]
     },
     {
       "id": "security-vendor-guides",
@@ -5382,7 +6034,10 @@
         "resolution": "Safe missing Add directories remain in requests and are created by ordinary caller after explicit action; default update staging path restored.",
         "validation": "Consolidated Native gate:287 invocations,185 unique passed; linked fixtures plus package/bootstrapper static checks. Real system actions remain unexecuted.",
         "initialFinding": "Старый helper создаёт отсутствующие безопасные папки обычным пользователем после согласия. Native CLI silently retains only existing directories; --updates default отсутствует."
-      }
+      },
+      "relatedIds": [
+        "PATH-001"
+      ]
     },
     {
       "id": "updater-loop-repair",
@@ -5771,6 +6426,7 @@
         "validation": "Consolidated Native gate:287 invocations,185 unique passed; linked fixtures plus package/bootstrapper static checks. Real system actions remain unexecuted."
       },
       "relatedIds": [
+        "PATH-007",
         "DOMAIN-019"
       ]
     },
@@ -5875,7 +6531,10 @@
         "manualGap": "GitHub hosted MSVC gate ещё не выполнялся; локальные checks использовали GNU. Native NSIS runtime smoke не запускался; сборка/PE/hash verification отдельно.",
         "implementationStatus": "implemented-consolidated-gate-passed",
         "validation": "Consolidated Native gate:287 invocations,185 unique passed; linked fixtures plus package/bootstrapper static checks. Real system actions remain unexecuted."
-      }
+      },
+      "relatedIds": [
+        "BUILD-001"
+      ]
     },
     {
       "id": "native-icon-resource",
@@ -5949,10 +6608,10 @@
     {
       "id": "native-updater-version-syntax",
       "area": "Обновление и сборка",
-      "category": "remaining",
+      "category": "fixed",
       "originalStatus": "remaining",
       "title": "Формат версии самообновления",
-      "description": "Самообновление принимает только версии из 3–4 числовых частей. Старый клиент допускал 2–4 части и буквенные суффиксы. Обычный переход 1.7.20 → 1.8.1 не затронут; прежние нестандартные форматы пока не поддерживаются.",
+      "description": "Обновлятор принимает прежние версии из двух, трёх или четырёх числовых частей и ограниченного безопасного суффикса. Проверки пути, источника обновления, понижения версии и целостности сохранены.",
       "evidence": {
         "legacy": [
           {
@@ -5969,6 +6628,9 @@
             "startLine": 84,
             "endLine": 84,
             "anchor": "pub fn version_parts("
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs"
           }
         ],
         "tests": []
@@ -6002,7 +6664,17 @@
       },
       "relatedIds": [
         "ROOT-016"
-      ]
+      ],
+      "previousReview": {
+        "category": "remaining",
+        "description": "Самообновление принимает только версии из 3–4 числовых частей. Старый клиент допускал 2–4 части и буквенные суффиксы. Обычный переход 1.7.20 → 1.8.1 не затронут; прежние нестандартные форматы пока не поддерживаются."
+      },
+      "currentBehavior": "Обновлятор принимает прежние версии из двух, трёх или четырёх числовых частей и ограниченного безопасного суффикса. Проверки пути, источника обновления, понижения версии и целостности сохранены.",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
+      }
     },
     {
       "id": "native-installer-optional-signing",
@@ -6150,7 +6822,7 @@
     {
       "id": "DOMAIN-DECISION-001",
       "area": "Контракты поведения",
-      "category": "changed-behavior",
+      "category": "confirmed-parity",
       "originalStatus": "intended-change",
       "title": "Установка/обновление модов не запускает игру автоматически",
       "description": "Это сохранённое исполняемое поведение C#. Устаревший комментарий в другом тесте не использован как основание для автозапуска.",
@@ -6321,7 +6993,7 @@
       "category": "requested-removal",
       "originalStatus": "intended-change",
       "title": "Новости и отдельная новостная лента игры заменены структурированным описанием",
-      "description": "Прямое изменение по запросу пользователя: описание, преимущества и полный состав модпака, скриншоты/официальный трейлер/внешний русский gameplay. История версий и список версий остаются отдельными функциями.",
+      "description": "Прямое изменение по запросу пользователя: описание, преимущества и полный состав модпака, скриншоты и видео внутри лаунчера. Файловые ролики воспроизводятся через mpv, YouTube — через встроенный WebView2. История изменений и список опубликованных версий остаются отдельными функциями.",
       "evidence": {
         "legacy": [
           {
@@ -6415,7 +7087,7 @@
       "area": "Интерфейс",
       "category": "changed-behavior",
       "title": "Новая геометрия и оформление",
-      "description": "Старая WPF-компоновка заменена графитовым интерфейсом с сиреневым акцентом. Отсутствие караоке отдельно отмечено как несогласованное отличие.",
+      "description": "Старая WPF-компоновка заменена графитовым интерфейсом с сиреневым акцентом. Музыкальная строка доступна отдельной настройкой; сведения об игре, выбор копии и режима, медиа и модпак собраны на одной странице.",
       "evidence": {
         "legacy": [],
         "native": [
@@ -6427,6 +7099,9 @@
           },
           {
             "path": "launcher/ChillHub.Native/src/queue_ui.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/ui/app.slint"
           }
         ],
         "tests": []
@@ -6435,7 +7110,17 @@
       "sourceRecord": "Karaoke header and original WPF geometry replaced by agreed graphite/lilac design; this is a design change, not an invented explicit removal instruction.",
       "relatedIds": [
         "ROOT-002"
-      ]
+      ],
+      "previousReview": {
+        "category": "changed-behavior",
+        "description": "Старая WPF-компоновка заменена графитовым интерфейсом с сиреневым акцентом. Отсутствие караоке отдельно отмечено как несогласованное отличие."
+      },
+      "currentBehavior": "Старая WPF-компоновка заменена графитовым интерфейсом с сиреневым акцентом. Музыкальная строка доступна отдельной настройкой; сведения об игре, выбор копии и режима, медиа и модпак собраны на одной странице.",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
+      }
     },
     {
       "id": "UI-DESIGN-004",
@@ -6511,37 +7196,126 @@
     },
     {
       "id": "LIMIT-001",
-      "category": "remaining",
+      "category": "fixed",
       "area": "Оставшиеся ограничения",
       "title": "Запасной журнал при недоступной папке данных",
-      "description": "У основного клиента и помощников нет прежнего перехода к TEMP или текущему каталогу. При недоступной папке данных диагностический журнал не сохраняется в запасном месте.",
+      "description": "Если папка данных недоступна, журналы основного приложения и помощников сохраняются в отдельной временной папке пользователя. Объём ограничен, сообщение указывает фактический путь. Настройки, игры и очередь отчётов туда не переносятся. Существующие журналы можно открыть и при отключённой записи; пустая основная папка не скрывает резервные файлы. Локальные проверки восстановления, выбора журнала и защиты посторонних файлов пройдены. Текущая рабочая папка для журналов не используется.",
       "relatedIds": [
         "ROOT-009",
         "updater-log-and-outcome-format"
       ],
       "evidence": {
         "legacy": [],
-        "native": [],
-        "tests": []
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "log_with_fallback"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/helper_runtime.rs",
+            "symbol": "HelperLog::with_fallback"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostic_bundle.rs",
+            "symbol": "collect"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/controller.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/main.rs"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "empty_primary_directory_does_not_hide_existing_fallback_logs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "newest_existing_log_wins_after_restart_but_active_process_path_has_priority"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "old_logs_can_be_opened_without_enabling_or_writing_new_records"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "opening_existing_fallback_logs_does_not_create_primary_or_missing_folders"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "unavailable_profile_logs_only_to_injected_temp_and_reports_actual_path"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "writable_profile_keeps_primary_log_and_does_not_create_fallback"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "fallback_rotation_remains_bounded_and_unknown_profile_never_uses_cwd"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "both_unavailable_locations_are_an_error_without_claiming_a_log_path"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs",
+            "symbol": "planted_hardlink_is_not_written_and_fallback_is_also_guarded"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/helper_runtime.rs",
+            "symbol": "both_helpers_fall_back_to_injected_temp_and_report_the_real_log"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/helper_runtime.rs",
+            "symbol": "helper_fallback_preserves_retention_and_reports_both_location_failures"
+          }
+        ]
       },
-      "sourceAudit": "consolidated"
+      "sourceAudit": "consolidated",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "1a1d8761b6ea9f75694cbc820ee637ab6e01bf3f",
+        "passedInvocations": 340,
+        "uniqueTests": 215,
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
     },
     {
       "id": "LIMIT-002",
-      "category": "remaining",
+      "category": "fixed",
       "area": "Оставшиеся ограничения",
       "title": "Уведомление об автоматической отправке ошибки",
-      "description": "Внутренние UI-события AutoReported/Suppressed из C# не перенесены. Сама отправка, ограничения частоты и сохранение неотправленных отчётов реализованы.",
+      "description": "После подтверждённой отправки автоматического отчёта появляется уведомление. При исчерпанной квоте показывается однократное уведомление об отсрочке. Уведомления ограничены, привязаны к профилю и не вытесняют исходное сообщение об ошибке.",
       "relatedIds": [
         "ROOT-010",
         "FEATURE-006"
       ],
       "evidence": {
         "legacy": [],
-        "native": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/diagnostics.rs"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/controller.rs"
+          }
+        ],
         "tests": []
       },
-      "sourceAudit": "consolidated"
+      "sourceAudit": "consolidated",
+      "previousReview": {
+        "category": "remaining",
+        "description": "Внутренние UI-события AutoReported/Suppressed из C# не перенесены. Сама отправка, ограничения частоты и сохранение неотправленных отчётов реализованы."
+      },
+      "currentBehavior": "После подтверждённой отправки автоматического отчёта появляется уведомление. При исчерпанной квоте показывается однократное уведомление об отсрочке. Уведомления ограничены, привязаны к профилю и не вытесняют исходное сообщение об ошибке.",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log"
+      }
     },
     {
       "id": "FEATURE-001",
@@ -6575,7 +7349,8 @@
         "native": [],
         "tests": []
       },
-      "sourceAudit": "consolidated"
+      "sourceAudit": "consolidated",
+      "reviewNote": "Категории модов доступны в компактном выпадающем списке со счётчиком результатов. Горизонтальная прокрутка категорий убрана. Выбор последней категории с клавиатуры проверяется при 900×500; открытый список прокручивается к выбранному пункту."
     },
     {
       "id": "FEATURE-003",
@@ -6585,7 +7360,8 @@
       "description": "Задачи, частичные файлы и зависимости базы и модпака сохраняются. Завершённая история ограничена, повреждённая очередь не затирается при старте.",
       "relatedIds": [
         "DOMAIN-DECISION-004",
-        "DOMAIN-017"
+        "DOMAIN-017",
+        "PATH-003"
       ],
       "evidence": {
         "legacy": [],
@@ -6664,7 +7440,7 @@
       "category": "unverified-live",
       "area": "Ручные проверки",
       "title": "Настоящее окно, изменение размера и ресурсы",
-      "description": "Окончательная сборка не проверена живым перетаскиванием края окна, на нескольких DPI и под нагрузкой. Остались русский ввод, клавиатура, трей, запуск из ярлыка после закрытия и отображение версий в настоящем окне. Старые замеры прототипа не подтверждают показатели после последующих изменений.",
+      "description": "Пакет 172423 запущен в изолированном профиле: проверены изменение ширины и высоты за край, фильтр модпаков, иконка How To Fish, заголовок R.E.P.O., настройки и прокрутка. Найденное обрезание статуса запуска исправлено. Это не измерение плавности: многомониторный DPI, кадры во время непрерывного ресайза и новое сравнение RAM/CPU/GPU пока не подтверждены. Самый свежий пакет 183222 также запущен в изолированном профиле: после разблокировки Windows подтверждены четыре игры в фильтре модпаков, иконка How To Fish, компактные преимущества Lethal Company и доступность кнопки всех 161 модов. Дальнейшие нажатия прерывались обнаружением внешнего пользовательского ввода и сменой активного окна; живой выбор категории, видео и ресайз этой сборки не объявляются пройденными. Подробности сохранены в .cache/native-final-live-review.json.",
       "evidence": {
         "legacy": [],
         "native": [],
@@ -6672,15 +7448,21 @@
       },
       "sourceAudit": "consolidated",
       "validation": {
-        "state": "not-executed"
-      }
+        "state": "partially-verified-live",
+        "evidence": ".cache/native-live-review.json"
+      },
+      "previousReview": {
+        "category": "unverified-live",
+        "description": "Окончательная сборка не проверена живым перетаскиванием края окна, на нескольких DPI и под нагрузкой. Остались русский ввод, клавиатура, трей, запуск из ярлыка после закрытия и отображение версий в настоящем окне. Старые замеры прототипа не подтверждают показатели после последующих изменений."
+      },
+      "currentBehavior": "Пакет 172423 запущен в изолированном профиле: проверены изменение ширины и высоты за край, фильтр модпаков, иконка How To Fish, заголовок R.E.P.O., настройки и прокрутка. Найденное обрезание статуса запуска исправлено. Это не измерение плавности: многомониторный DPI, кадры во время непрерывного ресайза и новое сравнение RAM/CPU/GPU пока не подтверждены. Самый свежий пакет 183222 также запущен в изолированном профиле: после разблокировки Windows подтверждены четыре игры в фильтре модпаков, иконка How To Fish, компактные преимущества Lethal Company и доступность кнопки всех 161 модов. Дальнейшие нажатия прерывались обнаружением внешнего пользовательского ввода и сменой активного окна; живой выбор категории, видео и ресайз этой сборки не объявляются пройденными. Подробности сохранены в .cache/native-final-live-review.json."
     },
     {
       "id": "LIVE-002",
       "category": "unverified-live",
       "area": "Ручные проверки",
       "title": "Видео в настоящем окне Windows",
-      "description": "Не выполнена итоговая проверка встроенных mpv и YouTube/WebView2: первого кадра, переключения, звука, отказа автора во встраивании, отсутствующего WebView2, Escape и фокуса, закрытия до загрузки и завершения процесса проигрывателя. Снимки интерфейса без живого окна не проверяют настоящую область видео.",
+      "description": "В пакете 172423 официальный MP4-трейлер over the hill воспроизвёлся после одного нажатия; видны движущиеся кадры и время, журнал подтверждает запуск аудио. После закрытия дочерние процессы завершились. Три YouTube-ролика вернули ошибку. Дополнительная проверка всех девяти роликов и контрольного примера в Chromium получила код 150; контрольный плеер показал требование войти, чтобы подтвердить, что пользователь не бот. По этому коду нельзя обвинять автора в запрете встраивания: сообщение исправлено. Успешное воспроизведение блогерского ролика внутри окна пока не подтверждено.",
       "evidence": {
         "legacy": [],
         "native": [],
@@ -6688,8 +7470,14 @@
       },
       "sourceAudit": "consolidated",
       "validation": {
-        "state": "not-executed"
-      }
+        "state": "partially-verified-live",
+        "evidence": ".cache/native-live-review.json"
+      },
+      "previousReview": {
+        "category": "unverified-live",
+        "description": "Не выполнена итоговая проверка встроенных mpv и YouTube/WebView2: первого кадра, переключения, звука, отказа автора во встраивании, отсутствующего WebView2, Escape и фокуса, закрытия до загрузки и завершения процесса проигрывателя. Снимки интерфейса без живого окна не проверяют настоящую область видео."
+      },
+      "currentBehavior": "В пакете 172423 официальный MP4-трейлер over the hill воспроизвёлся после одного нажатия; видны движущиеся кадры и время, журнал подтверждает запуск аудио. После закрытия дочерние процессы завершились. Три YouTube-ролика вернули ошибку. Дополнительная проверка всех девяти роликов и контрольного примера в Chromium получила код 150; контрольный плеер показал требование войти, чтобы подтвердить, что пользователь не бот. По этому коду нельзя обвинять автора в запрете встраивания: сообщение исправлено. Успешное воспроизведение блогерского ролика внутри окна пока не подтверждено."
     },
     {
       "id": "LIVE-003",
@@ -6705,14 +7493,17 @@
       "sourceAudit": "consolidated",
       "validation": {
         "state": "not-executed"
-      }
+      },
+      "relatedIds": [
+        "PATH-008"
+      ]
     },
     {
       "id": "LIVE-004",
       "category": "unverified-live",
       "area": "Ручные проверки",
       "title": "Установка и удаление Native через NSIS",
-      "description": "Сборка установщика и проверка PE/хешей не заменяют установку, запуск, откат и удаление на чистой Windows с проверкой старых ярлыков и сохранности данных. Смена папки игр с перезапуском и сохранением старой папки также не проверена вживую.",
+      "description": "Новый установщик собран; страницы приветствия и выбора папки проверены в живом окне без установки в пользовательский профиль. Поддержка DPI добавлена. Автоматическая установка и удаление Native на временной машине CI проверяются отдельно; переход со старой реальной установки, UAC и аварийный откат этим не покрываются. В текущем CI установка, переустановка и удаление Native на временной Windows прошли.",
       "evidence": {
         "legacy": [],
         "native": [],
@@ -6720,8 +7511,14 @@
       },
       "sourceAudit": "consolidated",
       "validation": {
-        "state": "not-executed"
-      }
+        "state": "partially-verified-live",
+        "evidence": ".cache/native-live-review.json"
+      },
+      "previousReview": {
+        "category": "unverified-live",
+        "description": "Сборка установщика и проверка PE/хешей не заменяют установку, запуск, откат и удаление на чистой Windows с проверкой старых ярлыков и сохранности данных. Смена папки игр с перезапуском и сохранением старой папки также не проверена вживую."
+      },
+      "currentBehavior": "Новый установщик собран; страницы приветствия и выбора папки проверены в живом окне без установки в пользовательский профиль. Поддержка DPI добавлена. Автоматическая установка и удаление Native на временной машине CI проверяются отдельно; переход со старой реальной установки, UAC и аварийный откат этим не покрываются. В текущем CI установка, переустановка и удаление Native на временной Windows прошли."
     },
     {
       "id": "LIVE-005",
@@ -6741,19 +7538,44 @@
     },
     {
       "id": "LIVE-006",
-      "category": "unverified-live",
+      "category": "confirmed-parity",
       "area": "Ручные проверки",
       "title": "Windows/MSVC в CI",
-      "description": "Локальные проверки использовали GNU toolchain. Новый путь Windows/MSVC в CI ещё не был выполнен; в основном проекте используется собственный win-builder, в копиях репозитория — windows-latest.",
+      "description": "Windows/MSVC CI прошёл на текущем исходном коде: форматирование, Clippy, тесты, три Release-приложения и проверка установщика. Это не заменяет игровые, UAC и многомониторные проверки.",
       "evidence": {
         "legacy": [],
         "native": [],
-        "tests": []
+        "tests": [
+          {
+            "url": "https://github.com/samoy-love/chillhub/actions/runs/42798798175",
+            "title": "CI #707 — исходные ошибки Windows/MSVC",
+            "commit": "3f735fa515b73399323385ff416cf15614ff3f77"
+          },
+          {
+            "url": "https://github.com/samoy-love/chillhub/actions/runs/42820129398",
+            "title": "Повторный CI #710 — результат ожидается",
+            "commit": "1a1d8761b6ea9f75694cbc820ee637ab6e01bf3f"
+          },
+          {
+            "url": "https://github.com/samoy-love/chillhub/actions/runs/42875113793",
+            "title": "Текущий CI",
+            "commit": "c5629ee63574de344f779e57d49e541076b398f6"
+          }
+        ]
       },
       "sourceAudit": "consolidated",
       "validation": {
-        "state": "not-executed"
-      }
+        "number": 719,
+        "head": "c5629ee63574de344f779e57d49e541076b398f6",
+        "state": "passed",
+        "nativeState": "passed",
+        "nativeInstallerSmoke": "passed",
+        "url": "https://github.com/samoy-love/chillhub/actions/runs/42875113793",
+        "jobId": 130036363014,
+        "checkedUtc": "2026-11-10T18:49:34.5711488Z",
+        "previousPassedRun": "https://github.com/samoy-love/chillhub/actions/runs/42870579645"
+      },
+      "currentBehavior": "Windows/MSVC CI прошёл на текущем исходном коде: форматирование, Clippy, тесты, три Release-приложения и проверка установщика. Это не заменяет игровые, UAC и многомониторные проверки."
     },
     {
       "id": "LIVE-007",
@@ -6802,6 +7624,518 @@
       "validation": {
         "state": "not-executed"
       }
+    },
+    {
+      "id": "PATH-001",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Короткое и полное имя одной папки Windows",
+      "description": "Существующая часть пути приводится к настоящей папке Windows; ещё не созданный хвост сохраняется без создания каталогов. Так короткие имена 8.3 и полные имена больше не дают разные результаты проверки защищённых папок. Неизвестные пути не считаются одинаковыми; проверки ссылок и точек повторной обработки сохранены.",
+      "relatedIds": [
+        "security-first-install-paths"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/paths.rs",
+            "line": 6,
+            "symbol": "pub fn canonical_path_with_missing"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/paths.rs",
+            "line": 50,
+            "symbol": "pub fn path_identity"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 843,
+            "symbol": "fn same_path"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 886,
+            "symbol": "fn within"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/paths.rs",
+            "line": 260,
+            "symbol": "fn identity_resolves_short_and_verbatim_ancestors_without_creating_missing_paths"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 932,
+            "symbol": "fn protected_and_offered_directory_aliases_have_one_identity"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "PATH-002",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Игры остаются отдельно от лаунчера и настроек",
+      "description": "Нельзя выбрать папку игр внутри установки или настроек, используя короткое имя родительского каталога. Проверяется и ещё не созданная папка. У самообновления установка, настройки, игры и временный пакет также сравниваются по фактическому расположению.",
+      "relatedIds": [
+        "UI-015",
+        "PATH-DECISION-001"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/library.rs",
+            "line": 53,
+            "symbol": "pub fn validate_games_location"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs",
+            "line": 44,
+            "symbol": "pub fn validate(&self)"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/library.rs",
+            "line": 149,
+            "symbol": "fn aliases_cannot_place_games_inside_install_or_settings_even_before_creation"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs",
+            "line": 1140,
+            "symbol": "fn aliases_share_update_identity_and_cannot_bypass_separate_directories"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "PATH-003",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Смена написания пути не скрывает загрузку",
+      "description": "Приостановленная задача остаётся связанной с той же папкой при переходе между коротким и полным именем. Повторное добавление не создаёт дубликат; удаление, новая загрузка и проверка не обходят занятую папку. Интерфейс показывает «В очереди». Определение расположения выполняется в фоновом рабочем потоке.",
+      "relatedIds": [
+        "FEATURE-003"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/queue.rs",
+            "line": 212,
+            "symbol": "pub fn has_pending_for_root"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/queue.rs",
+            "line": 263,
+            "symbol": "pub fn enqueue"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/service.rs",
+            "line": 69,
+            "symbol": "pub fn verify_game_status"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/service.rs",
+            "line": 414,
+            "symbol": "pub fn delete_local"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/controller.rs",
+            "line": 223,
+            "symbol": "let queued = services.queue.has_pending_for_root"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/queue.rs",
+            "line": 1050,
+            "symbol": "fn restored_queue_matches_short_and_canonical_ancestors_before_game_exists"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/queue.rs",
+            "line": 1077,
+            "symbol": "fn unresolved_queue_identities_never_match_other_unknown_paths"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/service.rs",
+            "line": 683,
+            "symbol": "fn paused_alias_task_blocks_delete_enqueue_estimate_and_integrity_checks"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/controller_tests.rs",
+            "line": 195,
+            "symbol": "fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "PATH-004",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Результат проверки игры сохраняется без сети",
+      "description": "Повреждённая игра не становится исправной только из-за другого написания пути. Состояние проверки в памяти, сохранённый манифест и сброс кэша используют одну папку. Интеграционный сценарий проверяет короткий путь, пропавшую DLL, сброс состояния и повторное использование манифеста без нового сетевого запроса.",
+      "relatedIds": [
+        "ROOT-014",
+        "DOMAIN-004"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/integrity.rs",
+            "line": 46,
+            "symbol": "fn key"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/integrity.rs",
+            "line": 83,
+            "symbol": "pub fn check"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/tests/application_flow_tests.rs",
+            "line": 340,
+            "symbol": "fn background_integrity_detects_missing_dll_offline_and_preserves_user_files"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "PATH-005",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Обновлятор и помощник разделяют одну блокировку",
+      "description": "Короткое и полное имя установки дают один ключ блокировки обновления. То же правило действует для временной сессии обновлятора и журнала настройки защиты. Проверка передачи управления между процессами не отклоняет правильный путь только из-за его альтернативного написания.",
+      "relatedIds": [
+        "updater-parent-and-lock",
+        "security-window-lifetime"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs",
+            "line": 1012,
+            "symbol": "pub fn update_mutex_name"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs",
+            "line": 602,
+            "symbol": "fn outcome_lock"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update_maintenance.rs",
+            "line": 219,
+            "symbol": "impl SessionLease"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 504,
+            "symbol": "fn journal_lock"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security_session.rs",
+            "line": 11,
+            "symbol": "impl SecurityLifetime"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs",
+            "line": 1140,
+            "symbol": "fn aliases_share_update_identity_and_cannot_bypass_separate_directories"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update_maintenance.rs",
+            "line": 497,
+            "symbol": "fn session_lease_is_exclusive_across_short_and_canonical_paths"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 951,
+            "symbol": "fn journal_lock_serializes_short_aliases_before_the_journal_exists"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "PATH-006",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Изолированный профиль не открывает два лаунчера",
+      "description": "Два написания одной папки данных больше не создают два независимых экземпляра изолированного профиля. Второй экземпляр обращается к первому. Обычный пользовательский профиль сохраняет прежний общий ключ блокировки.",
+      "relatedIds": [
+        "ROOT-005"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/desktop.rs",
+            "line": 109,
+            "symbol": "fn instance_suffix"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/desktop.rs",
+            "line": 124,
+            "symbol": "fn acquire_for_profile"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/desktop.rs",
+            "line": 859,
+            "symbol": "fn isolated_profile_aliases_share_instance_key_and_secondary_activation"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "PATH-007",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Ярлыки с русскими и другими Unicode-именами",
+      "description": "Чтение и запись ярлыков переведены с WScript на Unicode-интерфейсы Windows IShellLinkW/IPersistFile. Проверки русских и китайских имён, emoji, содержимого ярлыка и сохранения чужих ссылок прошли во всех локальных профилях. Это устраняет выявленный в CI #709 путь через WScript, возвращавший пустые поля русского .lnk в среде Windows-1252. Повторный полный Windows/MSVC CI ещё не подтверждён.",
+      "relatedIds": [
+        "DOMAIN-019",
+        "game-shortcut-lifecycle"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs",
+            "line": 162,
+            "symbol": "fn create_at"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs",
+            "line": 240,
+            "symbol": "fn path_key"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts/native.rs",
+            "symbol": "IShellLinkW / IPersistFile"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs",
+            "line": 365,
+            "symbol": "fn ownership_requires_target_and_matching_local_arguments"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs",
+            "line": 419,
+            "symbol": "fn temp_shell_shortcuts_roundtrip_and_remove_only_owned"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts.rs",
+            "symbol": "unicode_shell_links_preserve_all_fields_and_foreign_ownership"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/shortcuts/native.rs",
+            "symbol": "unicode_buffers_reject_nul_and_truncation"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "head": "1a1d8761b6ea9f75694cbc820ee637ab6e01bf3f",
+        "passedInvocations": 340,
+        "uniqueTests": 215,
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck",
+        "causeEstablished": true
+      }
+    },
+    {
+      "id": "PATH-008",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Удаляются только собственные записи исключений",
+      "description": "Одна папка может иметь несколько записей исключений с разным написанием. При удалении выбираются только записи из собственного журнала и сохраняется их точная строка, включая передачу помощнику с повышенными правами. Разные собственные записи не сливаются; чужая запись с другим написанием не подставляется вместо них. Доступ к самой папке защищён общей блокировкой. Настоящие изменения Defender этим раундом не проверялись.",
+      "relatedIds": [
+        "security-remove-owned-only",
+        "LIVE-003"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 848,
+            "symbol": "fn same_registered_path"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 851,
+            "symbol": "fn result_path_matches"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 868,
+            "symbol": "fn mutation_guards"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security_session.rs",
+            "line": 68,
+            "symbol": "mod windows"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 986,
+            "symbol": "fn removal_selects_owned_registered_alias_without_substituting_foreign_spelling"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/security.rs",
+            "line": 1022,
+            "symbol": "fn multiple_owned_aliases_keep_separate_results_and_share_one_filesystem_guard"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "PATH-DECISION-001",
+      "category": "changed-behavior",
+      "area": "Пути Windows и повторная проверка",
+      "title": "Недоступные папки проверяются строже",
+      "description": "Если фактическое расположение сетевой папки UNC неизвестно или Windows отказывает в доступе, сохранить новую папку игр или подготовить самообновление не получится: приложение покажет ошибку. Неизвестный путь не признаётся безопасным по одной строке. Исключение сохранено только для отсутствующего локального диска игр: его можно оставить в настройках, и он не блокирует самообновление на доступном диске. Установка, настройки и временный пакет обновления всё равно должны иметь проверяемое расположение.",
+      "relatedIds": [
+        "UI-015",
+        "PATH-002"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "launcher/ChillHub.Native/src/library.rs",
+            "line": 75,
+            "symbol": "pub(crate) fn location_identity"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/update.rs",
+            "line": 44,
+            "symbol": "pub fn validate(&self)"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/paths.rs",
+            "line": 6,
+            "symbol": "pub fn canonical_path_with_missing"
+          }
+        ],
+        "tests": [
+          {
+            "path": "launcher/ChillHub.Native/src/library.rs",
+            "line": 176,
+            "symbol": "fn unavailable_drive_setting_does_not_create_directories"
+          },
+          {
+            "path": "launcher/ChillHub.Native/src/paths.rs",
+            "line": 260,
+            "symbol": "fn identity_resolves_short_and_verbatim_ancestors_without_creating_missing_paths"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "local-final-gate-passed",
+        "log": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-130008-cbece815/evidence/tests.log",
+        "windowsMsvc": "pending-recheck"
+      }
+    },
+    {
+      "id": "BUILD-001",
+      "category": "fixed",
+      "area": "Пути Windows и повторная проверка",
+      "title": "C# 1.7.21 обновляет компоненты безопасности",
+      "description": "Сборка исходного клиента переведена на SDK 8.0.427 и компоненты .NET 8.0.33. Microsoft указывает 8.0.33 как исправленную версию ILCompiler для CVE-2026-111497. В C# 1.7.21 добавлена видимая строка «Обновлены компоненты безопасности лаунчера». Это обновление компонентов, без утверждения об эксплуатации уязвимости в Chill Hub.",
+      "relatedIds": [
+        "native-ci-and-package"
+      ],
+      "evidence": {
+        "legacy": [],
+        "native": [
+          {
+            "path": "scripts/ci/ensure-dotnet8.ps1",
+            "line": 8
+          },
+          {
+            "path": "launcher/ChillHub/ChillHub.csproj",
+            "line": 35
+          },
+          {
+            "path": "launcher/ChillHub/Core/Changelog/ChangelogData.cs",
+            "line": 47
+          },
+          {
+            "url": "https://github.com/dotnet/runtime/security/advisories/GHSA-p3jp-9v83-76w9",
+            "title": "Официальное уведомление Microsoft: CVE-2026-111497"
+          }
+        ],
+        "tests": [
+          {
+            "url": "https://github.com/samoy-love/chillhub/actions/runs/42798798175/job/129770769548",
+            "title": "CI #707: подготовка .NET, сборка и smoke C# установщика"
+          }
+        ]
+      },
+      "sourceAudit": "path-identity-follow-up",
+      "validation": {
+        "state": "legacy-ci-passed",
+        "run": "https://github.com/samoy-love/chillhub/actions/runs/42798798175",
+        "note": "Успех C# части не означает успех Native/MSVC."
+      }
     }
   ],
   "sourceAuditCounts": {
@@ -6809,7 +8143,8 @@
     "ui": 18,
     "domain": 20,
     "toolchain": 25,
-    "sourceFindingTotal": 87
+    "sourceFindingTotal": 87,
+    "followUpFindings": 10
   },
   "auditMethod": [
     "Полное чтение текста, а не вывод по именам файлов или отдельным результатам поиска.",
@@ -6823,41 +8158,151 @@
     "machineReadable": "tests/legacy-parity-review.json",
     "humanReadable": "docs/native-parity-review.html"
   },
+  "requestedChanges": [
+    {
+      "ids": [
+        "ROOT-001",
+        "DOMAIN-DECISION-006",
+        "UI-DESIGN-001"
+      ],
+      "description": "Убрать новостную ленту и отдельный раздел инструкции; показывать описание игры, медиа и содержимое модпака."
+    },
+    {
+      "ids": [
+        "UI-DESIGN-002"
+      ],
+      "description": "Убрать визуальные рамки фокуса, сохранив управление с клавиатуры."
+    },
+    {
+      "ids": [
+        "UI-DESIGN-003",
+        "FEATURE-007"
+      ],
+      "description": "Rust + Slint: общий стиль приложения и помощников. NSIS адаптирован по палитре, типографике и DPI, но сохраняет стандартные Win32-кнопки и диалоги."
+    },
+    {
+      "ids": [
+        "FEATURE-001",
+        "LIVE-002"
+      ],
+      "description": "Воспроизводить видео внутри лаунчера: mpv для файловых роликов и WebView2 для YouTube. Ранее обсуждавшийся внешний браузер не является итоговым выбранным вариантом."
+    },
+    {
+      "ids": [
+        "DOMAIN-DECISION-003"
+      ],
+      "description": "Не сохранять рабочий старый API для прежних клиентов: пользователь предусмотрел их немедленное обновление."
+    }
+  ],
+  "performanceValidation": {
+    "state": "not-measured-for-current-build",
+    "description": "Свежего сравнительного замера RAM, CPU и GPU для текущей полной сборки нет. Ранее измерялись прототипы; результаты не переносятся на последующие изменения кода. Размер exe/ZIP/установщика измерен отдельно и не заменяет аппаратные показатели.",
+    "relatedId": "LIVE-001"
+  },
   "implementationVersions": {
     "auditedBaseline": "1.7.20",
     "legacyBuild": "1.7.21",
     "nativeOptIn": "1.8.1",
-    "legacyVersionReason": "Техническое повышение версии C# связано с изменением общего установщика NSIS; оно не меняет baseline аудита.",
+    "legacyVersionReason": "Видимое обновление компонентов безопасности: SDK 8.0.427 и .NET 8.0.33; строка добавлена в список изменений C# 1.7.21. Baseline аудита остаётся 1.7.20.",
     "nativePublication": "Новый Native-клиент остаётся отдельным вариантом для проверки; публичная замена существующего клиента не выполнена."
   },
   "packaging": {
-    "directory": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-095442-92209553",
+    "directory": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7",
+    "sourceCommit": "c5629ee63574de344f779e57d49e541076b398f6",
+    "validationEvidence": [
+      {
+        "kind": "tests.log",
+        "path": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/tests.log",
+        "sha256": "80efc978bed1aa6c3384c46c11209c44140058bbff2c137a067e1b46ec57df4d"
+      },
+      {
+        "kind": "strict-clippy.log",
+        "path": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/strict-clippy.log",
+        "sha256": "a4da17d4940f5af3d245fc0bd61c75bb2b1982da645a432751634193b5fb79d0"
+      },
+      {
+        "kind": "release.log",
+        "path": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/release.log",
+        "sha256": "137c5abd2e3b4e9ecc5648c5e41b0c1db5d013ffb1f0c040a5a98c37512a3642"
+      }
+    ],
+    "sourceHashes": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/evidence/source-sha256.json",
+    "workingTreeChanges": [],
+    "builtUtc": "2026-11-10T18:31:59.7407023Z",
     "payloadFiles": 130,
-    "payloadBytes": 201914610,
-    "zipBytes": 98775920,
-    "installerBytes": 69558858,
-    "installerCompression": "solid LZMA",
+    "payloadBytes": 202107634,
+    "zipBytes": 98859699,
+    "zipSha256": "1bee42bf709108309b32ee1e868323dbb4388ff74689be9a06f475c29acc1a8e",
+    "installerBytes": 69599657,
+    "installerSha256": "b1f0b9a73953b8daadadefe77cf32257a323f9beb7a34337cc075539dfe82bfb",
+    "installerCompression": "solid-lzma-64MiB",
     "webView2Prerequisite": true,
     "releaseReady": false,
-    "pendingContractReviews": 9,
-    "parityResult": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-095442-92209553/parity-result.json",
+    "pendingContractReviews": 8,
+    "parityResult": "launcher/ChillHub.Native/dist/packages/1.8.1-20261110-183222-a841a1a7/parity-result.json",
     "executables": [
       {
         "name": "ChillHub.exe",
-        "bytes": 28375040,
-        "reductionFromNative180Percent": 52.27
+        "bytes": 28459008,
+        "sha256": "a5573c1b46ccaa6e2919c039a579cb7e4b0b20c166add3a46b4448ce47771f38"
       },
       {
         "name": "ChillHub.Updater.exe",
-        "bytes": 12248064,
-        "reductionFromNative180Percent": 78.65
+        "bytes": 12291072,
+        "sha256": "fae9079f1da718c44a73edc9a939bee800e7cbf5683c6294156433cca1cf4f5d"
       },
       {
         "name": "ChillHub.SecurityHelper.exe",
-        "bytes": 12237312,
-        "reductionFromNative180Percent": 78.68
+        "bytes": 12303360,
+        "sha256": "6780c507f646c3d49c96f8fbef45d976b3861d923aa52078da39cfab99c37506"
       }
     ],
-    "sizeNote": "Это размеры файлов на диске относительно Native 1.8.0, а не расход памяти, CPU, GPU или сравнение со старым C# клиентом."
+    "sizeNote": "Размер файлов на диске не означает расход памяти, CPU или GPU. Сравнение ресурсов свежей сборки с WebView2 ещё не проведено.",
+    "installed": false,
+    "interactiveUiVerified": "partial; see LIVE-001 and LIVE-002"
+  },
+  "followUpReview": {
+    "id": "windows-path-identity",
+    "changedRustFiles": [
+      "launcher/ChillHub.Native/src/controller.rs",
+      "launcher/ChillHub.Native/src/controller_tests.rs",
+      "launcher/ChillHub.Native/src/desktop.rs",
+      "launcher/ChillHub.Native/src/integrity.rs",
+      "launcher/ChillHub.Native/src/library.rs",
+      "launcher/ChillHub.Native/src/paths.rs",
+      "launcher/ChillHub.Native/src/queue.rs",
+      "launcher/ChillHub.Native/src/security.rs",
+      "launcher/ChillHub.Native/src/security_session.rs",
+      "launcher/ChillHub.Native/src/service.rs",
+      "launcher/ChillHub.Native/src/shortcuts.rs",
+      "launcher/ChillHub.Native/src/update.rs",
+      "launcher/ChillHub.Native/src/update_maintenance.rs",
+      "launcher/ChillHub.Native/tests/application_flow_tests.rs",
+      "launcher/ChillHub.Native/src/media.rs",
+      "launcher/ChillHub.Native/src/shortcuts/native.rs",
+      "launcher/ChillHub.Native/src/diagnostics.rs",
+      "launcher/ChillHub.Native/src/helper_runtime.rs",
+      "launcher/ChillHub.Native/src/diagnostic_bundle.rs",
+      "launcher/ChillHub.Native/src/main.rs"
+    ],
+    "findings": [
+      "PATH-001",
+      "PATH-002",
+      "PATH-003",
+      "PATH-004",
+      "PATH-005",
+      "PATH-006",
+      "PATH-007",
+      "PATH-008",
+      "PATH-DECISION-001",
+      "BUILD-001"
+    ],
+    "note": "Оставшиеся функциональные отличия реализованы и проверены локально; ограничение визуального совпадения NSIS и непроверенные реальные сценарии сохранены явно."
+  },
+  "pendingImplementationReview": {
+    "state": "local-final-gate-passed",
+    "head": "c5629ee63574de344f779e57d49e541076b398f6",
+    "passedInvocations": 357,
+    "uniqueTests": 224
   }
 }
