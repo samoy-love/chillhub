@@ -361,7 +361,7 @@
       "tests": [
         "web_video::tests::only_real_youtube_video_links_are_accepted",
         "web_video::tests::player_uses_official_api_and_first_party_identity_without_fallback_bypass",
-        "web_video::tests::playback_messages_recover_loading_but_keep_owner_restrictions_visible",
+        "web_video::tests::playback_messages_recover_loading_but_keep_platform_restrictions_visible",
         "web_video::tests::recoverable_browser_subprocess_exits_do_not_hide_the_player"
       ],
       "manual": "pending: real packaged YouTube playback, author-denied video, missing runtime fallback, Escape/focus, close-before-ready and browser-process exit after closing; unit tests do not establish these native behaviours"

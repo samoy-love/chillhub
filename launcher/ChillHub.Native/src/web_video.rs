@@ -109,8 +109,11 @@ pub fn canonical_url(source: &str) -> Result<String, String> {
 
 fn player_error(code: i64) -> String {
     match code {
+        // YouTube also returns 150 for sign-in / anti-bot challenges. The code
+        // alone cannot tell whether the uploader disabled embedding.
         101 | 150 => {
-            "Автор разрешает смотреть это видео только на YouTube. Откройте его на сайте.".into()
+            "YouTube ограничил просмотр во встроенном плеере. Попробуйте открыть видео на сайте."
+                .into()
         }
         100 => "Видео удалено, скрыто или недоступно. Проверьте его на YouTube.".into(),
         153 => "YouTube не подтвердил подключение плеера. Откройте видео на сайте.".into(),
@@ -716,11 +719,12 @@ mod tests {
         assert!(html.contains(ORIGIN));
         assert!(html.contains("youtube-nocookie.com"));
         assert!(!html.contains("video/mp4"));
-        assert!(player_error(101).contains("Автор"));
+        assert!(player_error(101).contains("YouTube"));
+        assert!(!player_error(101).contains("Автор"));
         assert_eq!(player_error(101), player_error(150));
     }
     #[test]
-    fn playback_messages_recover_loading_but_keep_owner_restrictions_visible() {
+    fn playback_messages_recover_loading_but_keep_platform_restrictions_visible() {
         let mut status = WebVideoStatus::default();
         apply_player_message(&mut status, &serde_json::json!({"type":"load-error"}));
         assert!(status.error.is_some());
@@ -730,7 +734,7 @@ mod tests {
         assert!(status.ready && status.error.is_none());
         apply_player_message(&mut status, &serde_json::json!({"type":"error","code":150}));
         assert_eq!(status.error_code, Some(150));
-        assert!(!status.ready && status.error.unwrap().contains("Автор"));
+        assert!(!status.ready && status.error.unwrap().contains("YouTube"));
     }
     #[test]
     fn recoverable_browser_subprocess_exits_do_not_hide_the_player() {
