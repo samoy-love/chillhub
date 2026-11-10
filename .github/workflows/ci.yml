@@ -859,6 +859,22 @@ jobs:
         if: needs.changes.result != 'success' || needs.changes.outputs.native == 'true'
         shell: pwsh
         run: ./scripts/ci/ensure-native-rust.ps1
+      - name: Пути кэша Native
+        id: native-cache
+        if: needs.changes.outputs.native == 'true'
+        shell: pwsh
+        run: |
+          "target=$(Join-Path $env:LOCALAPPDATA 'chillhub-tools/build-cache/chillhub-native')" >> $env:GITHUB_OUTPUT
+          "registry=$(Join-Path $env:CARGO_HOME 'registry')" >> $env:GITHUB_OUTPUT
+      - name: Кэш зависимостей Native
+        if: needs.changes.outputs.native == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.native-cache.outputs.target }}
+            ${{ steps.native-cache.outputs.registry }}
+          key: native-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}
+          restore-keys: native-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-
       - name: Native — формат, Clippy, тесты и три Release-приложения
         if: needs.changes.result != 'success' || needs.changes.outputs.native == 'true'
         shell: pwsh
