@@ -52,24 +52,11 @@ permissions:
 #                 разбор, кого из троих задело, делает `changes`, и дублировать
 #                 его здесь значило бы завести второй список, который однажды
 #                 разойдётся с первым.
-#   launcher/ChillHub/**, launcher/*, updater/**, Directory.Build.props,
-#   scripts/build-installer.ps1, scripts/installer.nsi, scripts/app.ico,
-#   scripts/ci/ensure-nsis.ps1
-#                 client: всё, из чего build-installer.ps1 собирает
-#                 установщик. Каталог launcher/ разобран на два глоба, а не
-#                 взят целиком: build-installer.ps1 собирает ровно
-#                 launcher/ChillHub/ChillHub.csproj, а launcher/tests/ в
-#                 артефакт не входит и ни одного раздаваемого байта не меняет.
-#                 Взятый целиком, он требовал релиза клиента ради обновления
-#                 тестового пакета — гейт версии видит правку launcher/ и
-#                 требует роста <Version>. `launcher/*` оставляет файлы прямо
-#                 в каталоге (сейчас .gitattributes): они общие для обоих
-#                 проектов. Апдейтер входит ProjectReference'ом, props —
-#                 общие свойства компиляции, общие файлы в scripts/ — сам
-#                 сценарий сборки, сценарий NSIS, иконка и установка NSIS
-#                 (закреплённая там версия компилятора — тоже вход сборки).
-#                 Остальной scripts/** в артефакт не попадает и цель не
-#                 задевает.
+#   launcher/ChillHub.Native/**, scripts/native-*, installer.nsi, app.ico,
+#   ensure-webview2-bootstrapper.ps1, ci/ensure-{nsis,native-rust}.ps1
+#                 client: Rust-приложение, оба помощника, общая Slint-тема,
+#                 закреплённый renderer и упаковка. Прежние C# исходники
+#                 остаются материалом сравнения и больше не выпускаются.
 #   .htmlhintrc*, .stylelint*
 #                 гейты обеих статических целей: их правка меняет результат
 #                 гейта. Со звёздочкой, потому что в `changes` они проверяются
@@ -100,10 +87,8 @@ permissions:
 #   ^server/(cmd/admin/|internal/|[^/]+$) → server/**
 #   ^server/(cmd/api/|[^/]+$)            → server/**
 #   ^server/internal/                    → server/**
-#   ^(launcher/(ChillHub/|[^/]+$)|updater/|…) → launcher/ChillHub/**,
-#                                          launcher/*, updater/**,
-#                                          Directory.Build.props и четыре файла
-#                                          сборки установщика в scripts/
+#   ^launcher/ChillHub\.Native/          → launcher/ChillHub.Native/**
+#   ^scripts/native-                    → scripts/native-*
 #
 # Обратное направление намеренно неточное: `server/**` шире, чем сумма правил
 # `changes` (скажем, будущий server/cmd/tool/ сюда пройдёт, а цели не задел бы).
@@ -196,13 +181,9 @@ jobs:
   #                   случая, когда изменения целиком лежат в adminapi/ или
   #                   metrics/: этих двух в cmd/api/main.go нет.
   #   client    — установщик лаунчера на сайте (/downloads/ChillHub-Setup.exe).
-  #               Списан с того, что читает build-installer.ps1: launcher/**
-  #               (сам клиент), updater/** (входит ProjectReference'ом и
-  #               кладётся в установку), Directory.Build.props (общие свойства
-  #               компиляции) и общие файлы в scripts/ — build-installer.ps1, ensure-webview2-bootstrapper.ps1,
-  #               installer.nsi, app.ico, ci/ensure-nsis.ps1 (закреплённая
-  #               версия NSIS — тоже вход сборки). scripts/Redist/ в git пуст
-  #               (.gitkeep): bootstrapper WebView2 сборка скачивает сама.
+  #               Входы native-release.ps1: Native workspace и scripts/native-*,
+  #               ресурсы Windows, установщик NSIS и закреплённые инструменты.
+  #               Bootstrapper WebView2 и mpv проверяются по контрольным суммам.
   #
   # Правило про internal сознательно вывернуто «от обратного»: считаем пакет
   # общим, пока не доказано, что он админский. Новый пакет, добавленный завтра,
@@ -569,9 +550,9 @@ jobs:
       # dk deploy chillhub-installer читает тот же файл и публикует тем же
       # publish-file.sh. Дублировать параметры здесь входами нельзя — два
       # списка одного и того же разъедутся, как разъезжались фильтры путей.
-      # Собирается на домашней машине win-builder: там стоят .NET 8, MSVC и
-      # Windows SDK, а установщик публикует обновлятель через Native AOT и
-      # без линковщика не собирается. Умолчание входа — windows-latest.
+      # win-builder содержит MSVC и Windows SDK. Закреплённый Rust готовит
+      # native-release.ps1; полный GUI/installer smoke проходит в PR на
+      # одноразовой Windows. Умолчание входа — windows-latest.
       #
       # Форк-PR сюда попасть не могут в принципе: deploy.yml запускается
       # только по push в main, тегам и ручному запуску, а pull_request и

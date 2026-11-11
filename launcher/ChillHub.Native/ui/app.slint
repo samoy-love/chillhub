@@ -232,7 +232,9 @@ component ComboBox inherits Rectangle {
     popup := PopupWindow { x: 0px; y: root.height + 4px; width: root.width; height: min(256px, root.model.length * 36px + 12px); close-policy: close-on-click-outside; forward-focus: popup-key;
         property <int> visible-choice: root.current-index;
         changed visible-choice => { self.reveal-selection(); }
-        changed is-open => { if self.is-open { self.reveal-selection(); } }
+        // Each popup instance reveals its selection at creation; changes while
+        // open are handled above. Reading is-open inside PopupWindow is invalid
+        // after Slint 1.18 lowers it into a separate component.
         init => { self.reveal-selection(); }
         function reveal-selection() {
             let top = root.current-index * 36px;

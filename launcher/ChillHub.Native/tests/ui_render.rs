@@ -1297,6 +1297,36 @@ fn real_ui_headless_layout_and_actions() {
             h.actions.borrow().contains(&"version:2.6.A".to_owned()),
             "version dropdown supports keyboard selection"
         );
+        h.ui.set_panel_kind("".into());
+        settle();
+        h.ui.set_versions(model(
+            (0..12).map(|i| format!("release-{i}").into()).collect(),
+        ));
+        h.ui.set_selected_version("release-11".into());
+        h.panel("manage", "Управление игрой", "");
+        settle();
+        for attempt in 0..2 {
+            let versions =
+                ElementHandle::find_by_accessible_label(&h.ui, "Версия игры для установки")
+                    .next()
+                    .unwrap();
+            versions.invoke_accessible_default_action();
+            settle();
+            h.capture(&format!("version-menu-tail-{attempt}"), 1360, 850, 1.0);
+            if attempt == 0 {
+                key(h.ui.window(), Key::Escape);
+                assert_eq!(h.ui.get_panel_kind(), "manage");
+            } else {
+                key(h.ui.window(), Key::UpArrow);
+                key(h.ui.window(), Key::Return);
+                assert!(
+                    h.actions
+                        .borrow()
+                        .contains(&"version:release-10".to_owned()),
+                    "reopened long menu preserves selection and keyboard navigation"
+                );
+            }
+        }
         // Unlike Harness::panel, a real help action replaces modal content
         // without destroying the modal. A pointer click also moves focus into
         // the outgoing action, which an accessibility invocation does not do.

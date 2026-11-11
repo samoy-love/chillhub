@@ -351,7 +351,7 @@
         "helper_runtime::tests::helper_log_is_local_bounded_and_preserves_unrelated_files",
         "helper_runtime::tests::worker_panic_becomes_a_reported_error",
         "tests::update_failure_unlocks_window_and_points_to_actual_log",
-        "tests::security_results_keep_errors_visible_and_allow_close_without_changes"
+        "tests::security_window_handles_confirmation_and_results"
       ]
     },
     {
