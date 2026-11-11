@@ -25,3 +25,7 @@ if ($code -notin @(0,2)) { throw "Мутационный прогон авари
 . (Join-Path $PSScriptRoot 'native-mutation-results.ps1')
 $verdict = Test-NativeMutationResults -Results $outcomes -Project $snapshot -Review (Join-Path $repo 'tests/native-mutation-review.json')
 $verdict | ConvertTo-Json -Depth 8 | Tee-Object -FilePath (Join-Path $result 'verdict.json')
+
+# cargo-mutants uses 2 for reviewed survivors; the policy above is the gate.
+# Clear it only after the complete report passes, for the Actions pwsh wrapper.
+$global:LASTEXITCODE = 0
