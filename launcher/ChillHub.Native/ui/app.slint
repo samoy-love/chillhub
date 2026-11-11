@@ -451,6 +451,9 @@ export component AppWindow inherits Window {
     in property <float> video-duration;
     in property <float> video-volume: 0.75;
     in property <string> video-time-label: "0:00 / 0:00";
+    in property <[int]> video-qualities;
+    in property <int> video-quality;
+    callback video-quality-selected(int);
     in-out property <string> settings-path;
     in property <[QueueRow]> queue;
     in property <string> queue-error;
@@ -832,7 +835,15 @@ export component AppWindow inherits Window {
             border-radius: 17px; border-width: 1px; border-color: #403c49; background: #1b1a20;
             TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; scroll-event(event) => { accept } }
             Text { x: 28px; y: 23px; width: parent.width - 104px; height: 34px; text: root.panel-title; color: Theme.ink; font-size: 28px; font-weight: 600; overflow: elide; }
-            Text { x: 28px; y: 60px; width: parent.width - 90px; height: 18px; text: root.panel-subtitle; color: Theme.dim; font-size: 13px; overflow: elide; }
+            Text { x: 28px; y: 60px; width: parent.width - (root.show-video && root.video-qualities.length > 1 ? 325px : 90px); height: 18px; text: root.panel-subtitle; color: Theme.dim; font-size: 13px; overflow: elide; }
+            if root.show-video && root.video-qualities.length > 1: HorizontalLayout {
+                x: parent.width - 280px; y: 49px; width: 252px; height: 30px; spacing: 6px;
+                for quality in root.video-qualities: ActionButton {
+                    text: quality + "p"; accessible-name: "Качество видео " + quality + "p";
+                    height: 30px; compact: true; selected: root.video-quality == quality;
+                    clicked => { root.video-quality-selected(quality); }
+                }
+            }
             modal-close := ActionButton {
                 property <string> active-panel: root.panel-kind;
                 init => { if root.gallery-open { keyboard.focus(); } else { self.focus(); } }

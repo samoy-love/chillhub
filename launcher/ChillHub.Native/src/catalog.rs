@@ -36,6 +36,8 @@ pub struct Game {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Media {
+    #[serde(default)]
+    pub variants: Vec<chillhub_native::model::VideoVariant>,
     pub kind: String,
     pub path: String,
     #[serde(skip)]
@@ -142,6 +144,7 @@ pub fn from_live(records: &[GameRecord], seed: &[Game]) -> Vec<Game> {
                             caption: m.caption.clone(),
                             source: m.source_url.clone(),
                             provider: m.provider.clone(),
+                            variants: m.variants.clone(),
                         }
                     })
                     .collect();
@@ -278,6 +281,27 @@ mod tests {
                 .iter()
                 .all(|entry| !entry.name.is_empty() && !entry.russian_name.is_empty())
         );
+    }
+
+    #[test]
+    fn live_video_qualities_reach_player_without_losing_attribution() {
+        let record: GameRecord = serde_json::from_value(serde_json::json!({
+            "gameId":"video-fixture", "title":"Видео", "presentation": {"media":[{
+                "kind":"video", "provider":"file", "url":"/assets/main.mp4",
+                "sourceUrl":"https://example.org/original", "variants":[
+                    {"url":"/assets/720.mp4","width":1280,"height":720,"bytes":12345},
+                    {"url":"/assets/1080.mp4","width":1920,"height":1080,"bytes":23456}
+                ]
+            }]}
+        }))
+        .unwrap();
+        let games = from_live(&[record], &[]);
+        let media = &games[0].media[0];
+        assert_eq!(media.variants.len(), 2);
+        assert_eq!(media.variants[0].url, "/assets/720.mp4");
+        assert_eq!(media.variants[1].height, 1080);
+        assert_eq!(media.variants[1].bytes, 23456);
+        assert_eq!(media.source, "https://example.org/original");
     }
 
     #[test]

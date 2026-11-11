@@ -11,7 +11,7 @@ export function validateMediaManifest(manifest) {
     assert(/^media\/\d{4}-(?:0[1-9]|1[0-2])\/[a-z0-9-]+\/[a-z0-9.-]+\.(?:mp4|jpg)$/.test(file.path), 'Unsafe media path');
     assert(!paths.has(file.path), 'Duplicate media path');paths.add(file.path);
     assert(/^[a-f0-9]{64}$/.test(file.sha256), 'Invalid media checksum');
-    assert(Number.isSafeInteger(file.bytes)&&file.bytes>0&&file.bytes<=512*1024*1024, 'Invalid media size');
+    assert(Number.isSafeInteger(file.bytes)&&file.bytes>0&&file.bytes<=10*1024*1024*1024, 'Invalid media size');
     total+=file.bytes;
   }
   assert(total<=20*1024*1024*1024,'Media history exceeds 20 GiB');

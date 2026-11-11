@@ -794,6 +794,10 @@
         '<div class="field"><label for="p-media-' + i + '-kind">Тип</label><select id="p-media-' + i + '-kind" data-p-key="kind"><option value="image"' + (m.kind === 'video' ? '' : ' selected') + '>Скриншот</option><option value="video"' + (m.kind === 'video' ? ' selected' : '') + '>Видео</option></select></div>' +
         '<div class="cols cols--2">' + select('provider', 'Воспроизведение', m.provider, [['', 'Файл в лаунчере'], ['file', 'Файл в лаунчере'], ['youtube', 'Открыть YouTube'], ['rutube', 'Открыть RUTUBE']], 'media-' + i + '-') + select('role', 'Назначение', m.role, [['', 'Скриншот / не указано'], ['trailer', 'Официальный трейлер'], ['gameplay', 'Как играют другие']], 'media-' + i + '-') + '</div>' +
         field('url', 'Ссылка на файл', m.url, 2048, 0, 'media-' + i + '-') +
+        '<details><summary>Качество видео · 1080p / 720p / 480p</summary><p class="help">Для файлов на сервере. Заполните ссылку, ширину и размер из отчёта подготовки видео; пустой вариант не показывается игрокам.</p>' +
+        [480, 720, 1080].map(h => { const v = (m.variants || []).find(v => v.height === h) || {}; return '<fieldset><legend>' + h + 'p</legend>' +
+          field('quality' + h + 'url', 'Ссылка на MP4', v.url, 2048, 0, 'media-' + i + '-') +
+          '<div class="cols cols--2">' + field('quality' + h + 'width', 'Ширина в пикселях', v.width, 4, 0, 'media-' + i + '-') + field('quality' + h + 'bytes', 'Размер в байтах', v.bytes, 11, 0, 'media-' + i + '-') + '</div></fieldset>'; }).join('') + '</details>' +
         field('posterUrl', 'Заставка трейлера — ссылка, необязательно', m.posterUrl, 2048, 0, 'media-' + i + '-') +
         field('caption', 'Подпись', m.caption, 240, 0, 'media-' + i + '-') +
         field('sourceUrl', 'Первоисточник — ссылка', m.sourceUrl, 2048, 0, 'media-' + i + '-') +

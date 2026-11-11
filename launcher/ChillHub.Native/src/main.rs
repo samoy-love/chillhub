@@ -757,6 +757,19 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
     ui.set_panel_kind("gallery".into());
     ui.set_selected_media_is_video(media.kind == "video");
     ui.set_selected_media_is_web_video(is_web);
+    let mut qualities: Vec<i32> = media.variants.iter().map(|v| v.height as i32).collect();
+    qualities.sort_unstable();
+    qualities.dedup();
+    let preferred = ui.get_video_quality();
+    let quality = qualities
+        .iter()
+        .rev()
+        .find(|&&h| h <= preferred)
+        .copied()
+        .or_else(|| qualities.last().copied())
+        .unwrap_or(0);
+    ui.set_video_quality(quality);
+    ui.set_video_qualities(ModelRc::new(VecModel::from(qualities)));
     if is_web {
         ui.set_media_provider_label(
             if media.provider == "rutube" {
@@ -770,7 +783,12 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
         return;
     }
     let address = if media.kind == "video" {
-        &media.url
+        media
+            .variants
+            .iter()
+            .find(|v| v.height == quality as u32)
+            .map(|v| &v.url)
+            .unwrap_or(&media.url)
     } else {
         &media.path
     };
@@ -789,7 +807,7 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
         );
         ui.set_video_position(0.0);
         ui.set_video_duration(0.0);
-        ui.set_video_time_label("Загрузка трейлера…".into());
+        ui.set_video_time_label("Загрузка видео…".into());
         let weak = ui.as_weak();
         let weak_state = Rc::downgrade(state);
         Timer::single_shot(Duration::from_millis(32), move || {
@@ -836,7 +854,7 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
                                         time_label(status.duration)
                                     )
                                 } else {
-                                    "Загрузка трейлера…".into()
+                                    "Загрузка видео…".into()
                                 };
                                 ui.set_video_time_label(label.into());
                             }
@@ -1164,6 +1182,40 @@ fn bind(ui: &AppWindow, state: &State) {
     handler!(on_video_toggle, |_ui, state| {
         if let Some(video) = state.borrow().video.as_ref() {
             video.set_paused(video.status().is_playing());
+        }
+    });
+    handler!(on_video_quality_selected, |ui, state, quality| {
+        if !ui.get_show_video() || quality == ui.get_video_quality() {
+            return;
+        }
+        let result = {
+            let s = state.borrow();
+            s.catalog
+                .get(s.selected)
+                .and_then(|g| g.media.get(s.gallery_index))
+                .and_then(|m| m.variants.iter().find(|v| v.height == quality as u32))
+                .map(|variant| {
+                    let address = chillhub_native::media::location(
+                        &variant.url,
+                        &s.data_root,
+                        &s.services.api,
+                    )?;
+                    s.video
+                        .as_ref()
+                        .ok_or_else(|| "Видеоплеер недоступен".to_string())?
+                        .switch_source(&address)
+                })
+        };
+        match result {
+            Some(Ok(())) => {
+                ui.set_video_quality(quality);
+                state.borrow().services.api.event(
+                    "media.quality_changed",
+                    serde_json::json!({"height": quality}),
+                );
+            }
+            Some(Err(error)) => toast(&ui, &state, &error),
+            None => {}
         }
     });
     handler!(on_video_seek, |_ui, state, seconds| {

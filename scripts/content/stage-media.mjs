@@ -11,7 +11,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const cache = path.join(root, 'scripts/content/.cache');
 const sourceRoot = await realpath(path.join(cache, 'release-media'));
 const plan = JSON.parse(await readFile(path.join(cache, 'media-upload-plan.json'), 'utf8'));
-assert.equal(plan.files.length, 45, 'Expected 9 trailers, 27 screenshots and 9 posters');
+assert.equal(Object.keys(plan.games).length, 9, 'Expected all nine games');
+assert(plan.files.length >= 45 && plan.files.length <= 100, 'Unexpected media inventory');
 const release = JSON.parse(await readFile(path.join(root, 'scripts/content/media-release.json'), 'utf8'));
 assert.deepEqual(plan.files.map(({localPath, ...asset}) => asset), release.files,
   'Prepared media differs from the reviewed release; record and review the new checksums before deployment');
@@ -33,7 +34,11 @@ for (const entry of plan.files) {
   assert(/^media\/\d{4}-\d{2}\/[a-z0-9-]+\/[a-z0-9.-]+\.(?:mp4|jpg)$/.test(entry.relativePath), 'Unexpected media path');
   assert(!destinations.has(entry.relativePath), 'Duplicate media destination');
   destinations.add(entry.relativePath);
-  const source = await realpath(entry.localPath);
+  // The artifact may be encoded on Windows and staged by Linux deploy-kit.
+  // Derive its local location from the reviewed portable inventory, not a drive letter.
+  assert(/^[a-z0-9-]+$/.test(entry.gameId) && /^[a-z0-9.-]+\.(?:mp4|jpg)$/.test(entry.name), 'Unsafe local media name');
+  assert(entry.relativePath.endsWith(`/${entry.gameId}/${entry.name}`), 'Media inventory path mismatch');
+  const source = await realpath(path.join(sourceRoot, entry.gameId, entry.name));
   const relative = path.relative(sourceRoot, source);
   assert(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'Source outside prepared media');
   assert.equal((await lstat(source)).size, entry.bytes, 'Media size changed');

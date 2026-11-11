@@ -47,6 +47,6 @@ test('network failure and altered media refuse a new snapshot instead of empty h
   assert.equal(await readFile(path.join(f.cache,'snapshot.json'),'utf8'),before);
 });
 test('media manifest cannot escape local cache or request unbounded downloads',()=>{
-  for(const bad of [{...file,path:'../outside.mp4'},{...file,path:'media/2026-11/peak/../../bad.mp4'},{...file,bytes:512*1024*1024+1},{...file,sha256:'invalid'}])assert.throws(()=>validateMediaManifest({files:[bad]}));
+  for(const bad of [{...file,path:'../outside.mp4'},{...file,path:'media/2026-11/peak/../../bad.mp4'},{...file,bytes:10*1024*1024*1024+1},{...file,sha256:'invalid'}])assert.throws(()=>validateMediaManifest({files:[bad]}));
   assert.throws(()=>validateMediaManifest({files:[file,file]}),/Duplicate/);
 });

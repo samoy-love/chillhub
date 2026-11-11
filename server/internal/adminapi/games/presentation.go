@@ -34,17 +34,46 @@ type ModBenefit struct {
 }
 
 type GameMedia struct {
-	Kind        string `json:"kind"`
-	URL         string `json:"url"`
-	PosterURL   string `json:"posterUrl"`
-	Caption     string `json:"caption"`
-	Provider    string `json:"provider,omitempty"`
-	Role        string `json:"role,omitempty"`
-	SourceURL   string `json:"sourceUrl,omitempty"`
-	Author      string `json:"author,omitempty"`
-	PublishedAt string `json:"publishedAt,omitempty"`
-	Width       int    `json:"width,omitempty"`
-	Height      int    `json:"height,omitempty"`
+	Variants    []VideoVariant `json:"variants,omitempty"`
+	Kind        string         `json:"kind"`
+	URL         string         `json:"url"`
+	PosterURL   string         `json:"posterUrl"`
+	Caption     string         `json:"caption"`
+	Provider    string         `json:"provider,omitempty"`
+	Role        string         `json:"role,omitempty"`
+	SourceURL   string         `json:"sourceUrl,omitempty"`
+	Author      string         `json:"author,omitempty"`
+	PublishedAt string         `json:"publishedAt,omitempty"`
+	Width       int            `json:"width,omitempty"`
+	Height      int            `json:"height,omitempty"`
+}
+
+// VideoVariant is a prepared, seekable MP4; source attribution stays on GameMedia.
+type VideoVariant struct {
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	Bytes  int64  `json:"bytes"`
+}
+
+func validateVideoVariants(prefix string, media GameMedia) error {
+	if len(media.Variants) == 0 {
+		return nil
+	}
+	if media.Kind != "video" || (media.Provider != "" && media.Provider != "file") || len(media.Variants) > 3 {
+		return fmt.Errorf("presentation.%s.variants: варианты доступны только для видеофайла, максимум 3", prefix)
+	}
+	seen := map[int]bool{}
+	for i, v := range media.Variants {
+		if (v.Height != 480 && v.Height != 720 && v.Height != 1080) || v.Width < 2 || v.Width > 3840 || v.Width%2 != 0 || v.Bytes <= 0 || v.Bytes > 10<<30 || seen[v.Height] {
+			return fmt.Errorf("presentation.%s.variants[%d]: неверное или повторяющееся качество видео", prefix, i)
+		}
+		seen[v.Height] = true
+		if err := presentationURL(fmt.Sprintf("%s.variants[%d].url", prefix, i), v.URL, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type ModDescription struct {
@@ -162,6 +191,9 @@ func validatePresentationMedia(mediaItems []GameMedia) error {
 }
 
 func validateMediaSource(prefix string, media GameMedia) error {
+	if err := validateVideoVariants(prefix, media); err != nil {
+		return err
+	}
 	if err := presentationURL(prefix+".sourceUrl", media.SourceURL, true); err != nil {
 		return err
 	}

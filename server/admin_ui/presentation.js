@@ -8,6 +8,9 @@
   const MEDIA = ['kind', 'url', 'posterUrl', 'caption', 'provider', 'role', 'sourceUrl', 'author', 'publishedAt'];
   const BENEFITS = ['title', 'description', 'icon'];
   const MODS = ['id', 'name', 'russianName', 'description', 'category', 'version', 'url'];
+  const HEIGHTS = [480, 720, 1080];
+  const VARIANT_FIELDS = HEIGHTS.flatMap(h => ['url', 'width', 'bytes'].map(k => 'quality' + h + k));
+  const variants = (items) => Array.isArray(items) ? items.map(v => ({url: text(v.url), width: Number(v.width), height: Number(v.height), bytes: Number(v.bytes)})).sort((a,b) => a.height-b.height) : [];
   const fields = (value, names) => Object.fromEntries(names.map((key) => [key, text(value && value[key])]));
 
   function normalize(value) {
@@ -16,7 +19,7 @@
       description: text(p.description), modpackDescription: text(p.modpackDescription), genre: text(p.genre), heroUrl: text(p.heroUrl),
       modpackVersion: text(p.modpackVersion), modpackRevision: text(p.modpackRevision),
       highlights: Array.isArray(p.highlights) ? p.highlights.map(text) : [],
-      media: Array.isArray(p.media) ? p.media.map((m) => ({ ...fields(m, MEDIA), width: Number(m.width ?? 0), height: Number(m.height ?? 0) })) : [],
+      media: Array.isArray(p.media) ? p.media.map((m) => ({ ...fields(m, MEDIA), width: Number(m.width ?? 0), height: Number(m.height ?? 0), variants: variants(m.variants) })) : [],
       modBenefits: Array.isArray(p.modBenefits) ? p.modBenefits.map((m) => fields(m, BENEFITS)) : [],
       mods: Array.isArray(p.mods) ? p.mods.map((m) => fields(m, MODS)) : [],
     };
@@ -71,6 +74,16 @@
         if (!['', 'file', 'youtube', 'rutube'].includes(m.provider)) bad('media.' + i + '.provider', 'Выберите способ воспроизведения');
         if (['youtube', 'rutube'].includes(m.provider) && !providerUrl(m.url, m.provider)) bad('media.' + i + '.url', 'Ссылка не соответствует выбранному видеосервису');
       }
+      if (m.variants.length) {
+        if (m.kind !== 'video' || !['', 'file'].includes(m.provider) || m.variants.length > 3) bad('media.' + i + '.variants', 'До трёх вариантов качества доступны только у видеофайла');
+        const seen = new Set();
+        m.variants.forEach((v, j) => {
+          const key = 'media.' + i + '.variants.' + j;
+          link(key + '.url', v.url, false);
+          if (!HEIGHTS.includes(v.height) || seen.has(v.height) || !Number.isInteger(v.width) || v.width < 2 || v.width > 3840 || v.width % 2 || !Number.isSafeInteger(v.bytes) || v.bytes <= 0 || v.bytes > 10 * 1024 ** 3) bad(key, 'Проверьте разрешение и размер видео');
+          seen.add(v.height);
+        });
+      }
     });
     if (p.modBenefits.length > 5) bad('modBenefits', 'Допускается не больше 5 преимуществ');
     p.modBenefits.forEach((b, i) => {
@@ -95,7 +108,7 @@
     const p = normalize(value);
     if (!['media', 'mods', 'modBenefits'].includes(group)) return p;
     const list = p[group], max = group === 'media' ? 24 : group === 'modBenefits' ? 5 : 256;
-    if (action === 'add' && list.length < max) list.push(group === 'media' ? { ...fields({}, MEDIA), kind: 'image', width: 0, height: 0 } : group === 'modBenefits' ? { title: '', description: '', icon: 'package' } : fields({}, MODS));
+    if (action === 'add' && list.length < max) list.push(group === 'media' ? { ...fields({}, MEDIA), kind: 'image', width: 0, height: 0, variants: [] } : group === 'modBenefits' ? { title: '', description: '', icon: 'package' } : fields({}, MODS));
     if (Number.isInteger(index) && index >= 0 && index < list.length) {
       if (action === 'remove') list.splice(index, 1);
       const to = action === 'up' ? index - 1 : action === 'down' ? index + 1 : index;
@@ -109,7 +122,13 @@
     const lines = (name) => value(name).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     const rows = (group, names) => Array.from(root.querySelectorAll('[data-p-row="' + group + '"]')).map((row) =>
       Object.fromEntries(names.map((name) => [name, text(row.querySelector('[data-p-key="' + name + '"]')?.value).trim()])));
-    const p = { description: value('description'), modpackDescription: value('modpackDescription'), modpackVersion: value('modpackVersion'), modpackRevision: value('modpackRevision'), genre: value('genre'), heroUrl: value('heroUrl'), highlights: lines('highlights'), media: rows('media', [...MEDIA, 'width', 'height']).map((m) => ({ ...m, width: Number(m.width), height: Number(m.height) })), mods: rows('mods', MODS), modBenefits: rows('modBenefits', BENEFITS) };
+    const media = rows('media', [...MEDIA, 'width', 'height', ...VARIANT_FIELDS]).map(m => ({
+      ...fields(m, MEDIA), width: Number(m.width), height: Number(m.height),
+      variants: HEIGHTS.filter(h => ['url', 'width', 'bytes'].some(k => m['quality' + h + k])).map(h => ({
+        url: m['quality' + h + 'url'], width: Number(m['quality' + h + 'width']), height: h, bytes: Number(m['quality' + h + 'bytes'])
+      }))
+    }));
+    const p = { description: value('description'), modpackDescription: value('modpackDescription'), modpackVersion: value('modpackVersion'), modpackRevision: value('modpackRevision'), genre: value('genre'), heroUrl: value('heroUrl'), highlights: lines('highlights'), media, mods: rows('mods', MODS), modBenefits: rows('modBenefits', BENEFITS) };
     return Object.values(p).every((v) => !v.length) ? null : p;
   }
 

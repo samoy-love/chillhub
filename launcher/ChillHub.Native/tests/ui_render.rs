@@ -1146,9 +1146,16 @@ fn real_ui_headless_layout_and_actions() {
     h.ui.set_video_duration(103.0);
     h.ui.set_video_position(37.0);
     h.ui.set_video_time_label("0:37 / 1:43".into());
+    h.ui.set_video_qualities(model(vec![480, 720, 1080]));
+    h.ui.set_video_quality(1080);
     h.capture("gallery-video-controls", 1360, 850, 1.0);
     if h.qa {
         h.capture("gallery-video-small", 900, 500, 1.0);
+        let selected = Rc::new(RefCell::new(0));
+        let received = selected.clone();
+        h.ui.on_video_quality_selected(move |height| *received.borrow_mut() = height);
+        h.click("Качество видео 720p");
+        assert_eq!(*selected.borrow(), 720);
     }
     // The child HWND video surface is intentionally not created in a UI test.
     assert!(h.ui.get_show_video());

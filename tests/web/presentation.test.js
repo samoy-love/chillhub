@@ -4,6 +4,23 @@ const { JSDOM } = require('jsdom');
 const P = require('../../server/admin_ui/presentation.js');
 const V = require('../../server/admin_ui/views.js');
 const R = require('../../server/admin_ui/registry.js');
+
+test('video qualities survive editing, reordering and reject corrupt metadata', () => {
+  const p = {media:[{kind:'video',provider:'file',url:'/assets/video.mp4',variants:[
+    {url:'/assets/480.mp4',width:854,height:480,bytes:1234},
+    {url:'/assets/1080.mp4',width:1920,height:1080,bytes:5678}
+  ]}]};
+  const doc = new JSDOM(V.presentationForm(p)).window.document;
+  const edited = P.read(doc.querySelector('[data-presentation]'));
+  assert.deepEqual(edited, P.normalize(p));
+  assert.deepEqual(P.problems(edited),[]);
+  assert.deepEqual(P.change(edited,'media','add').media[0].variants,p.media[0].variants);
+  for (const patch of [{height:481},{width:853},{bytes:0},{url:'http://localhost/a'}]) {
+    const bad=structuredClone(p);Object.assign(bad.media[0].variants[0],patch);assert(P.problems(bad).length);
+  }
+  const duplicate=structuredClone(p);duplicate.media[0].variants.push(duplicate.media[0].variants[0]);assert(P.problems(duplicate).length);
+  p.media[0].provider='youtube';assert(P.problems(p).length);
+});
 const D = require('../../server/admin_ui/registry-diff.js');
 
 const sample = () => ({ description: 'Вместе на вершину', modpackDescription: 'Позволяет играть большой компанией', modpackVersion: 'Lart_Iste-PeakFriendsEdition-2.0.15', modpackRevision: '0123456789abcdef0123456789abcdef', genre: 'Кооператив', heroUrl: '/assets/hero.jpg', highlights: ['Четыре игрока'], media: [{ kind: 'video', url: 'https://cdn.example.com/trailer.mp4', posterUrl: '/assets/poster.jpg', caption: 'Трейлер' }], mods: [{ id: 'more', name: 'More Players', russianName: 'Больше игроков', description: 'Снимает лимит группы', category: 'Кооператив', version: '1.0', url: 'https://thunderstore.io/c/peak/' }] });

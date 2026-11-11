@@ -40,7 +40,7 @@ for (const game of harvest.registry.items) {
   const creator = gameplay.games[id];
   if (!ready || !creator || ready.trailerId !== movie.id) throw new Error(`Missing verified prepared media: ${id}`);
   const media = [
-    { kind: 'video', provider:'file', role:'trailer', url: ready.trailer.url, posterUrl: ready.poster.url, caption: 'Официальный трейлер', sourceUrl:ready.source, author:(store.value.developers||[]).join(', '), width:1920,height:1080 },
+    { kind: 'video', provider:'file', role:'trailer', url: ready.trailer.url, variants:ready.trailer.variants || [], posterUrl: ready.poster.url, caption: 'Официальный трейлер', sourceUrl:ready.source, author:(store.value.developers||[]).join(', '), width:1920,height:1080 },
     { kind: 'video', provider:'youtube', role:'gameplay', url:creator.url,posterUrl:creator.posterUrl,caption:`Игра с друзьями · ${creator.author}`,sourceUrl:creator.url,author:creator.author,publishedAt:creator.publishedAt },
     ...ready.screenshots.map(shot => ({ kind: 'image', provider:'file',url: shot.url, posterUrl: shot.url, caption: shot.caption,sourceUrl:shot.sourceUrl,width:shot.width,height:shot.height })),
   ];
@@ -77,6 +77,7 @@ for (const game of harvest.registry.items) {
     ModpackDescription: text.modpackDescription, ModBenefits: text.modBenefits || [], MetadataNote: '',
     Media: media.map((m, index) => ({
       Kind: m.kind,
+      Variants: m.variants || [],
       Path: `Assets/Media/${id}/${index === 0 ? 'trailer-poster.jpg' : index === 1 ? 'gameplay-poster.jpg' : `screenshot-${index - 1}.jpg`}`,
       Caption: m.caption, Url: m.url, Provider:m.provider,Role:m.role||'',SourceUrl:m.sourceUrl||'', Author:m.author||'',PublishedAt:m.publishedAt||'',Width:m.width||0,Height:m.height||0,
       Source: m.sourceUrl || `https://store.steampowered.com/app/${store.appId}/`,

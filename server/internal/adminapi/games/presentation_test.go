@@ -20,6 +20,44 @@ func samplePresentation() *Presentation {
 	}
 }
 
+func TestVideoVariants(t *testing.T) {
+	p := samplePresentation()
+	p.Media[0].Variants = []VideoVariant{{URL: "/assets/720.mp4", Width: 1280, Height: 720, Bytes: 12345}, {URL: "/assets/1080.mp4", Width: 1920, Height: 1080, Bytes: 23456}}
+	if err := ValidatePresentation(p); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored Presentation
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restored.Media, p.Media) {
+		t.Fatal("variants lost in serialization")
+	}
+	for name, mutate := range map[string]func(*GameMedia){
+		"image":     func(m *GameMedia) { m.Kind = "image" },
+		"external":  func(m *GameMedia) { m.Provider = "youtube" },
+		"duplicate": func(m *GameMedia) { m.Variants[1].Height = 720 },
+		"height":    func(m *GameMedia) { m.Variants[0].Height = 2160 },
+		"width":     func(m *GameMedia) { m.Variants[0].Width = 1279 },
+		"zero size": func(m *GameMedia) { m.Variants[0].Bytes = 0 },
+		"oversize":  func(m *GameMedia) { m.Variants[0].Bytes = (10 << 30) + 1 },
+		"url":       func(m *GameMedia) { m.Variants[0].URL = "http://localhost/a" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := p.Media[0]
+			m.Variants = append([]VideoVariant(nil), m.Variants...)
+			mutate(&m)
+			if validatePresentationMedia([]GameMedia{m}) == nil {
+				t.Fatal("invalid rendition accepted")
+			}
+		})
+	}
+}
+
 func TestPresentationExternalMediaAndBenefits(t *testing.T) {
 	p := samplePresentation()
 	p.ModBenefits = []ModBenefit{{Title: "Большая команда", Description: "Отправляйтесь за добычей вместе с друзьями", Icon: "users"}}

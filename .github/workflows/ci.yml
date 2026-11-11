@@ -367,6 +367,9 @@ jobs:
           --reporter=text --reporter=lcov
           node --test tests/web/*.test.js
 
+      - name: Проверить подготовку и публикацию медиа
+        run: node --test --test-concurrency=1 scripts/content/*.test.mjs
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Отчёт уезжает артефактом, а отправляет его coverage-web на ubuntu.
         # Со своего раннера отправка не работала вовсе: cli.codecov.io отдавал

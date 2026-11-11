@@ -55,6 +55,7 @@ pub struct Presentation {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MediaRecord {
+    pub variants: Vec<VideoVariant>,
     pub kind: String,
     pub url: String,
     pub poster_url: String,
@@ -66,6 +67,15 @@ pub struct MediaRecord {
     pub published_at: String,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VideoVariant {
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

@@ -1,10 +1,10 @@
 // Default: offline validation. --live checks public production state with GETs.
 // --registry FILE --output FILE prepares a local merged admin export, never POSTs.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
+import {fileHash} from './media-history.mjs';
 import { validatePresentation, mergeRegistry } from './presentation-tools.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -16,10 +16,9 @@ const bundled = await read(path.join(data,'games.json'));
 const provenance = await read(path.join(directory,'metadata-provenance.json'));
 const prepared = process.argv.includes('--prepared') ? await read(path.join(directory,'.cache/media-upload-plan.json')) : null;
 if(prepared){
-  assert.equal(prepared.files.length,45);
+  assert(prepared.files.length >= 45 && prepared.files.length <= 100);
   for(const file of prepared.files){
-    const bytes=await readFile(file.localPath);
-    assert.equal(bytes.length,file.bytes);assert.equal(createHash('sha256').update(bytes).digest('hex'),file.sha256);
+    assert.equal((await stat(file.localPath)).size,file.bytes);assert.equal(await fileHash(file.localPath),file.sha256);
   }
 }
 assert.equal(Object.keys(presentations).length, 9);
@@ -41,6 +40,9 @@ for (const game of bundled) {
   assert.equal(p.media.filter(m=>m.kind==='image').length,3);
   assert.deepEqual(game.ModBenefits,p.modBenefits);
   assert.equal(p.media.find(m=>m.role==='trailer').height,1080);
+  for (const media of p.media) for (const variant of media.variants || []) {
+    assert(prepared === null || prepared.files.some(f => f.url === variant.url && f.bytes === variant.bytes && f.height === variant.height && f.width === variant.width), `Unprepared video quality: ${game.Id} ${variant.height}`);
+  }
   assert(source.gameplay.views>0 && source.gameplay.author && source.gameplay.publishedAt);
   report.push({gameId:game.Id,gameVersion:game.GameVersion,modpackVersion:source.modpackVersion,modpackRevision:source.modpackRevision,packages:p.mods.length,media:p.media.length,trailer:source.trailerFormat});
 }
