@@ -267,6 +267,11 @@ impl VideoPlayer {
             "--mute=no",
             "--volume=60",
             "--video-sync=audio",
+            // Bound network readahead; mpv's default can fetch an entire trailer
+            // before the viewer chooses a lower quality or closes the gallery.
+            "--cache-secs=12",
+            "--demuxer-max-bytes=16MiB",
+            "--demuxer-max-back-bytes=4MiB",
         ]);
         // mpv interprets a Windows wid as an unsigned 32-bit HWND and creates its own child.
         command
@@ -715,6 +720,272 @@ fn apply_message(status: &mut VideoStatus, message: &Value) {
 
 #[cfg(test)]
 mod tests {
+    // Hidden native windows exercise ownership and clipping without a desktop,
+    // a video decoder, network access, or a running Slint event loop.
+    struct Host(isize);
+    impl Host {
+        fn new() -> Self {
+            let class: Vec<u16> = OsStr::new("STATIC").encode_wide().chain(Some(0)).collect();
+            let window = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    0x8000_0000,
+                    0,
+                    0,
+                    640,
+                    480,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_ne!(window, 0);
+            Self(window)
+        }
+    }
+    impl Drop for Host {
+        fn drop(&mut self) {
+            unsafe {
+                DestroyWindow(self.0);
+            }
+        }
+    }
+
+    fn fixture(host: &Host, dir: &Path) -> VideoPlayer {
+        let executable = dir.join("invalid-mpv.exe");
+        fs::write(&executable, b"not an executable").unwrap();
+        VideoPlayer::new(host.0, executable, dir.join("logs")).unwrap()
+    }
+
+    #[test]
+    fn quality_switch_waits_for_load_and_recovers_after_failed_delivery() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Host::new();
+        let mut player = fixture(&host, dir.path());
+        let address = "https://example.org/720.mp4";
+        assert!(
+            player
+                .switch_source(address)
+                .unwrap_err()
+                .contains("Дождитесь")
+        );
+        {
+            let mut status = player.state.lock().unwrap();
+            status.ready = true;
+            status.position = 19.25;
+            status.paused = true;
+            status.volume = 43.0;
+        }
+        assert!(
+            player
+                .switch_source(address)
+                .unwrap_err()
+                .contains("недоступен")
+        );
+        let (sender, receiver) = mpsc::channel();
+        player.commands = Some(sender);
+        player.switch_source(address).unwrap();
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            json!(["loadfile", address, "replace", -1, {"start":"19.250", "pause":"yes"}])
+        );
+        let pending = player.status();
+        assert!(!pending.ready);
+        assert_eq!(
+            (pending.position, pending.volume, pending.paused),
+            (19.25, 43.0, true)
+        );
+        assert!(player.switch_source(address).is_err());
+        assert!(receiver.try_recv().is_err());
+        {
+            let mut status = player.state.lock().unwrap();
+            apply_message(
+                &mut status,
+                &json!({"event":"end-file", "reason":"error", "file_error":"HTTP 404"}),
+            );
+            assert!(!status.ready);
+            assert!(status.error.as_ref().unwrap().contains("HTTP 404"));
+        }
+        assert!(player.switch_source(address).is_err());
+        apply_message(
+            &mut player.state.lock().unwrap(),
+            &json!({"event":"file-loaded"}),
+        );
+        drop(receiver);
+        assert!(
+            player
+                .switch_source(address)
+                .unwrap_err()
+                .contains("Потеряна связь")
+        );
+        // A failed send must not leave the spinner active indefinitely.
+        assert!(player.status().ready);
+        assert!(player.status().error.is_none());
+    }
+
+    #[test]
+    fn playback_controls_clamp_values_ignore_nan_and_replay_from_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Host::new();
+        let mut player = fixture(&host, dir.path());
+        let (sender, receiver) = mpsc::channel();
+        player.commands = Some(sender);
+        player.seek(-12.0);
+        player.seek(f64::NAN);
+        player.seek(f64::INFINITY);
+        player.set_volume(150.0);
+        player.set_volume(-1.0);
+        player.set_volume(f64::NAN);
+        player.set_paused(true);
+        player.state.lock().unwrap().ended = true;
+        player.set_paused(false);
+        assert_eq!(
+            receiver.try_iter().collect::<Vec<_>>(),
+            vec![
+                json!(["seek", 0.0, "absolute+exact"]),
+                json!(["set_property", "volume", 100.0]),
+                json!(["set_property", "volume", 0.0]),
+                json!(["set_property", "pause", true]),
+                json!(["seek", 0.0, "absolute+exact"]),
+                json!(["set_property", "pause", false]),
+            ]
+        );
+        player.close();
+        player.set_paused(false);
+        assert!(receiver.try_recv().is_err());
+        assert!(player.stop.load(Ordering::Acquire));
+        assert!(!player.status().ready);
+        assert!(player.status().pid.is_none());
+    }
+
+    #[test]
+    fn native_surface_validates_inputs_and_releases_only_its_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Host::new();
+        assert!(VideoPlayer::new(0, "missing", dir.path()).is_err());
+        assert!(VideoPlayer::new(-1, "missing", dir.path()).is_err());
+        assert!(VideoPlayer::new(host.0, dir.path().join("missing"), dir.path()).is_err());
+        let mut player = fixture(&host, dir.path());
+        assert!(VideoPlayer::new(host.0, &player.mpv_exe, &player.mpv_exe).is_err());
+        let child = player.window;
+        let rect = VideoRect {
+            x: 12,
+            y: 24,
+            width: 320,
+            height: 180,
+            radius: 200,
+        };
+        player.set_rect(rect);
+        assert_eq!(player.region_shape, Some((320, 180, 90)));
+        player.set_rect(rect);
+        assert_eq!(player.rect, rect);
+        player.set_rect(VideoRect { radius: 0, ..rect });
+        assert_eq!(player.region_shape, Some((320, 180, 0)));
+        assert!(!player.reveal_if_ready());
+        player.set_rect(VideoRect::default());
+        assert!(!player.visible);
+        assert!(
+            player
+                .open(&dir.path().join("absent.mp4"), rect)
+                .unwrap_err()
+                .contains("не найдено")
+        );
+        let url = Path::new("https://example.org/video.mp4");
+        assert!(
+            player
+                .open(url, VideoRect::default())
+                .unwrap_err()
+                .contains("положительным")
+        );
+        // Both remote URLs and canonical local files reach process launch;
+        // a corrupt packaged player must fail cleanly and leave no worker.
+        let local = dir.path().join("test.mp4");
+        fs::write(&local, b"fixture").unwrap();
+        for input in [url, local.as_path()] {
+            assert!(
+                player
+                    .open(input, rect)
+                    .unwrap_err()
+                    .contains("Не удалось запустить")
+            );
+            assert!(player.child.is_none());
+            assert!(player.worker.is_none());
+            assert!(!player.reveal_if_ready());
+        }
+        drop(player);
+        assert_eq!(unsafe { IsWindow(child) }, 0);
+        assert_ne!(unsafe { IsWindow(host.0) }, 0);
+    }
+
+    #[test]
+    fn player_properties_update_diagnostics_and_ignore_unrelated_responses() {
+        let mut status = VideoStatus::default();
+        property(&mut status, "time-pos", json!(1.25));
+        let started = status.playback_started_utc_ms;
+        assert!(started.is_some());
+        property(&mut status, "time-pos", json!(2.5));
+        assert_eq!(status.playback_started_utc_ms, started);
+        property(&mut status, "duration", json!(90.0));
+        property(&mut status, "pause", json!(true));
+        property(&mut status, "volume", json!(43.0));
+        property(&mut status, "hwdec-current", json!("d3d11va"));
+        property(&mut status, "video-params/w", json!(1920));
+        property(&mut status, "video-params/h", json!(1080));
+        property(&mut status, "container-fps", json!(60.0));
+        property(&mut status, "estimated-frame-number", json!(150));
+        property(&mut status, "frame-drop-count", json!(2));
+        property(&mut status, "decoder-frame-drop-count", json!(3));
+        property(&mut status, "avsync", json!(-0.015));
+        property(&mut status, "audio-codec-name", json!("aac"));
+        assert_eq!(
+            (status.position, status.duration, status.volume),
+            (2.5, 90.0, 43.0)
+        );
+        assert_eq!(
+            (status.width, status.height, status.fps),
+            (1920, 1080, 60.0)
+        );
+        assert_eq!(
+            (
+                status.estimated_frame_number,
+                status.dropped_frames,
+                status.decoder_dropped_frames
+            ),
+            (150, 2, 3)
+        );
+        assert_eq!(status.hwdec, "d3d11va");
+        assert_eq!(status.audio_codec, "aac");
+        assert_eq!(status.av_sync_seconds, -0.015);
+        assert!(!status.is_playing());
+        for message in [
+            json!({}),
+            json!({"request_id":0}),
+            json!({"request_id":999}),
+            json!({"request_id":1,"error":"property unavailable","data":100}),
+        ] {
+            apply_message(&mut status, &message);
+        }
+        for name in [
+            "time-pos",
+            "duration",
+            "pause",
+            "volume",
+            "hwdec-current",
+            "audio-codec-name",
+        ] {
+            property(&mut status, name, Value::Null);
+        }
+        assert_eq!(status.position, 2.5);
+        assert_eq!(status.duration, 90.0);
+        assert_eq!(status.volume, 43.0);
+        assert!(status.paused);
+        assert_eq!(status.hwdec, "d3d11va");
+        assert_eq!(status.audio_codec, "aac");
+    }
+
     #[test]
     fn quality_switch_preserves_position_pause_and_uses_literal_url() {
         let mut status = super::VideoStatus {

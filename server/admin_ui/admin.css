@@ -1318,4 +1318,17 @@ input[type="datetime-local"], input[type="date"] { color-scheme: inherit; }
 }
 
 .presentation-row legend { padding: 0 var(--s2); font-weight: 600; }
-.presentation-row .field + .field { margin-top: var(--s3); }
+.presentation-row > .field + .field { margin-top: var(--s3); }
+
+.presentation-qualities { margin-block: var(--s3); }
+.presentation-qualities > summary { cursor: pointer; font-weight: 600; }
+
+.presentation-quality {
+  display: grid;
+  gap: var(--s3);
+  min-width: 0;
+  margin-block: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r2, 8px);
+}

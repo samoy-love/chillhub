@@ -10,6 +10,8 @@ const require = createRequire(import.meta.url);
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || path.join(process.env.LOCALAPPDATA,'agent-tools/playwright/node_modules/playwright'));
 const directory = path.dirname(fileURLToPath(import.meta.url)), root = path.resolve(directory,'../..');
 const seed = JSON.parse(await readFile(path.join(root,'launcher/ChillHub.Native/Data/presentation-seed.json'),'utf8'));
+const videoQualities = [480,720,1080].map(height=>({url:`/assets/media/test-${height}.mp4`,height,width:height===480?854:height===720?1280:1920,bytes:height*10000}));
+seed.peak.media[0].variants = videoQualities;
 const output=path.join(directory,'.cache/admin-review');await mkdir(output,{recursive:true});
 let saved=null;
 const fixtures={games:{items:[{gameId:'peak',title:'PEAK',exeRelativePath:'PEAK.exe',order:0,mods:{enabled:true,steamAppId:'3527290',exeNames:['PEAK.exe']},presentation:seed.peak}]},summary:{launcher:{},mods:[]},'maintenance/get':{state:{enabled:false},effective:{enabled:false,blocks:{}}},'system/free':{bytes:10000000000,total:20000000000},'metrics/summary':{totals:{},byDay:[],topErrors:[]}};
@@ -46,6 +48,11 @@ try{
   await page.screenshot({path:path.join(output,'desktop-benefits.png')});
   await page.locator('[data-p-row="media"]').nth(1).scrollIntoViewIfNeeded();
   await page.screenshot({path:path.join(output,'desktop-gameplay.png')});
+  const trailer=page.locator('[data-p-row="media"]').first();
+  await trailer.locator('details summary').click();
+  await trailer.locator('[data-p-key="quality720url"]').scrollIntoViewIfNeeded();
+  await page.screenshot({path:path.join(output,'desktop-video-qualities.png')});
+  assert.equal(await trailer.locator('[data-p-key="quality720url"]').inputValue(),'/assets/media/test-720.mp4');
   assert.equal(await page.locator('[data-p-row="media"]').nth(1).locator('[data-p-key="provider"]').inputValue(),'youtube');
   await page.locator('[data-p-row="modBenefits"]').first().locator('[data-p-key="title"]').fill('Команда друзей');
   await page.locator('[data-game-do="save"]').click();
@@ -53,6 +60,7 @@ try{
   await page.waitForLoadState('networkidle');
   assert(saved);assert.equal(saved.items[0].presentation.mods.length,233);
   assert.equal(saved.items[0].presentation.media.length,5);
+  assert.deepEqual(saved.items[0].presentation.media[0].variants,videoQualities);
   assert.equal(saved.items[0].presentation.modBenefits[0].title,'Команда друзей');
   assert.equal(saved.items[0].mods.steamAppId,'3527290');
   const layouts=[];
