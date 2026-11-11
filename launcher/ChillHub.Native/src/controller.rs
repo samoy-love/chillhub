@@ -298,8 +298,10 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
                     } else {
                         format!("Установлена {version}").into()
                     });
-                    ui.set_playtime_label(if time < 60 {
+                    ui.set_playtime_label(if time == 0 {
                         "Ещё не играли".into()
+                    } else if time < 60 {
+                        "Сыграно меньше минуты".into()
                     } else {
                         format!("Сыграно {} ч {} мин", time / 3600, (time / 60) % 60).into()
                     });

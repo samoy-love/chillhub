@@ -214,6 +214,12 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         .insert("fixture".into(), "0.9.0".into());
     prefs.last_seen_changelog_version = env!("CARGO_PKG_VERSION").into();
     ConfigStore::new(paths.clone()).save(&prefs).unwrap();
+    // A completed short session must not look like a game that was never played.
+    fs::write(
+        paths.data_dir.join("playtime.json"),
+        r#"{"fixture#LocalModded":{"TotalSeconds":50,"LastSessionSeconds":50}}"#,
+    )
+    .unwrap();
     let (services, prefs) = Services::new(paths.clone()).unwrap();
     assert_eq!(services.paths.games_dir, paths.games_dir);
     let state = Rc::new(RefCell::new(AppState {
@@ -301,6 +307,9 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
             let (phase, expected_generation) = *stage.borrow();
             match phase {
                 0 if !ui.get_loading() && !ui.get_busy() && ui.get_can_play() => {
+                    if ui.get_playtime_label() != "Сыграно меньше минуты" {
+                        return Err("completed short session was shown as never played".into());
+                    }
                     if ui.get_games().row_count() != 2 || ui.get_play_label() != "Установить" || ui.get_source() != "local" {
                         return Err("initial catalog did not offer installation of remembered local modded game".into());
                     }
