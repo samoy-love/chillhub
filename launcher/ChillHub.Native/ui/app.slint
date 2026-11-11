@@ -675,6 +675,9 @@ export component AppWindow inherits Window {
         ActionButton { x: root.width - root.page-padding - 158px; y: 18px; width: 158px; height: 28px; compact: true; text: "Помощь"; icon: "info"; quiet: true; enabled: root.panel-kind == ""; clicked => { root.panel-requested("help"); } }
 
         main-scroll := ScrollView {
+            // Keep the static game page reusable while the optional header types.
+            // Slint invalidates the layer on page changes, scrolling and resizing.
+            cache-rendering-hint: root.karaoke-visible && root.karaoke-active && !root.reduced-motion && root.panel-kind == "";
             visible: root.game-title != "";
             enabled: root.panel-kind == "";
             x: root.sidebar-width; y: 64px; width: root.width - root.sidebar-width; height: root.height - 64px;
