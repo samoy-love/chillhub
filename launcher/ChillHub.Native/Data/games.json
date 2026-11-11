@@ -23,9 +23,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p-136fce6455845222.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 46683560
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-720p-d1b937053a04948d.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 21966508
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-480p-5fa2b5dcf2b51d68.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 10452098
+          }
+        ],
         "Path": "Assets/Media/over-the-hill/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p-136fce6455845222.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/2929250/",
@@ -37,6 +57,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/over-the-hill/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · Joe Speen",
         "Url": "https://www.youtube.com/watch?v=F9meqfOSzAA",
@@ -51,6 +72,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/over-the-hill/screenshot-1.jpg",
         "Caption": "Поездка по горной долине",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/screenshot-1.jpg",
@@ -65,6 +87,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/over-the-hill/screenshot-2.jpg",
         "Caption": "Осеннее бездорожье",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/screenshot-2.jpg",
@@ -79,6 +102,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/over-the-hill/screenshot-3.jpg",
         "Caption": "Маршрут у озера",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/screenshot-3.jpg",
@@ -120,9 +144,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 40198560
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-720p-1cd81fe137362232.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 24267160
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-480p-e0b59353ac5e94a4.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 12206206
+          }
+        ],
         "Path": "Assets/Media/bombanana/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/4656000/",
@@ -134,6 +178,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/bombanana/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · JOHAN",
         "Url": "https://www.youtube.com/watch?v=F7rliIICyzY",
@@ -148,6 +193,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/bombanana/screenshot-1.jpg",
         "Caption": "Три роли у одной бомбы",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/screenshot-1.jpg",
@@ -162,6 +208,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/bombanana/screenshot-2.jpg",
         "Caption": "Обезвреживание на ощупь",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/screenshot-2.jpg",
@@ -176,6 +223,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/bombanana/screenshot-3.jpg",
         "Caption": "Подсказки и обратный отсчёт",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/screenshot-3.jpg",
@@ -217,9 +265,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p-829db85b6d968365.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 32382490
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-720p-5fcb48e5fd31d362.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 17219343
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-480p-e37e8ce9b9702799.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 8932210
+          }
+        ],
         "Path": "Assets/Media/lethal-company/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p-829db85b6d968365.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/1966720/",
@@ -231,6 +299,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/lethal-company/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · Marmok",
         "Url": "https://www.youtube.com/watch?v=gsLztQaZNas",
@@ -245,6 +314,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/lethal-company/screenshot-1.jpg",
         "Caption": "Связь с командой",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/screenshot-1.jpg",
@@ -259,6 +329,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/lethal-company/screenshot-2.jpg",
         "Caption": "Поиск добычи внутри комплекса",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/screenshot-2.jpg",
@@ -273,6 +344,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/lethal-company/screenshot-3.jpg",
         "Caption": "Опасности снаружи",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/screenshot-3.jpg",
@@ -1780,9 +1852,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p-3a56b8eae9f539de.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 48018456
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-720p-95516057e4612735.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 37123037
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-480p-560e22b7fde4a496.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 17096346
+          }
+        ],
         "Path": "Assets/Media/farfarwest/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p-3a56b8eae9f539de.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/3124540/",
@@ -1794,6 +1886,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/farfarwest/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · Coffi Channel",
         "Url": "https://www.youtube.com/watch?v=Z9TK8IjS6PY",
@@ -1808,6 +1901,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/farfarwest/screenshot-1.jpg",
         "Caption": "Команда роботов-ковбоев",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/screenshot-1.jpg",
@@ -1822,6 +1916,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/farfarwest/screenshot-2.jpg",
         "Caption": "Сражение с необычным боссом",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/screenshot-2.jpg",
@@ -1836,6 +1931,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/farfarwest/screenshot-3.jpg",
         "Caption": "Оружие и магия в одном бою",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/screenshot-3.jpg",
@@ -1877,9 +1973,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p-624632f5d2f9afab.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 32957712
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-720p-3a1926ecb8d46c71.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 21209711
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-480p-80cbf15af589514a.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 9791462
+          }
+        ],
         "Path": "Assets/Media/how-to-fish/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p-624632f5d2f9afab.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/4001890/",
@@ -1891,6 +2007,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/how-to-fish/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · JOHAN",
         "Url": "https://www.youtube.com/watch?v=PixGCKKpeFY",
@@ -1905,6 +2022,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/how-to-fish/screenshot-1.jpg",
         "Caption": "Исследование острова",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/screenshot-1.jpg",
@@ -1919,6 +2037,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/how-to-fish/screenshot-2.jpg",
         "Caption": "Необычный улов",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/screenshot-2.jpg",
@@ -1933,6 +2052,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/how-to-fish/screenshot-3.jpg",
         "Caption": "Рыбалка с друзьями",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/screenshot-3.jpg",
@@ -2216,9 +2336,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p-349559ac04508d5d.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 47437110
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-720p-f12c19f05c6639fb.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 26959507
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-480p-d62f78b9694d1862.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 11954393
+          }
+        ],
         "Path": "Assets/Media/repo/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p-349559ac04508d5d.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/3241660/",
@@ -2230,6 +2370,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/repo/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · Marmok",
         "Url": "https://www.youtube.com/watch?v=GWuF23poTf4",
@@ -2244,6 +2385,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/repo/screenshot-1.jpg",
         "Caption": "Неожиданная встреча",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/repo/screenshot-1.jpg",
@@ -2258,6 +2400,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/repo/screenshot-2.jpg",
         "Caption": "Добыча в опасном доме",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/repo/screenshot-2.jpg",
@@ -2272,6 +2415,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/repo/screenshot-3.jpg",
         "Caption": "Угроза за каждым углом",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/repo/screenshot-3.jpg",
@@ -2987,9 +3131,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 61497879
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-720p-5ee515de3d8c9683.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 28521916
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-480p-b6ddc0fb83f09890.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 13717885
+          }
+        ],
         "Path": "Assets/Media/drive-beyond-horizons/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/2625420/",
@@ -3001,6 +3165,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/drive-beyond-horizons/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · Marmok",
         "Url": "https://www.youtube.com/watch?v=4maGPVyRWUI",
@@ -3015,6 +3180,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/drive-beyond-horizons/screenshot-1.jpg",
         "Caption": "Дорога за горизонт",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/screenshot-1.jpg",
@@ -3029,6 +3195,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/drive-beyond-horizons/screenshot-2.jpg",
         "Caption": "Обслуживание автомобиля",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/screenshot-2.jpg",
@@ -3043,6 +3210,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/drive-beyond-horizons/screenshot-3.jpg",
         "Caption": "Остановка в пути",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/screenshot-3.jpg",
@@ -3084,9 +3252,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p-abe2967be31c81ff.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 64912055
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-720p-7ecee621b3171cf4.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 32366497
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-480p-cd749f375258baea.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 15631538
+          }
+        ],
         "Path": "Assets/Media/peak/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p-abe2967be31c81ff.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/3527290/",
@@ -3098,6 +3286,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/peak/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · Marmok",
         "Url": "https://www.youtube.com/watch?v=D85J9Wxzzm8",
@@ -3112,6 +3301,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/peak/screenshot-1.jpg",
         "Caption": "Путь к вершине",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/peak/screenshot-1.jpg",
@@ -3126,6 +3316,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/peak/screenshot-2.jpg",
         "Caption": "Восхождение по верёвке",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/peak/screenshot-2.jpg",
@@ -3140,6 +3331,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/peak/screenshot-3.jpg",
         "Caption": "Начало путешествия",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/peak/screenshot-3.jpg",
@@ -5295,9 +5487,29 @@
     "Media": [
       {
         "Kind": "video",
+        "Variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p-af0fa499d7193659.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 52058815
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-720p-3a7d23b3a1b554a8.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 41412907
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-480p-1063342f77bbb926.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 18658555
+          }
+        ],
         "Path": "Assets/Media/machine-party/trailer-poster.jpg",
         "Caption": "Официальный трейлер",
-        "Url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p.mp4",
+        "Url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p-af0fa499d7193659.mp4",
         "Provider": "file",
         "Role": "trailer",
         "SourceUrl": "https://store.steampowered.com/app/4108000/",
@@ -5309,6 +5521,7 @@
       },
       {
         "Kind": "video",
+        "Variants": [],
         "Path": "Assets/Media/machine-party/gameplay-poster.jpg",
         "Caption": "Игра с друзьями · JOHAN",
         "Url": "https://www.youtube.com/watch?v=OTYIoEuKMmE",
@@ -5323,6 +5536,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/machine-party/screenshot-1.jpg",
         "Caption": "Испытания для компании",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/screenshot-1.jpg",
@@ -5337,6 +5551,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/machine-party/screenshot-2.jpg",
         "Caption": "Опасные правила раунда",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/screenshot-2.jpg",
@@ -5351,6 +5566,7 @@
       },
       {
         "Kind": "image",
+        "Variants": [],
         "Path": "Assets/Media/machine-party/screenshot-3.jpg",
         "Caption": "Ваш соперник",
         "Url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/screenshot-3.jpg",

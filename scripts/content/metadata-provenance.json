@@ -12,17 +12,36 @@
       "trailerId": 257444012,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257444012-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/2929250/558386778/0bb3ef58749e25ba6de3205d99c11660f84e87da/1790952533/hls_264_master.m3u8?t=1791993398",
+        "name": "trailer-257444012-1080p-136fce6455845222.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 74.645883,
-        "codec": "h264",
+        "bytes": 46683560,
+        "sha256": "136fce6455845222a7f3561dfad1b1162bc58fb892ef993c4908afc8a74055e6",
+        "durationSeconds": 74.645333,
         "gameId": "over-the-hill",
-        "relativePath": "media/2026-11/over-the-hill/trailer-257444012-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p.mp4",
-        "bytes": 54207490,
-        "sha256": "ae2110fc562588389dcfaf8bd00860051e3756675399a0881d507c81362ef38d"
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/2929250/558386778/0bb3ef58749e25ba6de3205d99c11660f84e87da/1790952533/hls_264_master.m3u8?t=1791993398",
+        "relativePath": "media/2026-11/over-the-hill/trailer-257444012-1080p-136fce6455845222.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p-136fce6455845222.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p-136fce6455845222.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 46683560
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-720p-d1b937053a04948d.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 21966508
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-480p-5fa2b5dcf2b51d68.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 10452098
+          }
+        ]
       },
       "gameplay": {
         "videoId": "F9meqfOSzAA",
@@ -96,17 +115,36 @@
       "trailerId": 257342172,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257342172-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/4656000/49788712/2a67a7ea1b0574c8d295e5cc4734523207bad504/1788267751/hls_264_master.m3u8?t=1788268623",
+        "name": "trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 55.954687,
-        "codec": "h264",
-        "gameId": "bombanana",
-        "relativePath": "media/2026-11/bombanana/trailer-257342172-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p.mp4",
         "bytes": 40198560,
-        "sha256": "472565c5a5f10b5b74c98f96bc8a316e981a30b995d05d5f579d6ca58c3d6b9a"
+        "sha256": "b0deffec42fa1ac3720e7150b57ec3303d8d0d39a2a063ff372487742146b8af",
+        "durationSeconds": 55.954687,
+        "gameId": "bombanana",
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/4656000/49788712/2a67a7ea1b0574c8d295e5cc4734523207bad504/1788267751/hls_264_master.m3u8?t=1788268623",
+        "relativePath": "media/2026-11/bombanana/trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 40198560
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-720p-1cd81fe137362232.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 24267160
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-480p-e0b59353ac5e94a4.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 12206206
+          }
+        ]
       },
       "gameplay": {
         "videoId": "F7rliIICyzY",
@@ -180,17 +218,36 @@
       "trailerId": 256961309,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-256961309-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/1966720/593018/d94ebe61f51f602028df99031bafd2ae075b1132/1750743020/hls_264_master.m3u8?t=1690909590",
+        "name": "trailer-256961309-1080p-829db85b6d968365.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 52.288021,
-        "codec": "h264",
+        "bytes": 32382490,
+        "sha256": "829db85b6d9683655844004f581a3b5686cd700ce6c11eb473eae44fca77f1de",
+        "durationSeconds": 52.288,
         "gameId": "lethal-company",
-        "relativePath": "media/2026-11/lethal-company/trailer-256961309-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p.mp4",
-        "bytes": 34652273,
-        "sha256": "919ad5fba3eee0cd3b7813c7309c37b6571784a27eea24f826ae43ed7c050766"
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/1966720/593018/d94ebe61f51f602028df99031bafd2ae075b1132/1750743020/hls_264_master.m3u8?t=1690909590",
+        "relativePath": "media/2026-11/lethal-company/trailer-256961309-1080p-829db85b6d968365.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p-829db85b6d968365.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p-829db85b6d968365.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 32382490
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-720p-5fcb48e5fd31d362.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 17219343
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-480p-e37e8ce9b9702799.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 8932210
+          }
+        ]
       },
       "gameplay": {
         "videoId": "gsLztQaZNas",
@@ -1114,17 +1171,36 @@
       "trailerId": 257328124,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257328124-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/3124540/1804471861/079d9f650d8a0e9fdfcea222029fb8b9aa7c4393/1777372464/hls_264_master.m3u8?t=1777381102",
+        "name": "trailer-257328124-1080p-3a56b8eae9f539de.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 65.0196,
-        "codec": "h264",
-        "gameId": "farfarwest",
-        "relativePath": "media/2026-11/farfarwest/trailer-257328124-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p.mp4",
         "bytes": 48018456,
-        "sha256": "0460c0deeb7b18b03821e4b160f5541276924c2f7be8b6ee55cc99338c19c701"
+        "sha256": "3a56b8eae9f539de92e5d7f04152039f3fbde00e83bc6a1ad7b0c7926a4bb683",
+        "durationSeconds": 65.0196,
+        "gameId": "farfarwest",
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/3124540/1804471861/079d9f650d8a0e9fdfcea222029fb8b9aa7c4393/1777372464/hls_264_master.m3u8?t=1777381102",
+        "relativePath": "media/2026-11/farfarwest/trailer-257328124-1080p-3a56b8eae9f539de.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p-3a56b8eae9f539de.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p-3a56b8eae9f539de.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 48018456
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-720p-95516057e4612735.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 37123037
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-480p-560e22b7fde4a496.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 17096346
+          }
+        ]
       },
       "gameplay": {
         "videoId": "Z9TK8IjS6PY",
@@ -1198,17 +1274,36 @@
       "trailerId": 257329313,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257329313-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/4001890/1292677147/fd5f1f32aa90769f379a4e2099d7147ccf63cd51/1777544367/hls_264_master.m3u8?t=1777545430",
+        "name": "trailer-257329313-1080p-624632f5d2f9afab.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 45.021354,
-        "codec": "h264",
-        "gameId": "how-to-fish",
-        "relativePath": "media/2026-11/how-to-fish/trailer-257329313-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p.mp4",
         "bytes": 32957712,
-        "sha256": "d38794a4a1ae1b1deb3cd5aa1889ea893a713e55d0c6ea97ccf7ad63bb763a10"
+        "sha256": "624632f5d2f9afab2887295aa2601726be01ece8bda8736a9a9e495883710f19",
+        "durationSeconds": 45.021354,
+        "gameId": "how-to-fish",
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/4001890/1292677147/fd5f1f32aa90769f379a4e2099d7147ccf63cd51/1777544367/hls_264_master.m3u8?t=1777545430",
+        "relativePath": "media/2026-11/how-to-fish/trailer-257329313-1080p-624632f5d2f9afab.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p-624632f5d2f9afab.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p-624632f5d2f9afab.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 32957712
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-720p-3a1926ecb8d46c71.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 21209711
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-480p-80cbf15af589514a.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 9791462
+          }
+        ]
       },
       "gameplay": {
         "videoId": "PixGCKKpeFY",
@@ -1456,17 +1551,36 @@
       "trailerId": 257102296,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257102296-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/3241660/835161/c897cc391cd03bc74fb7149e9d3373357aa7db2c/1750825077/hls_264_master.m3u8?t=1750942483",
+        "name": "trailer-257102296-1080p-349559ac04508d5d.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 64.405333,
-        "codec": "h264",
-        "gameId": "repo",
-        "relativePath": "media/2026-11/repo/trailer-257102296-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p.mp4",
         "bytes": 47437110,
-        "sha256": "2c4570503f7accea8628ecb80c5120d886ce2f35b8a0d0ed20514bbcf4f8e7a6"
+        "sha256": "349559ac04508d5d8869e3961e67e6c4bc12dd7d6ffe713a8d32a03074f22118",
+        "durationSeconds": 64.405333,
+        "gameId": "repo",
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/3241660/835161/c897cc391cd03bc74fb7149e9d3373357aa7db2c/1750825077/hls_264_master.m3u8?t=1750942483",
+        "relativePath": "media/2026-11/repo/trailer-257102296-1080p-349559ac04508d5d.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p-349559ac04508d5d.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p-349559ac04508d5d.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 47437110
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-720p-f12c19f05c6639fb.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 26959507
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-480p-d62f78b9694d1862.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 11954393
+          }
+        ]
       },
       "gameplay": {
         "videoId": "GWuF23poTf4",
@@ -1954,17 +2068,36 @@
       "trailerId": 257120623,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257120623-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/2625420/861154/3572cd7a8cbd83c790b20ef96abc77c2cfd85b76/1750817562/hls_264_master.m3u8?t=1788101965",
+        "name": "trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
         "width": 1920,
         "height": 1080,
+        "bytes": 61497879,
+        "sha256": "29d03dcfa6e1a6c562d1ba049c549954847029e04e4d000cb7e49fe7dce79438",
         "durationSeconds": 110.037333,
-        "codec": "h264",
         "gameId": "drive-beyond-horizons",
-        "relativePath": "media/2026-11/drive-beyond-horizons/trailer-257120623-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p.mp4",
-        "bytes": 75278247,
-        "sha256": "9666c0d4e447e7cfdfb09deb158c617404b35ee8936a5e7ddc920e13b84a6a88"
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/2625420/861154/3572cd7a8cbd83c790b20ef96abc77c2cfd85b76/1750817562/hls_264_master.m3u8?t=1788101965",
+        "relativePath": "media/2026-11/drive-beyond-horizons/trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 61497879
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-720p-5ee515de3d8c9683.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 28521916
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-480p-b6ddc0fb83f09890.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 13717885
+          }
+        ]
       },
       "gameplay": {
         "videoId": "4maGPVyRWUI",
@@ -2038,17 +2171,36 @@
       "trailerId": 257155585,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257155585-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/3527290/1124352640/46e621ec7cbf462dc1d877c8a841d5ba81038fe7/1750833231/hls_264_master.m3u8?t=1750093233",
+        "name": "trailer-257155585-1080p-abe2967be31c81ff.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 91.050667,
-        "codec": "h264",
-        "gameId": "peak",
-        "relativePath": "media/2026-11/peak/trailer-257155585-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p.mp4",
         "bytes": 64912055,
-        "sha256": "c46ad5b60997bbf99e5f92ce297311faf9ccc22b8728b90027b83931c7ba1c19"
+        "sha256": "abe2967be31c81ff5cd1893adc9012e24822b7f8a7460daa9048bd2f562f0403",
+        "durationSeconds": 91.050667,
+        "gameId": "peak",
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/3527290/1124352640/46e621ec7cbf462dc1d877c8a841d5ba81038fe7/1750833231/hls_264_master.m3u8?t=1750093233",
+        "relativePath": "media/2026-11/peak/trailer-257155585-1080p-abe2967be31c81ff.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p-abe2967be31c81ff.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p-abe2967be31c81ff.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 64912055
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-720p-7ecee621b3171cf4.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 32366497
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-480p-cd749f375258baea.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 15631538
+          }
+        ]
       },
       "gameplay": {
         "videoId": "D85J9Wxzzm8",
@@ -3340,17 +3492,36 @@
       "trailerId": 257388358,
       "trailerFormat": "mp4-h264-aac-1080p",
       "trailer": {
-        "name": "trailer-257388358-1080p.mp4",
-        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/4108000/81551079/ae9d6b148d4e75c0e61c5508e99e676852991401/1785412649/hls_264_master.m3u8?t=1785413491",
+        "name": "trailer-257388358-1080p-af0fa499d7193659.mp4",
         "width": 1920,
         "height": 1080,
-        "durationSeconds": 69.571354,
-        "codec": "h264",
-        "gameId": "machine-party",
-        "relativePath": "media/2026-11/machine-party/trailer-257388358-1080p.mp4",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p.mp4",
         "bytes": 52058815,
-        "sha256": "0cac6c00c839b389076c9b493b2d700ffaa0c6fcb9564d283b407801894cf4f7"
+        "sha256": "af0fa499d71936596da4ac5a69ec31f4e4317b34ef3654146f9f27d2be4eab47",
+        "durationSeconds": 69.571354,
+        "gameId": "machine-party",
+        "sourceUrl": "https://video.akamai.steamstatic.com/store_trailers/4108000/81551079/ae9d6b148d4e75c0e61c5508e99e676852991401/1785412649/hls_264_master.m3u8?t=1785413491",
+        "relativePath": "media/2026-11/machine-party/trailer-257388358-1080p-af0fa499d7193659.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p-af0fa499d7193659.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p-af0fa499d7193659.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 52058815
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-720p-3a7d23b3a1b554a8.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 41412907
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-480p-1063342f77bbb926.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 18658555
+          }
+        ]
       },
       "gameplay": {
         "videoId": "OTYIoEuKMmE",

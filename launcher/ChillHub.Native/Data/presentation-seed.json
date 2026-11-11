@@ -17,7 +17,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p-136fce6455845222.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-1080p-136fce6455845222.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 46683560
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-720p-d1b937053a04948d.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 21966508
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-257444012-480p-5fa2b5dcf2b51d68.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 10452098
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/2929250/",
@@ -87,7 +107,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-1080p-b0deffec42fa1ac3.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 40198560
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-720p-1cd81fe137362232.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 24267160
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-257342172-480p-e0b59353ac5e94a4.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 12206206
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/bombanana/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/4656000/",
@@ -173,7 +213,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p-829db85b6d968365.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-1080p-829db85b6d968365.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 32382490
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-720p-5fcb48e5fd31d362.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 17219343
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-256961309-480p-e37e8ce9b9702799.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 8932210
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/1966720/",
@@ -1693,7 +1753,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p-3a56b8eae9f539de.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-1080p-3a56b8eae9f539de.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 48018456
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-720p-95516057e4612735.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 37123037
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-257328124-480p-560e22b7fde4a496.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 17096346
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/3124540/",
@@ -1779,7 +1859,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p-624632f5d2f9afab.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-1080p-624632f5d2f9afab.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 32957712
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-720p-3a1926ecb8d46c71.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 21209711
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-257329313-480p-80cbf15af589514a.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 9791462
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/4001890/",
@@ -2091,7 +2191,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p-349559ac04508d5d.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-1080p-349559ac04508d5d.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 47437110
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-720p-f12c19f05c6639fb.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 26959507
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-257102296-480p-d62f78b9694d1862.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 11954393
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/repo/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/3241660/",
@@ -2819,7 +2939,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-1080p-29d03dcfa6e1a6c5.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 61497879
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-720p-5ee515de3d8c9683.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 28521916
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-257120623-480p-b6ddc0fb83f09890.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 13717885
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/2625420/",
@@ -2905,7 +3045,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p-abe2967be31c81ff.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-1080p-abe2967be31c81ff.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 64912055
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-720p-7ecee621b3171cf4.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 32366497
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-257155585-480p-cd749f375258baea.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 15631538
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/peak/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/3527290/",
@@ -5073,7 +5233,27 @@
         "kind": "video",
         "provider": "file",
         "role": "trailer",
-        "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p.mp4",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p-af0fa499d7193659.mp4",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-1080p-af0fa499d7193659.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 52058815
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-720p-3a7d23b3a1b554a8.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 41412907
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-257388358-480p-1063342f77bbb926.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 18658555
+          }
+        ],
         "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/machine-party/trailer-poster.jpg",
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/4108000/",
