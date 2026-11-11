@@ -169,10 +169,10 @@ impl Benchmark {
             started: None,
         };
         // Ignore a stale command from an earlier process using the same directory.
-        if let Ok(bytes) = fs::read(result.directory.join("command.json")) {
-            if let Ok(command) = serde_json::from_slice::<Command>(&bytes) {
-                result.seen.insert(command.id);
-            }
+        if let Ok(bytes) = fs::read(result.directory.join("command.json"))
+            && let Ok(command) = serde_json::from_slice::<Command>(&bytes)
+        {
+            result.seen.insert(command.id);
         }
         Ok(result)
     }
@@ -255,10 +255,10 @@ impl Benchmark {
         detail: Value,
     ) -> io::Result<()> {
         let mut detail = object(detail);
-        if let Some((id, started)) = &self.started {
-            if id == &command.id {
-                detail.insert("startedUtc".into(), Value::String(started.clone()));
-            }
+        if let Some((id, started)) = &self.started
+            && id == &command.id
+        {
+            detail.insert("startedUtc".into(), Value::String(started.clone()));
         }
         let phase = serde_json::to_value(command.phase).map_err(io::Error::other)?;
         self.write(

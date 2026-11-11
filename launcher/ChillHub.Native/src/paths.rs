@@ -255,6 +255,113 @@ fn replace_file(source: &Path, dest: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_ancestor_errors_are_not_treated_as_missing_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(canonical_path_with_missing(&temp.path().join("invalid\0name")).is_err());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn game_identifiers_have_a_bounded_ascii_namespace() {
+        for id in [
+            "a".to_owned(),
+            "Game_01-test".to_owned(),
+            "a".repeat(127),
+            "a".repeat(128),
+        ] {
+            assert!(validate_game_id(&id).is_ok(), "{id:?}");
+        }
+        for id in [
+            String::new(),
+            "a".repeat(129),
+            "a".repeat(130),
+            "игра".into(),
+            "game.name".into(),
+            "game name".into(),
+            "game/name".into(),
+        ] {
+            assert!(validate_game_id(&id).is_err(), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn manifest_paths_reject_ambiguous_components_and_allow_ordinary_names() {
+        for raw in [
+            "", "a//b", "a/./b", "a/", "a /b", "a./b", "a\n/b", "a\t/b", "a</b", "a>/b", "a\"/b",
+            "a|/b", "a?/b", "a*/b", "con", "prn.dat", "Aux", "nul.exe", "com9.txt", "lpt1",
+            "LPT9.exe",
+        ] {
+            assert!(relative_path(raw).is_err(), "{raw:?}");
+        }
+        for raw in [
+            "COM0",
+            "COM10",
+            "LPT0",
+            "LPT10",
+            "COMx",
+            "LPTx",
+            "Company",
+            "example.dat",
+            "a/b",
+        ] {
+            assert!(relative_path(raw).is_ok(), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn containment_rejects_parent_components_even_with_no_existing_root() {
+        let temp = tempfile::tempdir().unwrap();
+        for root in [temp.path().to_path_buf(), temp.path().join("missing")] {
+            for raw in ["../outside", "game/../../outside", "./file"] {
+                assert!(contained_path(&root, Path::new(raw)).is_err(), "{raw:?}");
+            }
+            assert_eq!(
+                contained_path(&root, Path::new("game/file")).unwrap(),
+                root.join("game/file")
+            );
+        }
+    }
+
+    #[test]
+    fn configured_game_directory_is_respected_in_an_isolated_process() {
+        const MARKER: &str = "CHILLHUB_PATH_TEST_CHILD";
+        if std::env::var_os(MARKER).is_some() {
+            assert_eq!(
+                default_games_dir(),
+                PathBuf::from(std::env::var_os("CHILLHUB_GAMES_DIR").unwrap())
+            );
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "paths::tests::configured_game_directory_is_respected_in_an_isolated_process",
+                "--nocapture",
+            ])
+            .env(MARKER, "1")
+            .env("CHILLHUB_GAMES_DIR", temp.path().join("Chosen Games"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn failed_atomic_replacement_preserves_destination_and_removes_temporary_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("directory");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("keep"), b"original").unwrap();
+        assert!(atomic_write(&dest, b"replacement").is_err());
+        assert_eq!(fs::read(dest.join("keep")).unwrap(), b"original");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
     #[cfg(windows)]
     #[test]
     fn identity_resolves_short_and_verbatim_ancestors_without_creating_missing_paths() {

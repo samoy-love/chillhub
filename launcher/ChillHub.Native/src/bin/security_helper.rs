@@ -19,15 +19,46 @@ fn present_request(
         .map(|p| p.display().to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    let warning = if request.operation == SecurityOperation::Add {
-        security::WARNING
+    let adding = request.operation == SecurityOperation::Add;
+    let explanation = if adding {
+        "Антивирус перестанет проверять эти папки. Добавляйте только файлы, которым доверяете."
     } else {
-        "Удаляются только исключения, добавленные Chill Hub. Другие записи не изменятся."
+        "Удалим только исключения Chill Hub. Остальные записи не изменятся."
     };
-    ui.set_details(format!("{warning}\n\nПапки:\n{paths}\n\n{}\n\n{}", guide.instructions, if provider==0 { if elevated {"Проверьте пути и подтвердите действие. При отказе изменений не будет."} else {"Автоматическая настройка относится только к Microsoft Defender. Windows запросит разрешение; затем вы подтвердите конкретные папки."} } else {"Chill Hub не меняет настройки этого антивируса и не может подтвердить ручную настройку. После завершения повторите загрузку."}).into());
-    ui.set_secondary_text("Открыть инструкцию".into());
+    ui.set_paths(paths.into());
+    ui.set_details(explanation.into());
+    ui.set_status(
+        if provider == 0 {
+            if elevated {
+                "Нажмите кнопку, чтобы применить настройку."
+            } else {
+                "Windows запросит разрешение администратора."
+            }
+        } else {
+            "Для этого антивируса настройка выполняется по инструкции."
+        }
+        .into(),
+    );
+    ui.set_primary_text(
+        if provider != 0 {
+            "Открыть инструкцию"
+        } else if adding {
+            "Добавить исключения"
+        } else {
+            "Удалить исключения"
+        }
+        .into(),
+    );
+    ui.set_primary_enabled(true);
+    ui.set_secondary_text(
+        if provider == 0 {
+            "Инструкция"
+        } else {
+            ""
+        }
+        .into(),
+    );
     ui.set_secondary_enabled(!guide.url.is_empty());
-    ui.set_primary_enabled(provider == 0);
 }
 
 fn main() -> Result<(), String> {
@@ -52,6 +83,7 @@ fn finish(
         helper_runtime::record_result(log, &result.as_ref().map(|_| ()).map_err(Clone::clone));
     ui.set_busy(false);
     ui.set_can_close(true);
+    ui.set_error(result.is_err());
     if !elevated {
         match result {
             Ok(_) => {
@@ -63,6 +95,8 @@ fn finish(
     }
     ui.set_primary_text("Закрыть".into());
     ui.set_primary_enabled(true);
+    ui.set_paths("".into());
+    ui.set_provider_visible(false);
     ui.set_details(
         match result {
             Ok(text) => text,
@@ -81,6 +115,9 @@ fn finish(
 fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let elevated_session = security::elevated_request_from_args(&args)?;
+    // Only the authenticated pipe handoff follows an explicit click in the
+    // ordinary helper. A direct elevated launch still needs its own confirmation.
+    let confirmed_handoff = elevated_session.is_some();
     let mut parsed = match elevated_session
         .as_ref()
         .map(|session| Ok(Some(session.request())))
@@ -106,9 +143,7 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     helper_runtime::style_window(ui.window());
     ui.set_window_title("Настройка защиты · Chill Hub".into());
     ui.set_heading("Исключения антивируса".into());
-    ui.set_subtitle(
-        "Изменение касается только выбранных папок и требует вашего подтверждения.".into(),
-    );
+    ui.set_subtitle("Настройка только для выбранных папок.".into());
     ui.set_secondary_text("Настроить вручную".into());
     let elevated = security::is_elevated();
     let weak = ui.as_weak();
@@ -194,20 +229,20 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
                         let _ = weak.upgrade_in_event_loop(move |ui| ui.set_status(message.into()));
                     });
             });
-            ui.set_primary_text(
-                if elevated {
-                    verb
-                } else {
-                    "Продолжить…"
-                }
-                .into(),
-            );
             let weak = ui.as_weak();
             ui.on_primary(move || {
                 let Some(ui) = weak.upgrade() else {
                     return;
                 };
-                if ui.get_busy() || ui.get_selected_provider() != 0 {
+                if ui.get_busy() {
+                    return;
+                }
+                if ui.get_selected_provider() != 0 {
+                    if let Err(error) =
+                        security::open_guide(ui.get_selected_provider().max(0) as usize)
+                    {
+                        ui.set_status(error.into());
+                    }
                     return;
                 }
                 ui.set_busy(true);
@@ -282,23 +317,62 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
         }
     }
     ui.show().map_err(|e| e.to_string())?;
+    resume_confirmed_handoff(&ui, confirmed_handoff);
     if !elevated && introduction {
         let _ = security::mark_introduction_shown();
     }
     ui.run().map_err(|e| e.to_string())
 }
 
+fn resume_confirmed_handoff(ui: &AuxiliaryWindow, authenticated: bool) {
+    if authenticated && ui.get_primary_enabled() && !ui.get_busy() {
+        ui.invoke_primary();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn security_results_keep_errors_visible_and_allow_close_without_changes() {
+    fn security_window_handles_confirmation_and_results() {
+        // Slint's integration platform is process-wide. Keep both UI scenarios
+        // on the same initialized event-loop thread.
         i_slint_backend_testing::init_integration_test_with_system_time();
+        only_authenticated_handoff_resumes_the_confirmed_action();
+        security_results_keep_errors_visible_and_allow_close_without_changes();
+    }
+    fn only_authenticated_handoff_resumes_the_confirmed_action() {
+        use std::{cell::Cell, rc::Rc};
+        let ui = AuxiliaryWindow::new().unwrap();
+        let calls = Rc::new(Cell::new(0));
+        let count = calls.clone();
+        let weak = ui.as_weak();
+        ui.on_primary(move || {
+            count.set(count.get() + 1);
+            weak.upgrade().unwrap().set_busy(true);
+        });
+        resume_confirmed_handoff(&ui, false);
+        assert_eq!(calls.get(), 0, "opening a helper cannot change protection");
+        ui.set_primary_enabled(false);
+        resume_confirmed_handoff(&ui, true);
+        assert_eq!(calls.get(), 0, "invalid requests stay inert");
+        ui.set_primary_enabled(true);
+        resume_confirmed_handoff(&ui, true);
+        resume_confirmed_handoff(&ui, true);
+        assert_eq!(
+            calls.get(),
+            1,
+            "confirmed handoff starts once without a second click"
+        );
+    }
+    fn security_results_keep_errors_visible_and_allow_close_without_changes() {
         let temp = tempfile::tempdir().unwrap();
         let log = HelperLog::in_directory(temp.path(), HelperKind::Security).unwrap();
         let ui = AuxiliaryWindow::new().unwrap();
         ui.set_busy(true);
         ui.set_can_close(false);
+        ui.set_paths("D:\\Games\\Fixture".into());
+        ui.set_provider_visible(true);
         finish(
             &ui,
             Err("fixture: operation failed".into()),
@@ -309,6 +383,11 @@ mod tests {
         assert!(ui.get_can_close());
         assert!(ui.get_primary_enabled());
         assert_eq!(ui.get_primary_text(), "Закрыть");
+        assert!(ui.get_paths().is_empty());
+        assert!(
+            !ui.get_provider_visible(),
+            "completed operation cannot select another provider"
+        );
         assert!(ui.get_details().contains("operation failed"));
         assert!(
             std::fs::read_to_string(log.path())

@@ -562,7 +562,39 @@ fn poll_services(ui: &AppWindow, state: &State) {
 pub(super) fn install_window_refresh(ui: &AppWindow) {
     use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
     let weak = ui.as_weak();
-    ui.window().on_winit_window_event(move |_, event| {
+    let budget = RefCell::new(crate::frame_pacing::FrameBudget::default());
+    let redraw_timer = Timer::default();
+    ui.window().on_winit_window_event(move |window, event| {
+        if matches!(
+            event,
+            WindowEvent::Resized(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::KeyboardInput { .. }
+                | WindowEvent::Focused(true)
+        ) {
+            budget.borrow_mut().invalidate_immediately();
+        }
+        if matches!(event, WindowEvent::RedrawRequested) {
+            if let Some(delay) = budget.borrow_mut().request(std::time::Instant::now()) {
+                if !redraw_timer.running() {
+                    let weak = weak.clone();
+                    redraw_timer.start(TimerMode::SingleShot, delay, move || {
+                        if let Some(ui) = weak.upgrade() {
+                            ui.window()
+                                .with_winit_window(|native| native.request_redraw());
+                        }
+                    });
+                }
+                return EventResult::PreventDefault;
+            }
+            redraw_timer.stop();
+        }
+        #[cfg(feature = "benchmark")]
+        crate::perf_probe::observe_window_event(window, event);
+        #[cfg(not(feature = "benchmark"))]
+        let _ = window;
         if let WindowEvent::Focused(focused) = event {
             let weak = weak.clone();
             let focused = *focused;
@@ -1561,6 +1593,11 @@ fn queue_changed(ui: &AppWindow, state: &State, tasks: Vec<QueueItem>) {
                         | QueueState::NeedsConfirmation
                 ),
                 can_confirm: task.state == QueueState::NeedsConfirmation,
+                can_prioritize: queue_ui::can_prioritize(
+                    task.state,
+                    tasks.first().is_some_and(|first| first.id == task.id),
+                ),
+                can_remove: queue_ui::can_remove(task.state),
                 security_blocked: task.state == QueueState::Failed
                     && task.report.error_code.as_deref() == Some("sync_security_blocked"),
             }
@@ -1742,6 +1779,15 @@ fn watch_game(ui: &AppWindow, session: chillhub_native::playtime::SessionHandle)
     );
 }
 pub(super) fn prepare_panel(ui: &AppWindow, state: &State, kind: &str) {
+    if kind == "update" {
+        let release = state.borrow().update.clone();
+        ui.set_update_available(release.is_some());
+        ui.set_update_target(release.map(|r| r.version).unwrap_or_default().into());
+        ui.set_update_error(false);
+        ui.set_task_status("".into());
+        ui.set_task_progress(0.);
+        action(ui, state, "update-check");
+    }
     if kind == "mods" {
         ui.set_has_modpack_link(
             selected(state)
@@ -2168,6 +2214,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
         }
         "security-check" | "security-diagnostics" => {
             ui.set_operation_busy(true);
+            ui.set_panel_body("Проверяем состояние защиты и последние блокировки…".into());
             background_for(
                 ui,
                 Activity::Operation,
@@ -2176,7 +2223,10 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                     ui.set_operation_busy(false);
                     match r {
                         Ok(report) => ui.set_panel_body(report.summary().into()),
-                        Err(e) => toast(ui, state, &e),
+                        Err(e) => {
+                            ui.set_panel_body(format!("Не удалось проверить защиту: {e}").into());
+                            toast(ui, state, &e);
+                        }
                     }
                 },
             );
@@ -2184,19 +2234,19 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
         "security-helper" => {
             if let Some((game, target)) = selected(state) {
                 match services.option(&game, target) {
-                    Ok(o) => confirm(
-                        ui,
-                        state,
-                        Confirmation::Security(vec![o.game_dir.clone()]),
-                        "Открыть помощник защиты?",
-                        format!(
-                            "Выбрана папка:\n{}\n\nПомощник покажет путь и запросит подтверждение перед добавлением исключения. Делайте это только для файлов, которым доверяете.",
-                            o.game_dir.display()
-                        ),
-                        "Открыть помощник",
-                    ),
+                    // The helper shows the exact paths and owns confirmation.
+                    // Merely opening it does not change Windows protection.
+                    Ok(o) => operation(ui, state, move || {
+                        chillhub_native::security::launch_helper(
+                            &[o.game_dir],
+                            chillhub_native::security::SecurityOperation::Add,
+                        )
+                        .map(|_| "Открыт помощник антивируса".into())
+                    }),
                     Err(e) => toast(ui, state, &e),
                 }
+            } else {
+                toast(ui, state, "Сначала выберите игру в библиотеке");
             }
         }
         "security-open" | "windows-security" => {
@@ -2205,7 +2255,15 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
             }
         }
         "update-check" => {
+            state.borrow_mut().update = None;
             ui.set_operation_busy(true);
+            ui.set_update_available(false);
+            ui.set_update_checked(false);
+            ui.set_update_error(false);
+            ui.set_update_target("".into());
+            ui.set_task_status("".into());
+            ui.set_task_progress(0.);
+            ui.set_panel_body("Ищем новую версию Chill Hub…".into());
             background_for(
                 ui,
                 Activity::Operation,
@@ -2218,16 +2276,22 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 },
                 |ui, state, r| {
                     ui.set_operation_busy(false);
+                    ui.set_update_checked(true);
                     match r {
                         Ok(UpdateCheck::Current { .. }) => {
                             state.borrow_mut().update = None;
                             ui.set_panel_body("У вас актуальная версия Chill Hub.".into());
                         }
                         Ok(UpdateCheck::Available(release)) => {
+                            ui.set_update_available(true);
+                            ui.set_update_target(release.version.clone().into());
                             ui.set_panel_body(format!("Доступна версия {}. Игры и настройки сохранятся. После загрузки лаунчер перезапустится.",release.version).into());
                             state.borrow_mut().update = Some(release);
                         }
-                        Err(e) => toast(ui, state, &e),
+                        Err(e) => {
+                            ui.set_update_error(true);
+                            ui.set_panel_body(format!("Не удалось проверить обновления. Проверьте подключение и попробуйте снова.\n\n{e}").into());
+                        }
                     }
                 },
             );
@@ -2245,6 +2309,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 }
             };
             ui.set_operation_busy(true);
+            ui.set_update_error(false);
             ui.set_task_progress(0.);
             ui.set_task_status("Проверяем установленные файлы…".into());
             let weak = ui.as_weak();
@@ -2288,6 +2353,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                             ui.set_panel_body(format!("Некоторые файлы отличаются от выпуска. Файлы лаунчера и игр не изменены. Если повторное обновление заблокировано, скачайте установщик с официального сайта.\n\n{names}").into());
                         }
                         Err(e) => {
+                            ui.set_update_error(true);
                             ui.set_task_status(e.clone().into());
                             toast(ui, state, &e);
                         }
@@ -2323,6 +2389,9 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 staging: stage,
             };
             ui.set_operation_busy(true);
+            ui.set_update_error(false);
+            ui.set_task_progress(0.);
+            ui.set_task_status("Подготавливаем обновление…".into());
             let weak = ui.as_weak();
             background_for(
                 ui,
@@ -2357,6 +2426,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                             let _ = slint::quit_event_loop();
                         }
                         Err(e) => {
+                            ui.set_update_error(true);
                             ui.set_task_status(format!("{e}\nЕсли обновление не удаётся повторить, нажмите «Проверить установку».").into());
                             toast(ui, state, &e);
                         }

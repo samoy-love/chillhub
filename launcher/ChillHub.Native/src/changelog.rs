@@ -22,28 +22,10 @@ pub fn should_show(last_seen: &str, current: &str) -> bool {
                 .is_ok_and(|version| version <= current && last.is_none_or(|last| version > last))
     })
 }
-pub fn text() -> String {
-    text_since("")
-}
-pub fn text_since(last_seen: &str) -> String {
-    entries_since(last_seen)
-        .into_iter()
-        .map(|r| {
-            format!(
-                "{} · {}{}\n{}",
-                r.version,
-                r.date,
-                if r.fresh { " · Новое" } else { "" },
-                r.changes
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
 pub struct Entry {
     pub version: String,
     pub date: String,
-    pub changes: String,
+    pub items: Vec<String>,
     pub fresh: bool,
 }
 fn display_date(value: &str) -> String {
@@ -88,12 +70,7 @@ pub fn entries_since(last_seen: &str) -> Vec<Entry> {
                 version: r.version,
                 date: display_date(&r.date),
                 fresh,
-                changes: r
-                    .changes
-                    .into_iter()
-                    .map(|c| format!("• {c}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+                items: r.changes,
             }
         })
         .collect()
@@ -109,10 +86,20 @@ mod tests {
     }
     #[test]
     fn new_marks_use_previous_seen_version_and_disappear_on_reopen() {
-        assert!(!text_since("").contains(" · Новое"));
-        assert!(!text_since(env!("CARGO_PKG_VERSION")).contains(" · Новое"));
-        assert!(text_since("1.8.0").contains(" · Новое"));
-        assert!(!text_since("9.0.0").contains(" · Новое"));
+        for seen in ["", "unknown", env!("CARGO_PKG_VERSION"), "9.0.0"] {
+            assert!(entries_since(seen).iter().all(|entry| !entry.fresh));
+        }
+        let entries = entries_since("1.8.0");
+        for version in [env!("CARGO_PKG_VERSION"), "1.8.1"] {
+            assert!(entries.iter().find(|e| e.version == version).unwrap().fresh);
+        }
+        for version in ["1.8.0", "1.7.20", "1.0"] {
+            assert!(!entries.iter().find(|e| e.version == version).unwrap().fresh);
+        }
+        let first = entries.iter().find(|e| e.version == "1.0").unwrap();
+        assert_eq!(first.date, "20 сентября 2025");
+        assert_eq!(first.items.len(), 2);
+        assert!(first.items[0].starts_with("Первый Chill Hub:"));
     }
     #[test]
     fn first_install_upgrade_repeat_and_rollback_have_distinct_gates() {
@@ -125,6 +112,22 @@ mod tests {
         assert!(!should_show("2.0.0", env!("CARGO_PKG_VERSION")));
         assert!(should_show("1.8.0", "1.8.1"));
         assert!(!should_show("", "unknown"));
+        assert!(
+            !should_show("", "0.9.0"),
+            "no history predates the first release"
+        );
+        assert!(
+            should_show("1.8.0.1", "1.8.1"),
+            "last-seen version need not have its own history entry"
+        );
+        assert!(
+            !should_show("1.8.1", "1.8.1.1"),
+            "an already seen entry is not new in a later build without release notes"
+        );
+        assert!(
+            !should_show("99.0.0", "99.0.1"),
+            "no entries in the requested version interval"
+        );
     }
     #[test]
     fn current_release_is_first_and_player_changes_are_bounded() {

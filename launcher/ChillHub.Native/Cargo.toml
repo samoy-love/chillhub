@@ -1,9 +1,14 @@
 [package]
 name = "chillhub-native"
-version = "1.8.2"
+version = "1.8.4"
 edition = "2024"
 rust-version = "1.92"
 publish = false
+
+[workspace]
+members = ["vendor/i-slint-renderer-software"]
+default-members = ["."]
+resolver = "3"
 
 [[bin]]
 name = "ChillHub"
@@ -25,12 +30,13 @@ required-features = ["launcher-ui"]
 
 [features]
 default = ["launcher-ui"]
-launcher-ui = ["dep:slint", "dep:image", "dep:raw-window-handle", "slint/renderer-femtovg-wgpu", "slint/raw-window-handle-06", "slint/unstable-winit-030", "web-video"]
+launcher-ui = ["dep:slint", "dep:image", "dep:raw-window-handle", "dep:i-slint-renderer-software", "slint/renderer-femtovg-wgpu", "slint/raw-window-handle-06", "slint/unstable-winit-030", "slint/unstable-wgpu-30", "web-video"]
 helper-ui = ["dep:slint", "dep:raw-window-handle", "slint/raw-window-handle-06"]
-benchmark = ["launcher-ui", "slint/renderer-femtovg", "slint/unstable-wgpu-30"]
+benchmark = ["launcher-ui", "slint/renderer-femtovg", "slint/unstable-wgpu-30", "i-slint-renderer-software/frame-timings"]
 web-video = ["dep:webview2-com"]
 
 [dependencies]
+i-slint-renderer-software = { version = "=1.18.1", optional = true, features = ["smooth-images"] }
 slint = { version = "=1.18.1", optional = true, default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-18"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -67,3 +73,6 @@ lto = "thin"
 codegen-units = 1
 # Worker recovery in the controller and helpers relies on unwinding.
 panic = "unwind"
+
+[patch.crates-io]
+i-slint-renderer-software = { path = "vendor/i-slint-renderer-software" }

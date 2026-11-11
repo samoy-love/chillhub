@@ -5,6 +5,8 @@
 /runtime-*.log
 /benchmark/baselines/
 /test-output.log
+/mutants.out/
+/mutants.out.old/
 
 # The repository-wide **/bin/ rule is for build outputs, not Rust entrypoints.
 !/src/bin/

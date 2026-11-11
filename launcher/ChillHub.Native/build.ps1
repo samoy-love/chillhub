@@ -57,8 +57,11 @@ try {
         if ($LASTEXITCODE) { throw 'Не удалось обновить зависимости.' }
     }
     if ($FormatCheck) {
-        & $CargoPath fmt --all -- --check
+        & $CargoPath fmt --package chillhub-native -- --check
         if ($LASTEXITCODE) { throw "Cargo fmt завершился с ошибкой $LASTEXITCODE" }
+        # Preserve the upstream formatting of the pinned renderer snapshot.
+        & (Join-Path (Split-Path $CargoPath) 'rustfmt.exe') --edition 2024 --check vendor/i-slint-renderer-software/smooth_images.rs vendor/i-slint-renderer-software/frame_timings.rs
+        if ($LASTEXITCODE) { throw 'Не отформатированы локальные расширения renderer.' }
     } else {
         if ($TestTarget -and $Component -eq 'Helpers') { throw 'Integration TestTarget требует Launcher.' }
         $components = if ($TestTarget) { @('Launcher') } elseif ($Component -eq 'All') { @('Launcher','Helpers') } else { @($Component) }
@@ -81,6 +84,12 @@ try {
             if ($Clippy) { $argsList += @('--','-D','warnings') }
             & $CargoPath @argsList
             if ($LASTEXITCODE) { throw "Cargo $part завершился с ошибкой $LASTEXITCODE" }
+            if ($Test -and $part -eq 'Launcher' -and !$TestTarget) {
+                $samplerArgs = @('test','--release','--locked','-p','i-slint-renderer-software','--features','smooth-images','--lib','smooth_images::tests')
+                if ($Target) { $samplerArgs += @('--target',$Target) }
+                & $CargoPath @samplerArgs
+                if ($LASTEXITCODE) { throw 'Не прошли проверки масштабирования изображений.' }
+            }
             if ($part -eq 'Helpers' -and !$Test -and !$Check -and !$Clippy -and !$Library) {
                 $treeArgs=@('tree','--locked','--no-default-features','--features','helper-ui','--edges','normal','--prefix','none','--target',$effectiveTarget)
                 $runtimeGraph=& $CargoPath @treeArgs

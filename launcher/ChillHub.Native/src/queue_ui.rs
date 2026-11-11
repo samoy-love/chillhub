@@ -130,6 +130,15 @@ pub(crate) fn progress(task: &QueueItem) -> f32 {
             (p.completed_bytes as f64 / p.total_bytes as f64).clamp(0., 1.) as f32
         })
 }
+pub(crate) fn can_remove(state: QueueState) -> bool {
+    matches!(
+        state,
+        QueueState::Completed | QueueState::Failed | QueueState::Cancelled
+    )
+}
+pub(crate) fn can_prioritize(state: QueueState, first: bool) -> bool {
+    !first && matches!(state, QueueState::Waiting | QueueState::Paused)
+}
 pub(crate) fn detail(task: &QueueItem, rate: f64, eta: Option<u64>) -> String {
     let mut parts = Vec::new();
     if let Some(error) = &task.error
@@ -193,6 +202,28 @@ pub(crate) fn detail(task: &QueueItem, rate: f64, eta: Option<u64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queue_actions_follow_lifecycle_and_position() {
+        use QueueState::*;
+        for (state, removable, movable) in [
+            (Waiting, false, true),
+            (Running, false, false),
+            (Pausing, false, false),
+            (Paused, false, true),
+            (Cancelling, false, false),
+            (Completed, true, false),
+            (Failed, true, false),
+            (Cancelled, true, false),
+            (NeedsConfirmation, false, false),
+        ] {
+            assert_eq!(can_remove(state), removable, "remove {state:?}");
+            assert_eq!(can_prioritize(state, false), movable, "move {state:?}");
+            assert!(
+                !can_prioritize(state, true),
+                "first item has nowhere to move: {state:?}"
+            );
+        }
+    }
     use chillhub_native::transfer::{TransferEvent, TransferRequest};
     fn task() -> QueueItem {
         QueueItem {

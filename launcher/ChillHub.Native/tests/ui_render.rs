@@ -64,6 +64,54 @@ fn resize(window: &slint::Window, width: u32, height: u32, scale: f32) {
     });
 }
 
+/// CPU raster diagnostic, deliberately separate from the correctness gate and
+/// live RAM/GPU runs. Snapshots force full frames and exclude DWM presentation.
+#[cfg(feature = "benchmark")]
+#[test]
+fn software_continuous_resize_diagnostic() {
+    use slint::Model;
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true,
+        threading: false,
+        renderer_name: Some("software".into()),
+    })))
+    .unwrap();
+    let mut h = Harness::new();
+    h.game("lethal-company");
+    let premultiplied =
+        |image: Image| Image::from_rgba8_premultiplied(image.to_rgba8_premultiplied().unwrap());
+    h.ui.set_hero(premultiplied(h.ui.get_hero()));
+    h.ui.set_media(model(
+        h.ui.get_media()
+            .iter()
+            .map(|mut tile| {
+                tile.poster = premultiplied(tile.poster);
+                tile
+            })
+            .collect(),
+    ));
+    resize(h.ui.window(), 1707, 996, 1.5);
+    settle();
+    h.ui.window().take_snapshot().unwrap();
+    i_slint_renderer_software::frame_timings::enable(true);
+    for step in 0..120 {
+        let width = 1707 - (step % 60) * 10;
+        resize(h.ui.window(), width, 996, 1.5);
+        mock_elapsed_time(Duration::from_millis(16));
+        let snapshot = h.ui.window().take_snapshot().unwrap();
+        assert_eq!(snapshot.width(), (width as f32 * 1.5).round() as u32);
+    }
+    let samples = i_slint_renderer_software::frame_timings::samples();
+    i_slint_renderer_software::frame_timings::enable(false);
+    assert_eq!(samples.len(), 120);
+    let output = h.base.join("dist/software-resize-timings.json");
+    std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+    std::fs::write(output, serde_json::to_vec_pretty(&serde_json::json!({
+        "samples": samples,
+        "scope": "120 full CPU raster frames at 150% DPI, changing width, warm assets; excludes snapshot conversion and DWM presentation",
+    })).unwrap()).unwrap();
+}
+
 struct Harness {
     ui: AppWindow,
     base: PathBuf,
@@ -108,6 +156,8 @@ impl Harness {
         ui.on_version_selected(move |version| log.borrow_mut().push(format!("version:{version}")));
         let log = actions.clone();
         ui.on_open_media_source(move || log.borrow_mut().push("open-media-source".to_owned()));
+        let log = actions.clone();
+        ui.on_video_toggle(move || log.borrow_mut().push("video-toggle".to_owned()));
         let weak = ui.as_weak();
         ui.on_panel_closed(move || weak.upgrade().unwrap().set_panel_kind("".into()));
         let weak = ui.as_weak();
@@ -148,14 +198,14 @@ impl Harness {
         ui.set_manage_details("На диске: 8,6 ГБ\nПоследняя версия в каталоге: 2.6.A\nПоследняя игра: 10.11.2026 19:42 · 53 мин".into());
         ui.set_has_modpack_link(true);
         ui.set_can_play(true);
-        ui.set_launcher_version("1.8.1".into());
+        ui.set_launcher_version(env!("CARGO_PKG_VERSION").into());
         ui.set_releases(model(
             chillhub_native::changelog::entries_since("1.7.20")
                 .into_iter()
                 .map(|r| chillhub_native::ui::ReleaseRow {
                     version: r.version.into(),
                     date: r.date.into(),
-                    changes: r.changes.into(),
+                    changes: model(r.items.into_iter().map(Into::into).collect()),
                     fresh: r.fresh,
                 })
                 .collect(),
@@ -626,6 +676,8 @@ fn real_ui_headless_layout_and_actions() {
         h.ui.set_connection_note("Нет связи · установленные игры доступны".into());
         h.capture("offline", 1120, 720, 2.0);
         h.ui.set_connection_note("".into());
+        let library = h.ui.get_games();
+        h.ui.set_games(model(vec![]));
         h.ui.set_game_title("".into());
         h.ui.set_loading(true);
         h.capture("loading", 1120, 720, 1.0);
@@ -634,6 +686,22 @@ fn real_ui_headless_layout_and_actions() {
         h.capture("catalog-error", 1120, 720, 1.0);
         h.ui.set_load_error("".into());
         h.capture("empty", 1120, 720, 1.0);
+        h.panel("security", "Антивирус", "");
+        h.capture("security-empty-library", 900, 500, 1.0);
+        let helper = ElementHandle::find_by_accessible_label(&h.ui, "Настроить антивирус")
+            .find(|e| e.accessible_enabled().is_some())
+            .unwrap();
+        assert_eq!(helper.accessible_enabled(), Some(false));
+        let before = h.actions.borrow().len();
+        helper.invoke_accessible_default_action();
+        settle();
+        assert_eq!(
+            h.actions.borrow().len(),
+            before,
+            "empty catalog cannot open a no-op helper"
+        );
+        h.panel("", "", "");
+        h.ui.set_games(library);
         h.game("peak");
     }
     let cases = [
@@ -662,7 +730,7 @@ fn real_ui_headless_layout_and_actions() {
         (
             "update",
             "Обновление Chill Hub",
-            "Доступна версия 1.8.1. Файлы сначала будут загружены и проверены. Затем отдельный помощник закроет лаунчер, применит обновление и запустит его снова. Если установка прервётся, сохранённые файлы помогут восстановить предыдущую версию.",
+            "Доступна версия 1.9.0. После загрузки лаунчер перезапустится.",
         ),
         (
             "feedback",
@@ -705,11 +773,113 @@ fn real_ui_headless_layout_and_actions() {
     };
     for (kind, title, body) in cases {
         h.panel(kind, title, body);
+        h.ui.set_update_available(kind == "update");
+        h.ui.set_update_target("1.9.0".into());
         for &(w, he, scale) in &panel_sizes {
             h.capture(kind, w, he, scale);
         }
+        if kind == "settings" {
+            for section in [1, 2] {
+                h.ui.set_settings_section(section);
+                for &(w, he, scale) in &panel_sizes {
+                    h.capture(&format!("settings-section-{section}"), w, he, scale);
+                }
+            }
+            h.ui.set_settings_section(0);
+        }
     }
     if h.qa {
+        for (name, checked, available, error, busy, body) in [
+            (
+                "update-checking",
+                false,
+                false,
+                false,
+                true,
+                "Ищем новую версию Chill Hub…",
+            ),
+            (
+                "update-current",
+                true,
+                false,
+                false,
+                false,
+                "У вас актуальная версия Chill Hub.",
+            ),
+            (
+                "update-unreachable",
+                true,
+                false,
+                true,
+                false,
+                "Не удалось проверить обновления. Проверьте подключение и попробуйте снова.",
+            ),
+            (
+                "update-install-error",
+                true,
+                true,
+                true,
+                false,
+                "Не удалось установить обновление. Закройте остальные окна лаунчера и повторите попытку.",
+            ),
+        ] {
+            h.panel("update", "Обновление Chill Hub", body);
+            h.ui.set_update_checked(checked);
+            h.ui.set_update_available(available);
+            h.ui.set_update_error(error);
+            h.ui.set_operation_busy(busy);
+            h.ui.set_task_progress(0.);
+            h.ui.set_task_status("".into());
+            for (w, he, scale) in [(900, 500, 1.0), (1360, 850, 1.5)] {
+                h.capture(name, w, he, scale);
+            }
+            let label = if busy {
+                "Подождите…"
+            } else if available {
+                "Обновить и перезапустить"
+            } else if error {
+                "Попробовать снова"
+            } else {
+                "Проверить обновления"
+            };
+            assert_eq!(
+                ElementHandle::find_by_accessible_label(&h.ui, "Проверить снова")
+                    .any(|e| e.accessible_enabled().is_some()),
+                available,
+                "secondary check is shown only alongside an available update"
+            );
+            let button = ElementHandle::find_by_accessible_label(&h.ui, label)
+                .find(|e| e.accessible_enabled().is_some())
+                .unwrap();
+            let before = h.actions.borrow().len();
+            button.invoke_accessible_default_action();
+            settle();
+            if busy {
+                assert_eq!(
+                    h.actions.borrow().len(),
+                    before,
+                    "checking cannot start another operation"
+                );
+            } else {
+                assert_eq!(
+                    h.actions.borrow().last().map(String::as_str),
+                    Some(if available {
+                        "update-install"
+                    } else {
+                        "update-check"
+                    })
+                );
+            }
+        }
+        h.ui.set_operation_busy(false);
+        h.ui.set_update_error(false);
+        h.panel("changelog", "Что нового", "");
+        let releases = h.ui.get_releases();
+        h.ui.set_releases(model(vec![]));
+        h.capture("changelog-empty", 900, 500, 1.0);
+        h.click("Понятно");
+        assert!(h.ui.get_panel_kind().is_empty());
+        h.ui.set_releases(releases);
         h.panel("mods", "Состав модпака", "");
         resize(h.ui.window(), 900, 500, 1.0);
         settle();
@@ -802,6 +972,13 @@ fn real_ui_headless_layout_and_actions() {
                 .into(),
         );
         h.capture("confirmation-long", 900, 500, 1.5);
+        for label in ["Отмена", h.ui.get_confirm_text().as_str()] {
+            let action = ElementHandle::find_by_accessible_label(&h.ui, label)
+                .find(|e| e.accessible_enabled() == Some(true))
+                .expect("confirmation action remains visible without scrolling");
+            assert_in_bounds(&action, 900.0, 500.0, label);
+            assert!(action.absolute_position().y > 350.0);
+        }
         let content = ElementHandle::find_by_element_id(&h.ui, "AppWindow::confirmation")
             .next()
             .unwrap();
@@ -847,6 +1024,94 @@ fn real_ui_headless_layout_and_actions() {
                 .borrow()
                 .contains(&"queue:running:pause".to_string())
         );
+        for (name, state, actions) in [
+            (
+                "waiting",
+                "В очереди",
+                [true, false, true, false, true, false, false],
+            ),
+            (
+                "running",
+                "Скачиваем",
+                [true, false, true, false, false, false, false],
+            ),
+            ("pausing", "Приостанавливаем…", [false; 7]),
+            (
+                "paused",
+                "На паузе",
+                [false, true, true, false, true, false, false],
+            ),
+            ("cancelling", "Отменяем…", [false; 7]),
+            (
+                "completed",
+                "Готово",
+                [false, false, false, false, false, true, false],
+            ),
+            (
+                "failed",
+                "Не удалось завершить",
+                [false, true, false, false, false, true, false],
+            ),
+            (
+                "blocked",
+                "Не удалось завершить",
+                [false, true, false, false, false, true, true],
+            ),
+            (
+                "cancelled",
+                "Отменено",
+                [false, true, false, false, false, true, false],
+            ),
+            (
+                "confirmation",
+                "Требуется подтверждение",
+                [false, false, true, true, false, false, false],
+            ),
+        ] {
+            h.ui.set_queue(model(vec![QueueRow {
+                id: name.into(),
+                title: "PEAK · модпак".into(),
+                state: state.into(),
+                detail: if name == "pausing" || name == "cancelling" {
+                    "Ждём безопасного завершения текущей операции с файлом."
+                } else if name == "completed" {
+                    "Все файлы установлены и проверены."
+                } else {
+                    "Обработано 4,2 ГБ из 8,6 ГБ"
+                }
+                .into(),
+                progress: if name == "completed" { 1.0 } else { 0.49 },
+                can_pause: actions[0],
+                can_resume: actions[1],
+                can_cancel: actions[2],
+                can_confirm: actions[3],
+                can_prioritize: actions[4],
+                can_remove: actions[5],
+                security_blocked: actions[6],
+            }]));
+            for (w, height, scale) in [(900, 500, 1.0), (1120, 720, 2.0)] {
+                h.capture(&format!("queue-{name}"), w, height, scale);
+                for (index, label) in [
+                    "Приостановить",
+                    "Продолжить",
+                    "Отменить",
+                    "Подтвердить",
+                    "В начало",
+                    "Убрать из списка",
+                    "Антивирус",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let button = ElementHandle::find_by_accessible_label(&h.ui, label)
+                        .find(|e| e.accessible_enabled().is_some());
+                    assert_eq!(button.is_some(), actions[index], "{name}: {label}");
+                    if let Some(button) = button {
+                        assert_in_bounds(&button, w as f32, height as f32, label);
+                    }
+                }
+            }
+        }
     }
     h.ui.set_queue(model(Vec::new()));
     h.capture("queue-empty", 1120, 720, 1.0);
@@ -889,6 +1154,20 @@ fn real_ui_headless_layout_and_actions() {
     assert!(h.ui.get_show_video());
     assert!(h.ui.get_video_width() > 500.0);
     assert!(h.ui.get_video_height() > 200.0);
+    h.ui.window()
+        .dispatch_event(WindowEvent::KeyPressed { text: " ".into() });
+    h.ui.window()
+        .dispatch_event(WindowEvent::KeyReleased { text: " ".into() });
+    settle();
+    assert_eq!(
+        h.ui.get_panel_kind(),
+        "gallery",
+        "initial Space must not activate Close"
+    );
+    assert!(
+        h.actions.borrow().contains(&"video-toggle".to_owned()),
+        "Space pauses the newly opened video"
+    );
     if h.qa {
         h.ui.set_selected_media_is_web_video(true);
         h.ui.set_media_provider_label("YouTube".into());
@@ -925,6 +1204,8 @@ fn real_ui_headless_layout_and_actions() {
     if h.qa {
         resize(h.ui.window(), 1360, 850, 1.0);
         settle();
+        h.click("Настройки загрузок");
+        assert_eq!(h.ui.get_settings_section(), 1);
         let threads =
             ElementHandle::find_by_accessible_label(&h.ui, "Количество потоков скачивания")
                 .find(|e| e.accessible_enabled().is_some())
@@ -932,7 +1213,7 @@ fn real_ui_headless_layout_and_actions() {
         threads.set_accessible_value("8");
         let limit =
             ElementHandle::find_by_accessible_label(&h.ui, "Ограничить скорость скачивания")
-                .next()
+                .find(|e| e.accessible_enabled() == Some(true))
                 .unwrap();
         limit.invoke_accessible_default_action();
         settle();
@@ -955,6 +1236,9 @@ fn real_ui_headless_layout_and_actions() {
             h.actions.borrow().contains(&"settings:8:10".to_string()),
             "custom numeric field preserves editable settings"
         );
+        h.click("Основное");
+        assert_eq!(h.ui.get_settings_section(), 0);
+        assert_eq!(h.ui.get_settings_threads(), 8, "section changes keep edits");
         ElementHandle::find_by_element_id(&h.ui, "AppWindow::settings-scroll")
             .next()
             .unwrap()
@@ -1040,6 +1324,19 @@ fn real_ui_headless_layout_and_actions() {
             "Escape closes feedback after a pointer transition from help"
         );
         h.panel("feedback", "Идея или ошибка", "");
+        resize(h.ui.window(), 900, 500, 1.0);
+        settle();
+        let message = ElementHandle::find_by_accessible_label(&h.ui, "Текст сообщения")
+            .next()
+            .expect("required message visible before optional fields");
+        assert_in_bounds(&message, 900.0, 500.0, "feedback message");
+        let send = ElementHandle::find_by_accessible_label(&h.ui, "Отправить")
+            .find(|e| e.accessible_enabled() == Some(true))
+            .unwrap();
+        assert_in_bounds(&send, 900.0, 500.0, "persistent feedback submit");
+        h.capture("feedback-required-first", 900, 500, 1.0);
+        resize(h.ui.window(), 1120, 720, 1.0);
+        settle();
         h.click("Тема сообщения");
         h.click("Вопрос");
         ElementHandle::find_by_accessible_label(&h.ui, "Тема сообщения")
@@ -1052,10 +1349,10 @@ fn real_ui_headless_layout_and_actions() {
             h.actions.borrow().contains(&"feedback:question".to_owned()),
             "question remains a separate feedback category; no network is used"
         );
-        ElementHandle::find_by_accessible_label(&h.ui, "Отправить")
+        ElementHandle::find_by_element_id(&h.ui, "AppWindow::feedback-scroll")
             .next()
             .unwrap()
-            .scroll(0.0, 1000.0);
+            .scroll(0.0, -1000.0);
         settle();
         let input = ElementHandle::find_by_accessible_label(&h.ui, "Ваше имя, необязательно")
             .next()
@@ -1089,18 +1386,30 @@ fn real_ui_headless_layout_and_actions() {
     }
     h.ui.hide().unwrap();
     let auxiliary = AuxiliaryWindow::new().unwrap();
+    let weak = auxiliary.as_weak();
+    auxiliary.on_provider_changed(move |provider| {
+        let ui = weak.upgrade().unwrap();
+        ui.set_primary_text(
+            if provider == 0 {
+                "Добавить исключения"
+            } else {
+                "Открыть инструкцию"
+            }
+            .into(),
+        );
+    });
     auxiliary.show().unwrap();
     for (name, heading, details, busy) in [
         (
             "aux-update",
             "Обновляем Chill Hub",
-            "Проверяем файлы обновления. Предыдущая версия сохранена для восстановления при ошибке.\n\nПапка установки:\nC:\\Users\\Игрок\\AppData\\Local\\ChillHub\n\nИгры и настройки находятся в отдельных папках и останутся на месте.",
+            "Проверяем файлы обновления. Предыдущая версия сохранена для восстановления при ошибке. Игры и настройки находятся в отдельных папках и останутся на месте.",
             true,
         ),
         (
             "aux-security",
             "Исключения антивируса",
-            "Разрешить защитнику Windows не проверять только перечисленные папки?\n\nD:\\Games\\ChillHub\nC:\\Users\\Игрок\\AppData\\Local\\ChillHubUpdateStaging\n\nДобавляйте исключения, только если доверяете файлам. Изменения потребуют разрешения Windows.",
+            "Антивирус перестанет проверять эти папки. Добавляйте только файлы, которым доверяете.",
             false,
         ),
         (
@@ -1120,6 +1429,16 @@ fn real_ui_headless_layout_and_actions() {
         ]));
         auxiliary.set_selected_provider(0);
         auxiliary.set_details(details.into());
+        auxiliary.set_paths(
+            if name == "aux-security" {
+                "D:\\Games\\ChillHub\nC:\\Users\\Игрок\\AppData\\Local\\ChillHubUpdateStaging"
+            } else if busy {
+                "C:\\Users\\Игрок\\AppData\\Local\\ChillHub"
+            } else {
+                ""
+            }
+            .into(),
+        );
         auxiliary.set_subtitle("Chill Hub".into());
         auxiliary.set_status(
             if name == "aux-error" {
@@ -1132,6 +1451,7 @@ fn real_ui_headless_layout_and_actions() {
             .into(),
         );
         auxiliary.set_busy(busy);
+        auxiliary.set_error(name == "aux-error");
         auxiliary.set_progress_visible(busy);
         auxiliary.set_progress(0.62);
         auxiliary.set_primary_text(
@@ -1150,6 +1470,21 @@ fn real_ui_headless_layout_and_actions() {
             settle();
             let snapshot = auxiliary.window().take_snapshot().unwrap();
             assert_eq!(snapshot.width(), (w as f32 * scale) as u32);
+            if h.qa && busy {
+                let progress = ElementHandle::find_by_element_id(
+                    &auxiliary,
+                    "AuxiliaryWindow::helper-progress",
+                )
+                .next()
+                .expect("helper progress");
+                assert_in_bounds(
+                    &progress,
+                    w as f32,
+                    he as f32,
+                    "helper progress cannot scroll away",
+                );
+                assert!(progress.absolute_position().y + progress.size().height < he as f32 - 76.0);
+            }
             if h.qa {
                 let filename = format!("{name}-{w}x{he}-{}pct.png", (scale * 100.0) as u32);
                 image::save_buffer(

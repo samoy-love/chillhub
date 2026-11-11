@@ -7,6 +7,7 @@ mod controller;
 #[cfg(test)]
 mod controller_tests;
 mod desktop;
+mod frame_pacing;
 mod install_ui;
 mod karaoke;
 mod orphan_ui;
@@ -134,16 +135,35 @@ fn image_pixels_for_epoch(
         .map_err(|e| format!("{}: {e}", path.display()))?;
     // Optimized assets already fit their display budget. Avoid resampling them
     // and constructing an additional full-size image on every selection.
-    let rgba = if decoded.width() > width || decoded.height() > height {
+    let mut rgba = if decoded.width() > width || decoded.height() > height {
         decoded.thumbnail(width, height).into_rgba8()
     } else {
         decoded.into_rgba8()
     };
+    // Convert alpha once on the decoding worker, rather than for every sampled
+    // texel in every animation/resize frame. Opaque photos are unchanged.
+    premultiply_image(rgba.as_mut());
     Ok(SharedPixelBuffer::clone_from_slice(
         rgba.as_raw(),
         rgba.width(),
         rgba.height(),
     ))
+}
+fn premultiply_image(bytes: &mut [u8]) {
+    for pixel in bytes.as_chunks_mut::<4>().0 {
+        let alpha = pixel[3] as u16;
+        if alpha != 255 {
+            for channel in &mut pixel[..3] {
+                *channel = (*channel as u16 * alpha / 255) as u8;
+            }
+        }
+    }
+}
+#[test]
+fn decoded_images_preserve_opaque_pixels_and_premultiply_transparency() {
+    let mut pixels = [255, 80, 40, 255, 200, 100, 50, 128, 240, 10, 20, 0];
+    premultiply_image(&mut pixels);
+    assert_eq!(pixels, [255, 80, 40, 255, 100, 50, 25, 128, 0, 0, 0, 0]);
 }
 fn source_image_pixels(
     value: &str,
@@ -187,7 +207,7 @@ fn source_image_pixels(
 }
 fn from_pixels(pixels: SharedPixelBuffer<slint::Rgba8Pixel>) -> Image {
     // Pixel ownership crosses the worker boundary; the UI does no large copies.
-    Image::from_rgba8(pixels)
+    Image::from_rgba8_premultiplied(pixels)
 }
 fn roots() -> Result<(PathBuf, PathBuf), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -643,10 +663,9 @@ fn open_panel(ui: &AppWindow, state: &State, kind: &str) {
             "Проверьте, доступна ли новая версия.".into(),
         ),
         "security" => (
-            "Помощь с запуском".into(),
-            "Проверка файлов и защиты Windows".into(),
-            "Сначала проверьте файлы игры. Диагностика защиты покажет, не было ли блокировок."
-                .into(),
+            "Антивирус".into(),
+            "Помощь с установкой и запуском".into(),
+            "".into(),
         ),
         "manage" => (
             format!("Управление · {}", game.title),
@@ -672,7 +691,7 @@ fn open_panel(ui: &AppWindow, state: &State, kind: &str) {
                 .map(|r| chillhub_native::ui::ReleaseRow {
                     version: r.version.into(),
                     date: r.date.into(),
-                    changes: r.changes.into(),
+                    changes: strings(r.items),
                     fresh: r.fresh,
                 })
                 .collect::<Vec<_>>(),
@@ -974,8 +993,7 @@ fn start_benchmark(ui: &AppWindow, state: &State, hwnd: isize) -> Result<Option<
         let video_detail = || state.borrow().video.as_ref().map(|v| {
             let s = v.status(); serde_json::json!({"currentTime":s.position,"duration":s.duration,"frames":s.estimated_frame_number,"droppedFrames":s.dropped_frames,"decoderDroppedFrames":s.decoder_dropped_frames,"paused":s.paused,"ready":s.ready,"hwdec":s.hwdec,"pid":s.pid,"volume":s.volume,"width":s.width,"height":s.height,"fps":s.fps,"error":s.error,"displayWidth":ui.get_video_width(),"displayHeight":ui.get_video_height(),"scaleFactor":ui.window().scale_factor(),"logPath":s.log_path,"diagnosticsPath":s.diagnostics_path})
         }).unwrap_or(serde_json::Value::Null);
-        if active.is_none() {
-            if let Ok(Some(command)) = bench.poll() {
+        if active.is_none() && let Ok(Some(command)) = bench.poll() {
                 let _ = bench.preparing(&command, &WindowInfo::from_hwnd(hwnd));
                 if command.phase == Phase::Close {
                     close_panel(&ui, &state); let _ = bench.running(&command, &WindowInfo::from_hwnd(hwnd), serde_json::Value::Null);
@@ -998,7 +1016,6 @@ fn start_benchmark(ui: &AppWindow, state: &State, hwnd: isize) -> Result<Option<
                     Phase::Close => {},
                 }
                 active = Some(Active { command, prepared: Instant::now(), started: None, clicks: 0, start_video: serde_json::Value::Null });
-            }
         }
         let Some(current) = active.as_mut() else { return; };
         if current.started.is_none() {
@@ -1013,12 +1030,10 @@ fn start_benchmark(ui: &AppWindow, state: &State, hwnd: isize) -> Result<Option<
             let _ = bench.running(&current.command, &WindowInfo::from_hwnd(hwnd), serde_json::json!({"startVideo":current.start_video,"clickCount":0}));
         }
         let elapsed = current.started.unwrap().elapsed();
-        if current.command.phase == Phase::Switch {
-            if current.clicks < current.command.count && elapsed.as_millis() >= current.clicks as u128 * current.command.interval_ms as u128 {
+        if current.command.phase == Phase::Switch && current.clicks < current.command.count && elapsed.as_millis() >= current.clicks as u128 * current.command.interval_ms as u128 {
                 let id = &current.command.game_ids[current.clicks % current.command.game_ids.len()];
                 let index = state.borrow().catalog.iter().position(|g| &g.id == id);
                 if let Some(index) = index { select_game(&ui, &state, index); current.clicks += 1; }
-            }
         }
         let seconds = if current.command.phase == Phase::Switch { current.command.count as f64 * current.command.interval_ms as f64 / 1000.0 } else { current.command.seconds };
         if elapsed.as_secs_f64() >= seconds {
@@ -1052,6 +1067,17 @@ fn bind(ui: &AppWindow, state: &State) {
     handler!(on_mods_filter_toggled, |ui, state, enabled| {
         state.borrow_mut().only_mods = enabled;
         refresh_library(&ui, &state);
+        let next = {
+            let s = state.borrow();
+            if enabled && !s.visible.contains(&s.selected) {
+                s.visible.first().copied()
+            } else {
+                None
+            }
+        };
+        if let Some(index) = next {
+            select_game(&ui, &state, index);
+        }
     });
     handler!(on_source_selected, |ui, state, source| {
         {
@@ -1255,17 +1281,23 @@ fn run() -> Result<(), String> {
         .windows(2)
         .find(|pair| pair[0] == "--renderer")
         .map(|pair| pair[1].as_str())
-        .unwrap_or("femtovg-wgpu");
+        .unwrap_or("software");
     let accepted = matches!(renderer, "femtovg-wgpu" | "software")
         || (cfg!(feature = "benchmark") && renderer == "femtovg");
     if !accepted {
         return Err(format!("Неизвестный способ отрисовки: {renderer}"));
     }
-    slint::BackendSelector::new()
+    let mut backend = slint::BackendSelector::new()
         .backend_name("winit".into())
-        .renderer_name(renderer.into())
-        .select()
-        .map_err(|e| e.to_string())?;
+        .renderer_name(renderer.into());
+    if renderer == "femtovg-wgpu" {
+        let mut settings = slint::wgpu_30::WGPUSettings::default();
+        settings.device_memory_hints = slint::wgpu_30::wgpu::MemoryHints::Manual {
+            suballocated_device_memory_block_size: 4 * 1024 * 1024..8 * 1024 * 1024,
+        };
+        backend = backend.require_wgpu_30(slint::wgpu_30::WGPUConfiguration::Automatic(settings));
+    }
+    backend.select().map_err(|e| e.to_string())?;
     let (data_root, art_root) = roots()?;
     let seed = catalog::load(&data_root.join("Data/games.json")).unwrap_or_default();
     let paths = chillhub_native::paths::AppPaths::discover()?;
@@ -1274,6 +1306,10 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let (services, prefs) = Services::new(paths)?;
+    services.api.event(
+        "ui.renderer",
+        serde_json::json!({"name": renderer, "colorImageSampling": "bilinear", "animationFpsLimit": 60}),
+    );
     let _ = PANIC_CONTEXT.set((services.api.clone(), services.paths.data_dir.clone()));
     let shortcut = ShortcutRequest::parse_args(&args)?;
     let state = Rc::new(RefCell::new(AppState {

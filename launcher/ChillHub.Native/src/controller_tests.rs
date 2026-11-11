@@ -450,6 +450,18 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     if !captured.borrow().report_notices.is_empty() { return Err("delivery notice queue did not drain".into()); }
                     ui.invoke_search_edited("Без дополнений".into());
                     if ui.get_games().row_count() != 1 { return Err("UI callbacks stopped after a background failure".into()); }
+                    ui.invoke_game_selected(0);
+                    if captured.borrow().catalog[captured.borrow().selected].has_mods { return Err("plain search did not select the plain game".into()); }
+                    ui.invoke_search_edited("".into());
+                    ui.invoke_mods_filter_toggled(true);
+                    if !captured.borrow().catalog[captured.borrow().selected].has_mods || ui.get_selected_game() != 0 {
+                        return Err("mods filter left an excluded game open".into());
+                    }
+                    ui.invoke_mods_filter_toggled(false);
+                    // The later alias/paused-queue scenario concerns this plain
+                    // game; restore that selection after the filter scenario.
+                    ui.invoke_search_edited("Без дополнений".into());
+                    ui.invoke_game_selected(0);
                     for id in ["old-one","old-two"] {
                         let path=captured.borrow().services.paths.game_root(id)?;
                         fs::create_dir_all(&path).map_err(|e|e.to_string())?;fs::write(path.join(".version"),"1").map_err(|e|e.to_string())?;
@@ -499,6 +511,26 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     ui.invoke_media_selected(0);
                     if ui.get_media().row_count() != 0 || ui.get_hero().size().width != 0 {
                         return Err("empty library retained media".into());
+                    }
+                    ui.invoke_action_requested("security-helper".into());
+                    if !ui.get_toast().contains("выберите игру") || ui.get_operation_busy() {
+                        return Err("empty library security action must explain the missing selection".into());
+                    }
+                    // A failed refresh must invalidate a previously advertised release.
+                    captured.borrow_mut().update=Some(chillhub_native::update::UpdateRelease {
+                        version:"9.0.0".into(), manifest_url:"/stale.json".into(), content_base_url:"/stale/".into(),
+                    });
+                    ui.set_update_available(true);ui.set_update_target("9.0.0".into());
+                    ui.invoke_action_requested("update-check".into());
+                    if captured.borrow().update.is_some() || ui.get_update_available() || !ui.get_operation_busy() {
+                        return Err("update refresh retained stale installation intent".into());
+                    }
+                    *stage.borrow_mut()=(84,0);
+                }
+                84 if !ui.get_operation_busy() => {
+                    if !ui.get_update_checked() || !ui.get_update_error() || ui.get_update_available()
+                        || captured.borrow().update.is_some() || !ui.get_update_target().is_empty() {
+                        return Err("failed update check retained a usable stale release or hid the failure".into());
                     }
                     return Ok(true);
                 }
@@ -553,11 +585,10 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
             .count()
             >= 3
     );
-    assert!(
-        !requests
-            .iter()
-            .any(|p| p.contains("launcher/latest") || p.contains("feedback/submit"))
-    );
+    // Loopback is deliberately not a trusted update origin: rejection must happen
+    // before any HTTP request, while still clearing the stale release in the UI.
+    assert!(!requests.iter().any(|p| p.contains("launcher/latest")));
+    assert!(!requests.iter().any(|p| p.contains("feedback/submit")));
 }
 
 #[test]

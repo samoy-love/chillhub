@@ -3,7 +3,7 @@
 //! RenderingNotifier can alter renderer submission behavior: do not enable it in RAM/GPU runs.
 use crate::AppWindow;
 use serde::Serialize;
-use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
+use slint::winit_030::{WinitWindowAccessor, winit};
 use slint::{ComponentHandle, RenderingState};
 use std::cell::RefCell;
 use std::io::{self, Write};
@@ -12,6 +12,18 @@ use std::rc::Rc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_EVENTS: usize = 32_768;
+type EventObserver = Box<dyn Fn(&slint::Window, &winit::event::WindowEvent)>;
+thread_local! {
+    static EVENT_OBSERVER: RefCell<Option<EventObserver>> = const { RefCell::new(None) };
+}
+
+pub(super) fn observe_window_event(window: &slint::Window, event: &winit::event::WindowEvent) {
+    EVENT_OBSERVER.with(|observer| {
+        if let Some(observer) = observer.borrow().as_ref() {
+            observer(window, event);
+        }
+    });
+}
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +65,7 @@ struct Capture {
     notifier_available: bool,
     notifier_requested: bool,
     notifier_error: Option<String>,
+    allocator_report: Option<serde_json::Value>,
 }
 
 impl Capture {
@@ -127,24 +140,22 @@ impl ProbeHandle {
             "notifierAvailable": capture.notifier_available,
             "notifierRequested": capture.notifier_requested,
             "notifierError": capture.notifier_error,
+            "allocatorReport": capture.allocator_report,
             "eventLimit": MAX_EVENTS,
             "droppedEvents": capture.dropped_events,
             "events": capture.events,
+            "softwareRasterFrames": i_slint_renderer_software::frame_timings::samples(),
             "limitations": [
                 "AfterRendering runs before buffer presentation. Render durations measure CPU-side rendering/submission, not GPU completion or displayed FPS.",
                 "Installing RenderingNotifier can add flush/submit work in the renderer; compare only equivalently instrumented diagnostics and keep it disabled for resource measurements.",
                 "Geometry matches compare Slint's cached window-adapter size with Winit's resize/inner-size observations; they do not inspect UI layout or presented pixels. A mismatch in the pre-dispatch Resized event is expected; inspect subsequent RedrawRequested events.",
                 "Default capture uses Winit resize/redraw events only and never installs RenderingNotifier. RedrawRequested is the start of a render attempt, not presentation. Set CHILLHUB_PROBE_RENDER_TIMING=1 only for separate instrumented diagnostics.",
                 "Idle gaps, focus loss, minimization and pauses between manual drag gestures are not missed frames. Inspect timestamps and resize events before deriving pacing statistics.",
-                "This probe owns the single Winit event-filter callback and always propagates events. Do not install another filter over it."
+                "This probe observes propagated events through the application's existing handler, preserving focus refresh and animation pacing. Throttled redraw requests are excluded."
             ]
         });
         serde_json::to_writer(&mut writer, &document)?;
         writer.flush()
-    }
-
-    pub fn notifier_available(&self) -> bool {
-        self.capture.borrow().notifier_available
     }
 }
 
@@ -157,6 +168,8 @@ impl Drop for ProbeHandle {
                 self.output.display()
             );
         }
+        i_slint_renderer_software::frame_timings::enable(false);
+        EVENT_OBSERVER.with(|observer| *observer.borrow_mut() = None);
     }
 }
 
@@ -165,6 +178,9 @@ pub fn install(ui: &AppWindow, output: PathBuf) -> Result<ProbeHandle, String> {
         return Err("Frame-probe output path is empty".into());
     }
     let window = ui.window();
+    i_slint_renderer_software::frame_timings::enable(
+        std::env::var("CHILLHUB_PROBE_RENDER_TIMING").as_deref() == Ok("1"),
+    );
     let native = window
         .with_winit_window(|native| {
             let size = native.inner_size();
@@ -193,56 +209,68 @@ pub fn install(ui: &AppWindow, output: PathBuf) -> Result<ProbeHandle, String> {
         notifier_available: false,
         notifier_requested: std::env::var("CHILLHUB_PROBE_RENDER_TIMING").as_deref() == Ok("1"),
         notifier_error: None,
+        allocator_report: None,
     }));
     capture.borrow_mut().push("installed", window, None);
 
     let event_capture = capture.clone();
-    window.on_winit_window_event(move |window, event| {
-        use winit::event::WindowEvent;
-        let mut data = event_capture.borrow_mut();
-        if !data.active {
-            return EventResult::Propagate;
-        }
-        match event {
-            WindowEvent::Resized(size) => {
-                data.native_width_px = size.width;
-                data.native_height_px = size.height;
-                data.resize_sequence += 1;
-                data.last_resize_ms = Some(data.start.elapsed().as_secs_f64() * 1000.0);
-                data.push("resized", window, None);
+    EVENT_OBSERVER.with(|observer| {
+        *observer.borrow_mut() = Some(Box::new(move |window, event| {
+            use winit::event::WindowEvent;
+            let mut data = event_capture.borrow_mut();
+            if !data.active {
+                return;
             }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                data.scale_factor = *scale_factor;
-                data.push("scaleChanged", window, None);
-            }
-            WindowEvent::RedrawRequested => {
-                if let Some((size, scale)) =
-                    window.with_winit_window(|native| (native.inner_size(), native.scale_factor()))
-                {
+            match event {
+                WindowEvent::Resized(size) => {
                     data.native_width_px = size.width;
                     data.native_height_px = size.height;
-                    data.scale_factor = scale;
+                    data.resize_sequence += 1;
+                    data.last_resize_ms = Some(data.start.elapsed().as_secs_f64() * 1000.0);
+                    data.push("resized", window, None);
                 }
-                data.push("redrawRequested", window, None);
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    data.scale_factor = *scale_factor;
+                    data.push("scaleChanged", window, None);
+                }
+                WindowEvent::RedrawRequested => {
+                    if let Some((size, scale)) = window
+                        .with_winit_window(|native| (native.inner_size(), native.scale_factor()))
+                    {
+                        data.native_width_px = size.width;
+                        data.native_height_px = size.height;
+                        data.scale_factor = scale;
+                    }
+                    data.push("redrawRequested", window, None);
+                }
+                WindowEvent::Focused(value) => data.push("focused", window, Some(*value)),
+                WindowEvent::Occluded(value) => data.push("occluded", window, Some(*value)),
+                WindowEvent::CloseRequested => data.push("closeRequested", window, None),
+                _ => {}
             }
-            WindowEvent::Focused(value) => data.push("focused", window, Some(*value)),
-            WindowEvent::Occluded(value) => data.push("occluded", window, Some(*value)),
-            WindowEvent::CloseRequested => data.push("closeRequested", window, None),
-            _ => {}
-        }
-        EventResult::Propagate
+        }))
     });
 
     if capture.borrow().notifier_requested {
         let render_capture = capture.clone();
         let weak = ui.as_weak();
-        let result = window.set_rendering_notifier(move |state, _graphics| {
+        let result = window.set_rendering_notifier(move |state, graphics| {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
             let mut data = render_capture.borrow_mut();
             if !data.active {
                 return;
+            }
+            if data.allocator_report.is_none() && data.start.elapsed().as_secs() >= 5
+                && let slint::GraphicsAPI::WGPU30 { device, .. } = graphics
+                && let Some(report) = device.generate_allocator_report() {
+                        data.allocator_report = Some(serde_json::json!({
+                            "allocatedBytes": report.total_allocated_bytes,
+                            "reservedBytes": report.total_reserved_bytes,
+                            "allocations": report.allocations.iter().map(|a| serde_json::json!({"name": a.name, "bytes": a.size})).collect::<Vec<_>>(),
+                            "blocks": report.blocks.iter().map(|b| b.size).collect::<Vec<_>>()
+                        }));
             }
             // Read the OS client size at the render boundary, independently of the last event.
             if let Some((size, scale)) = ui

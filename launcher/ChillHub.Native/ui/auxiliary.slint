@@ -74,7 +74,7 @@ export component AuxiliaryButton inherits Rectangle {
     callback clicked();
     height: 42px;
     border-radius: 10px;
-    background: !enabled ? #29282e : primary ? (touch.has-hover ? #d8cdfc : Theme.accent) : touch.has-hover ? #343139 : #27252d;
+    background: !enabled ? #29282e : primary ? (touch.pressed ? #b3a0ec : touch.has-hover ? #d8cdfc : Theme.accent) : touch.pressed ? #40394b : touch.has-hover ? #343139 : #27252d;
     border-width: 1px;
     border-color: primary ? transparent : Theme.border;
     accessible-role: button;
@@ -104,6 +104,7 @@ export component AuxiliaryWindow inherits Window {
     in property <string> subtitle;
     in property <string> status;
     in property <string> details;
+    in property <string> paths;
     in property <string> primary-text: "Продолжить";
     in property <string> secondary-text: "Справка";
     in property <bool> primary-enabled: true;
@@ -117,30 +118,38 @@ export component AuxiliaryWindow inherits Window {
     in property <bool> provider-visible;
     callback provider-changed(int);
     callback copy-paths();
-    property <length> status-height: clamp(status-text.preferred-height, 40px, 112px);
+    in property <bool> error: false;
     callback primary();
     callback secondary();
     callback close-requested();
     FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
         key-pressed(event) => { if event.text == Key.Escape && root.can-close && !root.busy { root.close-requested(); return accept; } reject }
-        Text { x: 28px; y: 25px; width: parent.width - 56px; height: 32px; text: root.heading; color: Theme.ink; font-size: 24px; font-weight: 600; overflow: elide; }
-        Text { x: 28px; y: 66px; width: parent.width - 56px; height: 49px; text: root.subtitle; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
-        if root.provider-visible: Rectangle { x: 28px; y: 117px; width: parent.width - 56px; height: 38px;
-            AuxiliaryChoice { x: 0px; y: 0px; width: parent.width - 174px; height: 36px; model: root.provider-names; current-index <=> root.selected-provider; enabled: !root.busy; selected(value) => { root.provider-changed(value); } }
-            AuxiliaryButton { x: parent.width - 162px; y: 0px; width: 162px; height: 36px; text: "Копировать пути"; enabled: !root.busy; clicked => { root.copy-paths(); } }
-        }
-        Rectangle { x: 28px; y: root.provider-visible ? 169px : 129px; width: parent.width - 56px; height: parent.height - 218px - root.status-height - (root.provider-visible ? 40px : 0px); background: Theme.surface; border-radius: 12px; border-width: 1px; border-color: Theme.border;
-            ScrollView { x: 16px; y: 16px; width: parent.width - 32px; height: parent.height - 32px; content-width: self.visible-width - 16px; content-height: max(self.height, body.preferred-height);
-                body := Text { x: 0px; y: 0px; width: parent.width - 16px; text: root.details; color: #ddd7e4; font-size: 14px; wrap: word-wrap; }
+        Image { x: 28px; y: 26px; width: 38px; height: 38px; source: @image-url("assets/brand.png"); image-fit: contain; }
+        Text { x: 78px; y: 22px; width: parent.width - 106px; height: 29px; text: "Chill Hub"; color: Theme.ink; font-size: 23px; font-weight: 600; }
+        Text { x: 78px; y: 52px; width: parent.width - 106px; height: 18px; text: root.subtitle == "Chill Hub" ? "" : root.subtitle; color: Theme.dim; font-size: 12px; overflow: elide; }
+        ScrollView { x: 28px; y: 90px; width: parent.width - 56px; height: parent.height - (root.progress-visible ? 198px : 182px);
+            content-width: self.visible-width - 16px; content-height: helper-content.preferred-height;
+            helper-content := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 18px; alignment: start;
+                Text { text: root.heading; color: Theme.ink; font-size: 25px; font-weight: 600; wrap: word-wrap; }
+                if root.provider-visible: Rectangle { height: 38px;
+                    Text { x: 0px; y: 0px; width: 110px; height: parent.height; vertical-alignment: center; text: "Антивирус"; color: Theme.dim; font-size: 12px; }
+                    AuxiliaryChoice { x: 116px; y: 0px; width: parent.width - 116px; height: 38px; model: root.provider-names; current-index <=> root.selected-provider; enabled: !root.busy; selected(value) => { root.provider-changed(value); } }
+                }
+                if root.details != "": Rectangle { height: helper-details.preferred-height + 32px; background: Theme.surface; border-radius: 12px;
+                    helper-details := Text { x: 16px; y: 16px; width: parent.width - 32px; text: root.details; color: root.error ? #f0aaa9 : #ddd7e4; font-size: 13px; wrap: word-wrap; }
+                }
+                if root.paths != "": Text { text: root.paths; color: Theme.dim; font-size: 12px; wrap: char-wrap; }
+                if root.provider-visible: AuxiliaryButton { text: "Копировать пути"; enabled: !root.busy; clicked => { root.copy-paths(); } }
+                if root.status != "": Text { text: root.status; color: root.error ? #f0aaa9 : Theme.dim; font-size: 12px; wrap: word-wrap; }
             }
         }
-        ScrollView { x: 28px; y: parent.height - 76px - root.status-height; width: parent.width - 56px; height: root.status-height; content-width: self.visible-width - 16px; content-height: max(self.height, status-text.preferred-height);
-            status-text := Text { x: 0px; y: 0px; width: parent.width - 16px; text: root.status; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+        if root.progress-visible: helper-progress := Rectangle { x: 28px; y: parent.height - 94px; width: parent.width - 56px; height: 6px; background: #343039; border-radius: 3px;
+            Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.progress, 0, 1); height: parent.height; background: Theme.accent; border-radius: 3px; }
         }
-        if root.progress-visible: Rectangle { x: 28px; y: parent.height - 75px; width: parent.width - 56px; height: 3px; background: #343039;
-            Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.progress, 0, 1); height: parent.height; background: Theme.accent; }
+        Rectangle { x: 28px; y: parent.height - 76px; width: parent.width - 56px; height: 1px; background: Theme.border; }
+        HorizontalLayout { x: 28px; y: parent.height - 60px; width: parent.width - 56px; height: 42px; spacing: 12px;
+            if root.secondary-text != "": AuxiliaryButton { text: root.secondary-text; enabled: root.secondary-enabled && !root.busy; clicked => { root.secondary(); } }
+            AuxiliaryButton { text: root.primary-text; primary: true; enabled: root.primary-enabled && !root.busy; clicked => { root.primary(); } }
         }
-        AuxiliaryButton { x: 28px; y: parent.height - 60px; width: (parent.width - 68px) / 2; text: root.secondary-text; visible: root.secondary-text != ""; enabled: root.secondary-enabled && !root.busy; clicked => { root.secondary(); } }
-        AuxiliaryButton { x: parent.width / 2 + 6px; y: parent.height - 60px; width: (parent.width - 68px) / 2; text: root.primary-text; primary: true; enabled: root.primary-enabled && !root.busy; clicked => { root.primary(); } }
     }
 }

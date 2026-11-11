@@ -26,6 +26,8 @@ fn finish(ui: &AuxiliaryWindow, result: Result<(), String>, log: &Result<HelperL
     let caption = helper_runtime::record_result(log, &result);
     ui.set_busy(false);
     ui.set_can_close(true);
+    ui.set_error(result.is_err());
+    ui.set_progress_visible(false);
     match result {
         Ok(()) => {
             ui.set_status("Готово. Открываем лаунчер.".into());
@@ -33,6 +35,7 @@ fn finish(ui: &AuxiliaryWindow, result: Result<(), String>, log: &Result<HelperL
         }
         Err(error) => {
             ui.set_heading("Обновление не завершено".into());
+            ui.set_paths("".into());
             ui.set_details(error.into());
             ui.set_status(format!("Можно закрыть это окно.\n{caption}").into());
         }
@@ -45,7 +48,7 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     helper_runtime::style_window(ui.window());
     ui.set_window_title("Обновление · Chill Hub".into());
     ui.set_heading("Обновление Chill Hub".into());
-    ui.set_subtitle("Проверяем файлы, сохраняем предыдущую версию и перезапускаем лаунчер.".into());
+    ui.set_subtitle("Обновляем лаунчер. Игры и настройки сохранятся.".into());
     ui.set_details("Подготавливаем обновление…".into());
     ui.set_primary_text("Закрыть".into());
     ui.set_secondary_text("".into());
@@ -77,13 +80,15 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
             let job = update::read_job(&PathBuf::from(&args[1]), &args[3])?;
             let recovery = job.mode == update::UpdateMode::Recovery;
             let details = if recovery {
-                format!("Восстанавливаем версию {} из резервной копии.\n\nУстановка: {}\n\nНастройки и игры сохранятся.", job.staged.current_version, job.staged.paths.install.display())
+                format!("Восстанавливаем версию {} из резервной копии. Настройки и игры сохранятся.", job.staged.current_version)
             } else {
-                format!("Версия {} → {}\n\nУстановка: {}\n\nНастройки и игры не входят в пакет обновления.", job.staged.current_version, job.staged.version, job.staged.paths.install.display())
+                format!("Версия {} → {}. Настройки и игры не входят в пакет обновления.", job.staged.current_version, job.staged.version)
             };
             if let Ok(log) = &worker_log { let _ = log.record("job", &details); }
+            let install_path = job.staged.paths.install.display().to_string();
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_details(details.into());
+                ui.set_paths(install_path.into());
                 if recovery { ui.set_heading("Восстановление Chill Hub".into()); ui.set_subtitle("Возвращаем файлы предыдущей версии и перезапускаем лаунчер.".into()); }
             });
             let last = std::sync::Mutex::new(String::new());
