@@ -1277,6 +1277,23 @@ fn real_ui_headless_layout_and_actions() {
         visible_field.scroll(0.0, -1000.0);
         settle();
         h.capture("settings-save-error", 900, 500, 1.0);
+        h.ui.set_settings_error(
+            "Выберите отдельную папку для игр, например D:\\Games\\ChillHub".into(),
+        );
+        visible_field.scroll(0.0, 1000.0);
+        settle();
+        let error_summary =
+            ElementHandle::find_by_element_id(&h.ui, "AppWindow::settings-save-message")
+                .next()
+                .unwrap();
+        assert_in_bounds(
+            &error_summary,
+            900.0,
+            500.0,
+            "settings error stays beside Save without scrolling",
+        );
+        h.capture("settings-path-error", 900, 500, 1.0);
+        h.capture("settings-path-error", 1120, 720, 1.5);
         h.ui.set_settings_error("".into());
         h.panel("manage", "Управление игрой", "");
         resize(h.ui.window(), 1360, 850, 1.0);

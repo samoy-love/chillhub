@@ -31,6 +31,16 @@ pub(crate) fn same_path(a: &str, b: &str) -> bool {
     clean(a) == clean(b)
 }
 
+pub(crate) fn validate_path_override(
+    path: &str,
+    forced: Option<&std::ffi::OsStr>,
+) -> Result<(), String> {
+    if forced.is_some_and(|forced| !same_path(path, &forced.to_string_lossy())) {
+        return Err("Папка игр закреплена параметрами запуска. Для её изменения откройте лаунчер без проверочного профиля.".into());
+    }
+    Ok(())
+}
+
 pub(crate) use chillhub_native::folder_picker::choose_folder;
 
 pub(crate) fn modpack_url(mods: &chillhub_native::model::ModsRecord) -> Option<String> {
@@ -179,6 +189,17 @@ pub(crate) fn folder_size(path: &Path) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fixed_profile_rejects_an_ineffective_change_but_allows_other_preferences() {
+        let forced = std::ffi::OsStr::new(r"C:\Preview\Games");
+        assert!(validate_path_override(r"D:\Games", None).is_ok());
+        assert!(validate_path_override("c:/preview/games/", Some(forced)).is_ok());
+        assert!(
+            validate_path_override(r"D:\Games", Some(forced))
+                .unwrap_err()
+                .contains("закреплена")
+        );
+    }
     #[test]
     fn equivalent_windows_paths_do_not_block_speed_changes() {
         assert!(same_path("D:/Games/", r"d:\games"));

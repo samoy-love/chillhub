@@ -936,6 +936,13 @@ fn save_settings(ui: &AppWindow, state: &State, next: String) {
         return;
     }
     ui.set_settings_error("".into());
+    if let Err(error) = settings_ui::validate_path_override(
+        &path,
+        std::env::var_os("CHILLHUB_GAMES_DIR").as_deref(),
+    ) {
+        ui.set_settings_error(error.into());
+        return;
+    }
     if reload_needed && !state.borrow().launching.is_empty() {
         ui.set_settings_error("Дождитесь запуска игр перед изменением папки или сервера.".into());
         return;
