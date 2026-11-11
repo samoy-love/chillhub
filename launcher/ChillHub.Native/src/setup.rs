@@ -225,6 +225,12 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             },
         );
     }
+    create_window(request, log)?
+        .run()
+        .map_err(|e| e.to_string())
+}
+
+fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupWindow, String> {
     let ui = SetupWindow::new().map_err(|e| e.to_string())?;
     helper_runtime::style_window(ui.window());
     ui.set_removing(request.removing);
@@ -383,12 +389,101 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             });
         });
     });
-    ui.run().map_err(|e| e.to_string())
+    Ok(ui)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn setup_callbacks_preserve_invalid_input_and_unlock_after_preview_failure() {
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let temporary = tempfile::tempdir().unwrap();
+        let install = temporary.path().join("launcher");
+        let games = temporary.path().join("games");
+        let args = [
+            "preview-install".to_owned(),
+            temporary
+                .path()
+                .join("missing-engine.exe")
+                .display()
+                .to_string(),
+            install.display().to_string(),
+            games.display().to_string(),
+            "1.8.4".to_owned(),
+            "1".to_owned(),
+        ];
+        let log = HelperLog::in_directory(temporary.path(), HelperKind::Setup).unwrap();
+        let ui =
+            create_window(Arc::new(Request::parse(&args).unwrap()), Some(log.clone())).unwrap();
+        assert!(!ui.get_removing());
+        assert!(ui.get_needs_webview());
+        assert_eq!(ui.get_version(), "1.8.4");
+        ui.set_install_path("relative".into());
+        ui.invoke_submit();
+        assert!(ui.get_error());
+        assert!(!ui.get_busy());
+        assert_eq!(ui.get_install_path(), "relative");
+        assert!(ui.get_message().contains("полным путём"));
+
+        ui.set_install_path(install.display().to_string().into());
+        ui.set_games_path(install.join("games").display().to_string().into());
+        ui.invoke_submit();
+        assert!(ui.get_message().contains("раздельными"));
+        assert!(!ui.get_busy());
+        ui.set_games_path(games.display().to_string().into());
+        // Preview must never launch the security helper, even on its callback.
+        ui.invoke_security();
+        ui.invoke_submit();
+        assert!(ui.get_busy());
+        assert!(!ui.get_error());
+
+        let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let result = completed.clone();
+        let weak = ui.as_weak();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(10),
+            move || {
+                let ui = weak.upgrade().unwrap();
+                if !ui.get_busy() {
+                    result.set(
+                        ui.get_error()
+                            && !ui.get_done()
+                            && ui.get_message().contains("предпросмотр"),
+                    );
+                    ui.invoke_cancel();
+                } else if std::time::Instant::now() >= deadline {
+                    let _ = slint::quit_event_loop();
+                }
+            },
+        );
+        slint::run_event_loop_until_quit().unwrap();
+        timer.stop();
+        assert!(
+            completed.get(),
+            "preview completion did not unlock the form or explain the failure"
+        );
+        assert!(!install.exists() && !games.exists());
+        assert!(
+            std::fs::read_to_string(log.path())
+                .unwrap()
+                .contains("setup.error")
+        );
+
+        let mut args = args;
+        args[0] = "preview-uninstall".to_owned();
+        let removal = create_window(Arc::new(Request::parse(&args).unwrap()), None).unwrap();
+        assert!(removal.get_removing());
+        assert!(!removal.get_delete_games());
+        removal.set_done(true);
+        // Completion of removal must only close; never launch an absent launcher.
+        removal.invoke_submit();
+        assert!(!removal.get_error());
+    }
+
     #[cfg(windows)]
     #[test]
     fn nsis_arguments_quote_only_the_games_value_and_keep_destination_last() {
