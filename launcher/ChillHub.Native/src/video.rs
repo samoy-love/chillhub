@@ -138,6 +138,12 @@ impl Default for VideoStatus {
     }
 }
 
+impl VideoStatus {
+    pub fn is_playing(&self) -> bool {
+        self.ready && !self.paused && !self.ended
+    }
+}
+
 pub struct VideoPlayer {
     window: isize,
     mpv_exe: PathBuf,
@@ -682,5 +688,35 @@ fn apply_message(status: &mut VideoStatus, message: &Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn property(status: &mut VideoStatus, name: &str, value: Value) {
+        let id = PROPERTIES.iter().position(|p| *p == name).unwrap() + 1;
+        apply_message(
+            status,
+            &json!({"request_id": id, "error": "success", "data": value}),
+        );
+    }
+
+    #[test]
+    fn finished_video_offers_replay_even_when_mpv_is_not_paused() {
+        let mut status = VideoStatus::default();
+        apply_message(&mut status, &json!({"event": "file-loaded"}));
+        assert!(status.is_playing());
+        property(&mut status, "eof-reached", json!(true));
+        assert!(!status.paused);
+        // The icon and its action must both offer playback on the first click.
+        assert!(!status.is_playing());
+        property(&mut status, "eof-reached", json!(false));
+        assert!(status.is_playing());
+        property(&mut status, "pause", json!(true));
+        assert!(!status.is_playing());
+        property(&mut status, "pause", json!(false));
+        assert!(status.is_playing());
     }
 }

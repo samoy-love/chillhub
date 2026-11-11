@@ -807,9 +807,7 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
                                 ui.set_video_position(status.position as f32);
                                 ui.set_video_duration(status.duration as f32);
                                 ui.set_video_volume((status.volume / 100.0) as f32);
-                                ui.set_video_playing(
-                                    status.ready && !status.paused && !status.ended,
-                                );
+                                ui.set_video_playing(status.is_playing());
                                 let label = if let Some(error) = status.error {
                                     error
                                 } else if status.ready {
@@ -1139,7 +1137,7 @@ fn bind(ui: &AppWindow, state: &State) {
     });
     handler!(on_video_toggle, |_ui, state| {
         if let Some(video) = state.borrow().video.as_ref() {
-            video.set_paused(!video.status().paused);
+            video.set_paused(video.status().is_playing());
         }
     });
     handler!(on_video_seek, |_ui, state, seconds| {
