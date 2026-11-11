@@ -8,6 +8,7 @@ $log=Join-Path $project 'dist/ci-tests.log'
 . (Join-Path $PSScriptRoot 'ensure-webview2-bootstrapper.ps1')
 $null = Ensure-WebView2Bootstrapper -RedistDir (Join-Path $PSScriptRoot 'Redist') -Required
 & (Join-Path $PSScriptRoot 'native-bootstrapper-tests.ps1')
+& (Join-Path $PSScriptRoot 'native-mutation-policy-tests.ps1')
 & (Join-Path $project 'build.ps1') -Clippy -Target $Target
 $previousQa = $env:CHILLHUB_UI_QA
 try {
@@ -33,4 +34,4 @@ $package = & (Join-Path $project 'package.ps1') @arguments | ConvertFrom-Json
 & (Join-Path $PSScriptRoot 'native-package-tests.ps1') -PackageManifest $package.manifest
 & (Join-Path $PSScriptRoot 'native-parity.ps1') -TestLog $log -PackageManifest $package.manifest -Output (Join-Path (Split-Path $package.manifest) 'parity-result.json')
 if($BuildInstaller){ & (Join-Path $PSScriptRoot 'native-installer.ps1') -PackageManifest $package.manifest -MakeNsis $MakeNsis }
-# This opt-in build entrypoint does not publish or change the production workflow.
+# Build and validation only: publication belongs to deploy-kit.

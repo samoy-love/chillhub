@@ -323,7 +323,7 @@ CI_YML = pathlib.Path(".github/workflows/ci.yml")
 # Шаблоны `changes`, которые ведут к пересборке установщика. Опознаются по
 # кускам, которые в них обязаны быть: у фолбэка — описания целей и сам
 # пайплайн, у сборки установщика — её скрипт.
-INSTALLER_MARKERS = ("deploy-kit", "build-installer")
+INSTALLER_MARKERS = ("deploy-kit", "native-")
 
 
 def version_gate_pattern():
