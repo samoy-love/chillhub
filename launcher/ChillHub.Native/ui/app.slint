@@ -533,7 +533,13 @@ export component AppWindow inherits Window {
     property <length> media-tile-height: root.media.length > 0 ? min(153px, (root.width - root.sidebar-width - root.page-padding * 2 - 36px) / 4 / 2.03) : 56px;
     property <bool> gallery-open: root.panel-kind == "gallery" || root.panel-kind == "trailer";
     property <length> modal-width: min(root.gallery-open ? 970px : 720px, root.width - 64px);
-    property <length> modal-height: root.gallery-open ? root.media-stage-height + 235px : min(650px, root.height - 64px);
+    property <length> modal-height: root.gallery-open ? root.media-stage-height + 235px : min(650px, root.height - 64px, root.panel-kind == "confirm" ? max(280px, confirmation-measure.preferred-height + 212px) : 650px);
+    property <length> confirmation-content-width: root.modal-width - 88px;
+    confirmation-measure := Text {
+        visible: false; width: root.confirmation-content-width;
+        text: root.panel-kind == "confirm" ? root.panel-body : "";
+        font-size: 14px; wrap: word-wrap;
+    }
     property <length> modal-x: (root.width - root.modal-width) / 2;
     property <length> modal-y: (root.height - root.modal-height) / 2;
     property <length> media-stage-height: min((root.modal-width - 38px) * 9 / 16, root.height * 0.58, max(100px, root.height - 267px));
@@ -1078,8 +1084,8 @@ export component AppWindow inherits Window {
             }
             if root.panel-kind == "confirm": ScrollView {
                 x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 132px;
-                content-width: self.visible-width - 16px; content-height: max(self.height, confirmation.height);
-                confirmation := Rectangle { x: 0px; y: 0px; width: parent.width - 16px; height: confirmation-body.preferred-height + 104px;
+                content-width: root.confirmation-content-width; content-height: max(self.height, confirmation.height);
+                confirmation := Rectangle { x: 0px; y: 0px; width: root.confirmation-content-width; height: confirmation-body.preferred-height + 80px;
                     confirmation-body := Text { x: 0px; y: 0px; width: parent.width; text: root.panel-body; color: #d4cdda; font-size: 14px; wrap: word-wrap; }
                     if root.panel-kind == "confirm": ActionButton { x: 0px; y: confirmation-body.preferred-height + 28px; width: 220px; text: root.confirm-text != "" ? root.confirm-text : "Подтвердить"; primary: true; enabled: !root.operation-busy; clicked => { root.action-requested("confirm-action"); } }
                     if root.panel-kind == "confirm": ActionButton { x: 234px; y: confirmation-body.preferred-height + 28px; width: 180px; text: "Отмена"; enabled: !root.operation-busy; clicked => { root.action-requested("cancel-action"); } }

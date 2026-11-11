@@ -789,6 +789,30 @@ fn real_ui_headless_layout_and_actions() {
         h.panel("confirm","Настройка защиты","Если защита Windows мешает установке или запуску, помощник покажет доступные настройки. Его можно открыть позже в настройках лаунчера. Открытие помощника не меняет настройки антивируса.");
         h.ui.set_confirm_text("Открыть помощник".into());
         h.capture("security-offer", 900, 500, 1.0);
+        let modal = ElementHandle::find_by_element_id(&h.ui, "AppWindow::modal")
+            .next()
+            .unwrap();
+        assert!(
+            modal.size().height < 350.0,
+            "short confirmations fit their content"
+        );
+        h.ui.set_panel_body(
+            "Длинное пояснение с подробностями операции. "
+                .repeat(80)
+                .into(),
+        );
+        h.capture("confirmation-long", 900, 500, 1.5);
+        let content = ElementHandle::find_by_element_id(&h.ui, "AppWindow::confirmation")
+            .next()
+            .unwrap();
+        assert!(
+            modal.size().height <= 436.0,
+            "long confirmations stay inside the window"
+        );
+        assert!(
+            content.size().height > modal.size().height,
+            "long content remains scrollable"
+        );
         h.panel(
             "orphans",
             "Удаление выбранных игр",
