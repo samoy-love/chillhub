@@ -33,7 +33,8 @@ component SetupToggle inherits Rectangle {
 }
 
 export component SetupWindow inherits Window {
-    init => { Palette.color-scheme = dark; }
+    init => { Palette.color-scheme = dark; window-keys.focus(); }
+    forward-focus: window-keys;
     title: root.removing ? "Удаление · Chill Hub" : "Установка · Chill Hub";
     icon: @image-url("assets/brand.png");
     preferred-width: 740px; preferred-height: 690px; min-width: 560px; min-height: 480px;
@@ -57,7 +58,7 @@ export component SetupWindow inherits Window {
     callback cancel();
     callback browse(bool);
     callback security();
-    FocusScope { width: parent.width; height: parent.height;
+    window-keys := FocusScope { width: parent.width; height: parent.height;
         key-pressed(event) => { if event.text == Key.Escape && !root.busy { root.cancel(); return accept; } reject }
         Image { x: 28px; y: 24px; width: 44px; height: 44px; source: @image-url("assets/brand.png"); image-fit: contain; }
         Text { x: 84px; y: 24px; height: 28px; text: "Chill Hub"; font-size: 23px; font-weight: 700; color: Theme.ink; }

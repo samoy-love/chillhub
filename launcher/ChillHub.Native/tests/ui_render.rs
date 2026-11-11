@@ -1433,6 +1433,33 @@ fn real_ui_headless_layout_and_actions() {
     }
     h.ui.hide().unwrap();
     let auxiliary = AuxiliaryWindow::new().unwrap();
+    let helper_closes = Rc::new(RefCell::new(0));
+    let closes = helper_closes.clone();
+    auxiliary.on_close_requested(move || *closes.borrow_mut() += 1);
+    auxiliary.show().unwrap();
+    settle();
+    key(auxiliary.window(), Key::Escape);
+    assert_eq!(
+        *helper_closes.borrow(),
+        1,
+        "Escape works before the first click or Tab in a helper"
+    );
+    auxiliary.set_busy(true);
+    key(auxiliary.window(), Key::Escape);
+    assert_eq!(
+        *helper_closes.borrow(),
+        1,
+        "Escape cannot interrupt a busy helper"
+    );
+    auxiliary.set_busy(false);
+    auxiliary.set_can_close(false);
+    key(auxiliary.window(), Key::Escape);
+    assert_eq!(
+        *helper_closes.borrow(),
+        1,
+        "Escape respects the helper close guard"
+    );
+    auxiliary.set_can_close(true);
     let weak = auxiliary.as_weak();
     auxiliary.on_provider_changed(move |provider| {
         let ui = weak.upgrade().unwrap();
@@ -1639,6 +1666,24 @@ fn real_ui_headless_layout_and_actions() {
     setup.set_games_path("D:\\Совместные игры\\Chill Hub".into());
     setup.set_needs_webview(true);
     setup.show().unwrap();
+    let setup_cancels = Rc::new(RefCell::new(0));
+    let cancels = setup_cancels.clone();
+    setup.on_cancel(move || *cancels.borrow_mut() += 1);
+    settle();
+    key(setup.window(), Key::Escape);
+    assert_eq!(
+        *setup_cancels.borrow(),
+        1,
+        "Escape works before the first click or Tab in setup"
+    );
+    setup.set_busy(true);
+    key(setup.window(), Key::Escape);
+    assert_eq!(
+        *setup_cancels.borrow(),
+        1,
+        "Escape cannot interrupt setup while files are changing"
+    );
+    setup.set_busy(false);
     for (name, removing, busy, done, error) in [
         ("setup-install", false, false, false, false),
         ("setup-downgrade", false, false, false, false),
