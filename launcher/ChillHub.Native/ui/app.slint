@@ -860,7 +860,8 @@ export component AppWindow inherits Window {
                     width: parent.width; height: root.media-stage-height;
                     border-radius: 10px; background: #100f14;
                     Image { x: 0px; y: 0px;  width: parent.width; height: parent.height; source: root.gallery-image; image-fit: contain; }
-                    if root.show-video: Rectangle { x: 0px; y: 0px;  width: parent.width; height: parent.height; background: #100f14;
+                    // Changing the full error surface also invalidates pixels exposed by the hidden native player.
+                    if root.show-video: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; border-radius: 10px; background: root.video-failed ? #19181f : #100f14;
                         Text { x: 24px; y: 0px; width: parent.width - 48px; height: parent.height; text: root.video-failed ? "Не удалось загрузить видео\nВыберите другое качество или откройте ролик ещё раз." : "Открываем видео…"; wrap: word-wrap; color: Theme.dim; horizontal-alignment: center; vertical-alignment: center; }
                     }
                     if root.show-web-video: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #100f14;
