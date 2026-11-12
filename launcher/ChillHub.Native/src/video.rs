@@ -278,8 +278,6 @@ impl VideoPlayer {
             .arg(format!("--wid={}", self.window as u32))
             .arg(format!("--input-ipc-server={pipe_name}"))
             .arg(format!("--log-file={}", log_path.display()))
-            .arg("--")
-            .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr)
@@ -311,6 +309,7 @@ impl VideoPlayer {
                 state,
                 stop,
                 diagnostics,
+                path.to_string_lossy().into_owned(),
             );
         }));
         self.commands = Some(sender);
@@ -518,6 +517,7 @@ fn run_worker(
     state: Arc<Mutex<VideoStatus>>,
     stop: Arc<AtomicBool>,
     mut diagnostics: File,
+    address: String,
 ) {
     let result = communicate(
         &pipe_name,
@@ -526,6 +526,7 @@ fn run_worker(
         &state,
         &stop,
         &mut diagnostics,
+        &address,
     );
     if let Err(error) = result
         && !stop.load(Ordering::Acquire)
@@ -548,6 +549,7 @@ fn communicate(
     state: &Arc<Mutex<VideoStatus>>,
     stop: &AtomicBool,
     diagnostics: &mut File,
+    address: &str,
 ) -> Result<(), String> {
     let start = Instant::now();
     let mut pipe = loop {
@@ -565,6 +567,12 @@ fn communicate(
             Err(error) => return Err(format!("Не удалось подключиться к видеоплееру: {error}")),
         }
     };
+    // Start only after IPC is connected: an immediate HTTP failure must not
+    // occur before we can receive its end-file event.
+    write_command(
+        &mut pipe,
+        json!({"command": ["loadfile", address, "replace"]}),
+    )?;
     let mut pending = Vec::new();
     let mut last_poll = Instant::now() - Duration::from_secs(1);
     let mut last_log = Instant::now() - Duration::from_secs(1);
@@ -731,6 +739,108 @@ fn apply_message(status: &mut VideoStatus, message: &Value) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::windows::io::FromRawHandle;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateNamedPipeW(
+            name: *const u16,
+            access: u32,
+            mode: u32,
+            instances: u32,
+            output_size: u32,
+            input_size: u32,
+            timeout: u32,
+            security: *mut c_void,
+        ) -> *mut c_void;
+        fn ConnectNamedPipe(pipe: *mut c_void, overlapped: *mut c_void) -> i32;
+        fn GetCurrentProcess() -> *mut c_void;
+    }
+
+    #[test]
+    fn connected_player_receives_immediate_load_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = format!(
+            r"\\.\pipe\chillhub-video-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let wide: Vec<u16> = OsStr::new(&name).encode_wide().chain(Some(0)).collect();
+        // Nonblocking server keeps a broken client bounded by the test deadline.
+        let handle = unsafe {
+            CreateNamedPipeW(
+                wide.as_ptr(),
+                3,
+                1,
+                1,
+                65536,
+                65536,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(handle as isize, -1);
+        let mut server = unsafe { File::from_raw_handle(handle) };
+        let state = Arc::new(Mutex::new(VideoStatus::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_state = Arc::clone(&state);
+        let worker_stop = Arc::clone(&stop);
+        let (sender, receiver) = mpsc::channel();
+        let mut diagnostics = File::create(dir.path().join("video.jsonl")).unwrap();
+        let address = "https://example.org/ролик.mp4?quality=1080";
+        let worker = thread::spawn(move || {
+            communicate(
+                &name,
+                unsafe { GetCurrentProcess() } as isize,
+                &receiver,
+                &worker_state,
+                &worker_stop,
+                &mut diagnostics,
+                address,
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if unsafe { ConnectNamedPipe(server.as_raw_handle(), std::ptr::null_mut()) } != 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(535)
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "player did not connect");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let mut received = Vec::new();
+        while !received.contains(&b'\n') {
+            read_available(&mut server, &mut received).unwrap();
+            assert!(
+                Instant::now() < deadline,
+                "player did not load after connecting"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let first = received.split(|b| *b == b'\n').next().unwrap();
+        let command: Value = serde_json::from_slice(first).unwrap();
+        assert_eq!(command["command"], json!(["loadfile", address, "replace"]));
+        writeln!(
+            server,
+            "{}",
+            json!({"event":"end-file","reason":"error","file_error":"HTTP 404"})
+        )
+        .unwrap();
+        while state.lock().unwrap().error.is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        stop.store(true, Ordering::Release);
+        worker.join().unwrap().unwrap();
+        drop(sender);
+        let status = state.lock().unwrap();
+        assert!(!status.ready);
+        assert!(status.error.as_ref().unwrap().contains("HTTP 404"));
+    }
+
     // Hidden native windows exercise ownership and clipping without a desktop,
     // a video decoder, network access, or a running Slint event loop.
     struct Host(isize);
