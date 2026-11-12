@@ -420,7 +420,7 @@ impl VideoPlayer {
     /// Keep the player, volume and playback position when changing rendition.
     pub fn switch_source(&self, address: &str) -> Result<(), String> {
         let mut status = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if !status.ready || status.error.is_some() {
+        if !status.ready && status.error.is_none() {
             return Err("Дождитесь загрузки видео перед сменой качества".into());
         }
         self.commands
@@ -430,6 +430,7 @@ impl VideoPlayer {
             .map_err(|_| "Потеряна связь с видео".to_string())?;
         status.ready = false;
         status.ended = false;
+        status.error = None;
         Ok(())
     }
     pub fn set_volume(&self, percent: f64) {
@@ -809,7 +810,14 @@ mod tests {
             assert!(!status.ready);
             assert!(status.error.as_ref().unwrap().contains("HTTP 404"));
         }
-        assert!(player.switch_source(address).is_err());
+        let recovery = "https://example.org/480.mp4";
+        player.switch_source(recovery).unwrap();
+        let retry = receiver.try_recv().unwrap();
+        assert_eq!(retry[0], "loadfile");
+        assert_eq!(retry[1], recovery);
+        assert_eq!(retry[4]["pause"], "yes");
+        assert!(player.status().error.is_none());
+        assert!(!player.status().ready);
         apply_message(
             &mut player.state.lock().unwrap(),
             &json!({"event":"file-loaded"}),
