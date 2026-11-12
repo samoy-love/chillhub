@@ -545,6 +545,6 @@ mod tests {
                 .unwrap_err()
                 .contains("предпросмотр")
         );
-        assert!(Request::parse(&args[..5]).is_err());
+        assert!(Request::parse(&args[..4]).is_err());
     }
 }

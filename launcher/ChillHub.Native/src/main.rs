@@ -1134,12 +1134,11 @@ fn bind(ui: &AppWindow, state: &State) {
         }
     });
     handler!(on_video_geometry_changed, |ui, state| {
-        if let Ok(mut s) = state.try_borrow_mut() {
-            if let Some(video) = s.video.as_mut()
-                && ui.get_show_video()
-            {
-                video.set_rect(video_rect(&ui));
-            }
+        if let Ok(mut s) = state.try_borrow_mut()
+            && let Some(video) = s.video.as_mut()
+            && ui.get_show_video()
+        {
+            video.set_rect(video_rect(&ui));
         }
     });
     controller::bind(ui, state);
