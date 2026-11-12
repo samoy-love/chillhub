@@ -806,6 +806,7 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
             serde_json::json!({"game": game.id, "index": index}),
         );
         ui.set_video_position(0.0);
+        ui.set_video_failed(false);
         ui.set_video_duration(0.0);
         ui.set_video_time_label("Загрузка видео…".into());
         let weak = ui.as_weak();
@@ -823,6 +824,8 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
                     .ok_or_else(|| "Видеоплеер недоступен".to_string())
                     .and_then(|video| video.open(&path, rect));
                 if let Err(error) = result {
+                    ui.set_video_failed(true);
+                    ui.set_video_time_label("Ошибка видео".into());
                     toast(&ui, &state, &error);
                     return;
                 }
@@ -845,8 +848,9 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
                                 ui.set_video_duration(status.duration as f32);
                                 ui.set_video_volume((status.volume / 100.0) as f32);
                                 ui.set_video_playing(status.is_playing());
-                                let label = if let Some(error) = status.error {
-                                    error
+                                ui.set_video_failed(status.error.is_some());
+                                let label = if status.error.is_some() {
+                                    "Ошибка видео".into()
                                 } else if status.ready {
                                     format!(
                                         "{} / {}",

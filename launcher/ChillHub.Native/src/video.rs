@@ -380,20 +380,30 @@ impl VideoPlayer {
     /// Called from the existing playback-status timer on the UI thread.
     /// Neither file-loaded nor process creation means the video surface is ready.
     pub fn reveal_if_ready(&mut self) -> bool {
+        let (ready, failed) = {
+            let status = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            (
+                status.ready
+                    && status.error.is_none()
+                    && status.width > 0
+                    && status.height > 0
+                    && (status.estimated_frame_number > 0 || status.position > 0.0),
+                status.error.is_some(),
+            )
+        };
+        if failed {
+            if self.visible {
+                unsafe { ShowWindow(self.window, 0) };
+                self.visible = false;
+            }
+            return false;
+        }
         if self.visible {
             return true;
         }
         if self.child.is_none() || self.rect.width < 1 || self.rect.height < 1 {
             return false;
         }
-        let ready = {
-            let status = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            status.ready
-                && status.error.is_none()
-                && status.width > 0
-                && status.height > 0
-                && (status.estimated_frame_number > 0 || status.position > 0.0)
-        };
         if ready {
             unsafe { ShowWindow(self.window, 8) };
             self.visible = true;
@@ -867,6 +877,49 @@ mod tests {
         assert!(player.stop.load(Ordering::Acquire));
         assert!(!player.status().ready);
         assert!(player.status().pid.is_none());
+    }
+
+    #[test]
+    fn failed_video_hides_stale_frame_and_reveals_recovered_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Host::new();
+        let mut player = fixture(&host, dir.path());
+        player.set_rect(VideoRect {
+            width: 320,
+            height: 180,
+            ..VideoRect::default()
+        });
+        player.child = Some(
+            Command::new(std::env::current_exe().unwrap())
+                .arg("--list")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x0800_0000)
+                .spawn()
+                .unwrap(),
+        );
+        {
+            let mut status = player.state.lock().unwrap();
+            status.ready = true;
+            status.width = 1280;
+            status.height = 720;
+            status.position = 1.0;
+        }
+        assert!(player.reveal_if_ready());
+        assert!(player.reveal_if_ready());
+        player.state.lock().unwrap().error = Some("HTTP 404".into());
+        assert!(!player.reveal_if_ready());
+        assert!(!player.visible);
+        {
+            let mut status = player.state.lock().unwrap();
+            status.error = None;
+            status.ready = false;
+        }
+        assert!(!player.reveal_if_ready());
+        player.state.lock().unwrap().ready = true;
+        assert!(player.reveal_if_ready());
+        player.close();
+        assert!(!player.visible);
     }
 
     #[test]

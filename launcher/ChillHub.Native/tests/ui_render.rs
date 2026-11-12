@@ -1156,6 +1156,17 @@ fn real_ui_headless_layout_and_actions() {
         h.ui.on_video_quality_selected(move |height| *received.borrow_mut() = height);
         h.click("Качество видео 720p");
         assert_eq!(*selected.borrow(), 720);
+        h.ui.set_video_failed(true);
+        h.ui.set_video_time_label("Ошибка видео".into());
+        h.capture("gallery-video-error", 900, 500, 1.0);
+        h.click("Качество видео 480p");
+        assert_eq!(
+            *selected.borrow(),
+            480,
+            "quality remains actionable after an error"
+        );
+        h.ui.set_video_failed(false);
+        h.ui.set_video_time_label("0:37 / 1:43".into());
     }
     // The child HWND video surface is intentionally not created in a UI test.
     assert!(h.ui.get_show_video());
