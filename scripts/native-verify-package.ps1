@@ -27,7 +27,7 @@ public static class ChillHubPackageResources {
 }
 '@
 }
-$required = @('ChillHub.exe','ChillHub.Updater.exe','ChillHub.SecurityHelper.exe','mpv/mpv.exe','mpv/source.json','Data/games.json','Data/changelog.json','web-video/WebView2Loader.dll','web-video/source.json','web-video/LICENSE-Microsoft-WebView2.txt')
+$required = @('ChillHub.exe','ChillHub.Updater.exe','ChillHub.SecurityHelper.exe','mpv/mpv.exe','mpv/source.json','Data/games.json','Data/changelog.json')
 foreach ($path in $required) { if (!(Test-Path -LiteralPath (Join-Path $root $path) -PathType Leaf)) { throw "В пакете отсутствует $path" } }
 foreach ($name in $required[0..2]) {
     $path = Join-Path $root $name
@@ -50,17 +50,12 @@ foreach ($name in $required[0..2]) {
 }
 $source = Get-Content -LiteralPath (Join-Path $root 'mpv/source.json') -Raw | ConvertFrom-Json
 if ((Get-FileHash -LiteralPath (Join-Path $root 'mpv/mpv.exe') -Algorithm SHA256).Hash -ne $source.executableSha256) { throw 'Хеш mpv не совпадает с provenance.' }
-$webSource = Get-Content -LiteralPath (Join-Path $root 'web-video/source.json') -Raw | ConvertFrom-Json
-if ($webSource.runtimeBundled -ne $false -or $webSource.platform -ne 'win-x64' -or $webSource.source -notmatch '^https://api\.nuget\.org/v3-flatcontainer/microsoft\.web\.webview2/[0-9.]+/microsoft\.web\.webview2\.[0-9.]+\.nupkg$') { throw 'Неверное происхождение WebView2Loader.' }
-if ((Get-FileHash -LiteralPath (Join-Path $root 'web-video/WebView2Loader.dll') -Algorithm SHA256).Hash -ne $webSource.loaderSha256) { throw 'Хеш WebView2Loader не совпадает с provenance.' }
-if ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $root 'web-video/WebView2Loader.dll')).FileVersion -ne $webSource.version) { throw 'Версия WebView2Loader не совпадает с provenance.' }
 $null = & (Join-Path $PSScriptRoot 'native-package-assets.ps1') -Directory $root
 $entries = @(Get-ChildItem -LiteralPath $root -Recurse -Force)
 foreach ($file in $entries) {
     $relative = [IO.Path]::GetRelativePath($root,$file.FullName).Replace('\','/')
     if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Ссылка в payload: $relative" }
-    $officialLoader = $relative -cin @('web-video/WebView2Loader.dll','web-video/LICENSE-Microsoft-WebView2.txt')
-    if ($relative -match '(?i)(^|/)(config\.json|playtime[^/]*\.json|pending[^/]*\.json|client\.log|launcher\.version|launcher\.update-status|\.updating|cache|logs|qa-state|qa-games|SelfUpdate)(/|$)' -or (!$officialLoader -and $relative -match '(?i)(WebView2|coreclr|hostfxr|hostpolicy|\.runtimeconfig\.json$|\.deps\.json$)')) { throw "В payload попал пользовательский файл или внешний runtime: $relative" }
+    if ($relative -match '(?i)(^|/)(config\.json|playtime[^/]*\.json|pending[^/]*\.json|client\.log|launcher\.version|launcher\.update-status|\.updating|cache|logs|qa-state|qa-games|SelfUpdate)(/|$)' -or ($relative -match '(?i)(web-video|WebView2|coreclr|hostfxr|hostpolicy|\.runtimeconfig\.json$|\.deps\.json$)')) { throw "В payload попал пользовательский файл или внешний runtime: $relative" }
 }
 $files = @($entries | Where-Object { !$_.PSIsContainer })
-[ordered]@{ valid=$true; version=$Version; fileCount=$files.Count; bytes=($files | Measure-Object Length -Sum).Sum; resourceValidation='PE data resources only, no process execution'; runtime='native x64; bundled mpv; optional installed WebView2 used only for YouTube'; webView2RuntimeBundled=$false; webView2LoaderSha256=$webSource.loaderSha256 }
+[ordered]@{ valid=$true; version=$Version; fileCount=$files.Count; bytes=($files | Measure-Object Length -Sum).Sum; resourceValidation='PE data resources only, no process execution'; runtime='native x64; bundled mpv; server files only' }

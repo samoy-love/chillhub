@@ -15,7 +15,7 @@ func TestPublicGamesExposePresentationWithoutLocalBuild(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"items":[{"gameId":"peak","title":"PEAK","mods":{"enabled":true,"steamAppId":"3527290","exeNames":["PEAK.exe"]},"presentation":{"description":"Играйте вместе","modpackDescription":"Для большой компании","instructions":["Откройте Steam"],"media":[{"kind":"video","url":"https://cdn.example.com/trailer.mp4"}],"mods":[{"id":"more","name":"More Players","russianName":"Больше игроков"}]}},{"gameId":"unsafe","title":"Unsafe","presentation":{"heroUrl":"file:///C:/secret"}},{"gameId":"hidden","unpublished":true,"presentation":{"description":"Secret"}}]}`
+	body := `{"items":[{"gameId":"peak","title":"PEAK","mods":{"enabled":true,"steamAppId":"3527290","exeNames":["PEAK.exe"]},"presentation":{"description":"Играйте вместе","modpackDescription":"Для большой компании","instructions":["Откройте Steam"],"media":[{"kind":"video","url":"https://launcher.samoy.love/assets/trailer.mp4"}],"mods":[{"id":"more","name":"More Players","russianName":"Больше игроков"}]}},{"gameId":"unsafe","title":"Unsafe","presentation":{"heroUrl":"file:///C:/secret"}},{"gameId":"hidden","unpublished":true,"presentation":{"description":"Secret"}}]}`
 	if err := os.WriteFile(filepath.Join(dir, "games.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

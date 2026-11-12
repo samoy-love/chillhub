@@ -16,7 +16,7 @@ function Expect-Rejection([string]$Expected) {
 try {
     # Independent copies keep negative fixtures separate from the real package.
     # No executable is started, and no shared file contents can be modified.
-    $required = @('ChillHub.exe','ChillHub.Updater.exe','ChillHub.SecurityHelper.exe','mpv/mpv.exe','mpv/source.json','Data/games.json','Data/changelog.json','web-video/WebView2Loader.dll','web-video/source.json','web-video/LICENSE-Microsoft-WebView2.txt')
+    $required = @('ChillHub.exe','ChillHub.Updater.exe','ChillHub.SecurityHelper.exe','mpv/mpv.exe','mpv/source.json','Data/games.json','Data/changelog.json')
     $required += @(& (Join-Path $PSScriptRoot 'native-package-assets.ps1') -Directory $package.payload)
     foreach ($relative in $required) {
         $target=Join-Path $fixture $relative
@@ -39,13 +39,10 @@ try {
     Set-Content -LiteralPath $sentinel -Value 'not a runtime; rejection fixture'
     Expect-Rejection 'WebView2Runtime.dll'
     Remove-Item -LiteralPath $sentinel
-    # Replace only the independent fixture copy with a bad file.
-    $loader = Join-Path $fixture 'web-video/WebView2Loader.dll'
-    Remove-Item -LiteralPath $loader
-    Set-Content -LiteralPath $loader -Value 'invalid loader'
-    Expect-Rejection 'Хеш WebView2Loader'
-    Remove-Item -LiteralPath $loader
-    Copy-Item -LiteralPath (Join-Path $package.payload 'web-video/WebView2Loader.dll') -Destination $loader
+    $sentinel=Join-Path $fixture 'WebView2Loader.dll'
+    Set-Content -LiteralPath $sentinel -Value 'forbidden browser loader'
+    Expect-Rejection 'WebView2Loader.dll'
+    Remove-Item -LiteralPath $sentinel
     Remove-Item -LiteralPath (Join-Path $fixture 'ChillHub.Updater.exe')
     Expect-Rejection 'ChillHub.Updater.exe'
     [ordered]@{passed=$checks.Count; checks=$checks; executablesStarted=0; realUserStateModified=$false} | ConvertTo-Json -Depth 4

@@ -17,7 +17,7 @@ test('media URLs reject credentials, local addresses and traversal',()=>{
   validateURL('https://video.akamai.steamstatic.com/store_trailers/game/hls_264_master.m3u8?t=1');
 });
 test('exact source version prevents silently publishing a newer unrelated mod list',()=>{
-  const p={description:'Описание',genre:'Жанр',modpackDescription:'Сборка',modpackVersion:'Author-Pack-1.0.0',modpackRevision:'a'.repeat(32),heroUrl:'https://example.com/hero.jpg',highlights:['Игра'],media:[{kind:'video',url:'https://example.com/trailer.mp4',posterUrl:'',caption:'Трейлер'},{kind:'image',url:'https://example.com/1.jpg',posterUrl:'',caption:'Снимок'},{kind:'image',url:'https://example.com/2.jpg',posterUrl:'',caption:'Снимок'}],mods:[{id:'Author-Mod',name:'Mod',russianName:'Название',description:'Описание',category:'Контент',version:'1.0.0',url:'https://example.com/mod'}]};
+  const p={description:'Описание',genre:'Жанр',modpackDescription:'Сборка',modpackVersion:'Author-Pack-1.0.0',modpackRevision:'a'.repeat(32),heroUrl:'https://example.com/hero.jpg',highlights:['Игра'],media:[{kind:'video',url:'https://launcher.samoy.love/assets/trailer.mp4',posterUrl:'',caption:'Трейлер'},{kind:'image',url:'https://example.com/1.jpg',posterUrl:'',caption:'Снимок'},{kind:'image',url:'https://example.com/2.jpg',posterUrl:'',caption:'Снимок'}],mods:[{id:'Author-Mod',name:'Mod',russianName:'Название',description:'Описание',category:'Контент',version:'1.0.0',url:'https://example.com/mod'}]};
   validatePresentation(p,['Author-Mod-1.0.0']);assert.throws(()=>validatePresentation(p,['Author-Mod-2.0.0']));
   assert.throws(()=>validatePresentation({...p,modpackRevision:''}));
 });

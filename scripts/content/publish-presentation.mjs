@@ -17,12 +17,19 @@ const digest = value => createHash('sha256').update(typeof value === 'string' ? 
 const stripPresentation = row => { const copy = structuredClone(row); delete copy.presentation; return copy; };
 
 async function boundedJson(response) {
-  assert(response.ok, `HTTP ${response.status}: ${new URL(response.url).pathname}`);
   const chunks = []; let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length; assert(size <= 4 * 1024 * 1024, 'Response exceeds registry size limit'); chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  const body = Buffer.concat(chunks).toString('utf8');
+  if (!response.ok) {
+    let reason = '';
+    try { const data = JSON.parse(body); reason = String(data.error || data.message || '').slice(0, 500); } catch {
+      if (response.headers.get('content-type')?.startsWith('text/plain')) reason = body.trim().slice(0, 500);
+    }
+    throw new Error(`HTTP ${response.status}: ${new URL(response.url).pathname}${reason ? ': ' + reason : ''}`);
+  }
+  return JSON.parse(body);
 }
 
 export async function publishPresentation({ base, cookie, seed, provenance, output, apply = false, mediaPlan = null, allowLoopbackForTests = false }) {

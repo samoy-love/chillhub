@@ -155,8 +155,6 @@ impl Harness {
         let log = actions.clone();
         ui.on_version_selected(move |version| log.borrow_mut().push(format!("version:{version}")));
         let log = actions.clone();
-        ui.on_open_media_source(move || log.borrow_mut().push("open-media-source".to_owned()));
-        let log = actions.clone();
         ui.on_video_toggle(move || log.borrow_mut().push("video-toggle".to_owned()));
         let weak = ui.as_weak();
         ui.on_panel_closed(move || weak.upgrade().unwrap().set_panel_kind("".into()));
@@ -327,10 +325,6 @@ impl Harness {
                     },
                     caption: text(m, "Caption").into(),
                     is_video: text(m, "Kind") == "video",
-                    is_external: text(m, "Provider") == "youtube"
-                        || text(m, "Playback") == "external"
-                        || text(m, "Url").contains("youtube.com")
-                        || text(m, "Url").contains("youtu.be"),
                 })
                 .collect(),
         ));
@@ -1186,30 +1180,6 @@ fn real_ui_headless_layout_and_actions() {
         h.actions.borrow().contains(&"video-toggle".to_owned()),
         "Space pauses the newly opened video"
     );
-    if h.qa {
-        h.ui.set_selected_media_is_web_video(true);
-        h.ui.set_media_provider_label("YouTube".into());
-        h.capture("gallery-web-video", 1360, 850, 1.0);
-        h.capture("gallery-web-video-small", 900, 500, 1.0);
-        assert!(h.ui.get_show_web_video());
-        assert!(
-            !h.ui.get_show_video(),
-            "web and mpv surfaces must not overlap"
-        );
-        assert!(
-            ElementHandle::find_by_accessible_label(&h.ui, "Позиция видео")
-                .next()
-                .is_none(),
-            "web player owns its controls"
-        );
-        h.click("Открыть на сайте");
-        assert!(h.actions.borrow().contains(&"open-media-source".to_owned()));
-        h.ui.set_web_video_status(
-            "Не удалось открыть плеер. Можно посмотреть видео на сайте автора.".into(),
-        );
-        h.capture("gallery-web-video-fallback", 900, 500, 1.5);
-        h.ui.set_selected_media_is_web_video(false);
-    }
     h.ui.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::Escape.into(),
     });
@@ -1682,7 +1652,6 @@ fn real_ui_headless_layout_and_actions() {
     setup.set_version(env!("CARGO_PKG_VERSION").into());
     setup.set_install_path("C:\\Users\\Игрок\\AppData\\Local\\Chill Hub".into());
     setup.set_games_path("D:\\Совместные игры\\Chill Hub".into());
-    setup.set_needs_webview(true);
     setup.show().unwrap();
     let setup_cancels = Rc::new(RefCell::new(0));
     let cancels = setup_cancels.clone();

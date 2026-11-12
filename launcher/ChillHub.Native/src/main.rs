@@ -17,7 +17,6 @@ mod queue_ui;
 mod security_offers;
 mod settings_ui;
 mod video;
-use chillhub_native::web_video;
 mod window_geometry;
 use catalog::{Game, default_choice, filtered_indices, valid_choice};
 use chillhub_native::{
@@ -63,7 +62,6 @@ struct AppState {
     gallery_generation: u64,
     gallery_index: usize,
     video: Option<VideoPlayer>,
-    web_video: Option<web_video::WebVideo>,
     native_hwnd: isize,
     video_timer: Timer,
     toast_timer: Timer,
@@ -334,7 +332,6 @@ fn select_game(ui: &AppWindow, state: &State, index: usize) {
                     poster: Image::default(),
                     caption: media.caption.clone().into(),
                     is_video: media.kind == "video",
-                    is_external: matches!(media.provider.as_str(), "youtube" | "rutube"),
                 })
                 .collect::<Vec<_>>(),
         ))
@@ -580,10 +577,8 @@ fn close_panel(ui: &AppWindow, state: &State) {
         if let Some(video) = &mut s.video {
             video.close();
         }
-        s.web_video = None;
     }
     ui.set_selected_media_is_video(false);
-    ui.set_selected_media_is_web_video(false);
     ui.set_panel_kind("".into());
     ui.set_gallery_image(Image::default());
     security_offers::after_panel_closed(ui, state);
@@ -749,14 +744,12 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
         return;
     };
     let services = state.borrow().services.clone();
-    let is_web = media.kind == "video" && matches!(media.provider.as_str(), "youtube" | "rutube");
     ui.set_panel_title(game.title.into());
     ui.set_panel_subtitle(media.caption.clone().into());
     ui.set_gallery_caption(media.caption.clone().into());
     ui.set_gallery_index(index as i32);
     ui.set_panel_kind("gallery".into());
     ui.set_selected_media_is_video(media.kind == "video");
-    ui.set_selected_media_is_web_video(is_web);
     let mut qualities: Vec<i32> = media.variants.iter().map(|v| v.height as i32).collect();
     qualities.sort_unstable();
     qualities.dedup();
@@ -770,18 +763,6 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
         .unwrap_or(0);
     ui.set_video_quality(quality);
     ui.set_video_qualities(ModelRc::new(VecModel::from(qualities)));
-    if is_web {
-        ui.set_media_provider_label(
-            if media.provider == "rutube" {
-                "Rutube"
-            } else {
-                "YouTube"
-            }
-            .into(),
-        );
-        open_web_video(ui, state, generation, media.url.clone());
-        return;
-    }
     let address = if media.kind == "video" {
         media
             .variants
@@ -792,7 +773,11 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
     } else {
         &media.path
     };
-    let location = chillhub_native::media::location(address, &data, &services.api);
+    let location = if media.kind == "video" {
+        chillhub_native::media::video_location(address, &services.api)
+    } else {
+        chillhub_native::media::location(address, &data, &services.api)
+    };
     let path = match location {
         Ok(p) => PathBuf::from(p),
         Err(error) => {
@@ -910,72 +895,6 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
 fn time_label(seconds: f64) -> String {
     let value = seconds.max(0.0) as u64;
     format!("{}:{:02}", value / 60, value % 60)
-}
-fn web_video_rect(ui: &AppWindow) -> web_video::WebVideoRect {
-    let rect = video_rect(ui);
-    web_video::WebVideoRect {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width.max(1) as u32,
-        height: rect.height.max(1) as u32,
-    }
-}
-fn open_web_video(ui: &AppWindow, state: &State, generation: u64, source: String) {
-    ui.set_web_video_status("Открываем видео…".into());
-    let weak = ui.as_weak();
-    let weak_state = Rc::downgrade(state);
-    Timer::single_shot(Duration::from_millis(32), move || {
-        let (Some(ui), Some(state)) = (weak.upgrade(), weak_state.upgrade()) else {
-            return;
-        };
-        if state.borrow().gallery_generation != generation || !ui.get_show_web_video() {
-            return;
-        }
-        let (hwnd, services) = {
-            let s = state.borrow();
-            (s.native_hwnd, s.services.clone())
-        };
-        let result =
-            web_video::WebVideo::open(hwnd, web_video_rect(&ui), &source, &services.paths.data_dir);
-        match result {
-            Ok(player) => state.borrow_mut().web_video = Some(player),
-            Err(error) => {
-                services
-                    .api
-                    .event("media.web_error", serde_json::json!({"error": error}));
-                ui.set_web_video_status(format!("{error}\nМожно открыть видео на сайте.").into());
-                return;
-            }
-        }
-        let weak = ui.as_weak();
-        let weak_state = Rc::downgrade(&state);
-        let mut previous = None;
-        state.borrow().video_timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
-            let (Some(ui), Some(state)) = (weak.upgrade(), weak_state.upgrade()) else { return; };
-            if state.borrow().gallery_generation != generation { return; }
-            let status = {
-                let mut s = state.borrow_mut();
-                s.web_video.as_mut().map(|player| {
-                    let _ = player.set_rect(web_video_rect(&ui));
-                    let status = player.status();
-                    // The native browser surface covers Slint. Hide it on error
-                    // so the retry explanation remains visible underneath it.
-                    let _ = player.set_visible(ui.get_show_web_video() && status.error.is_none());
-                    status
-                })
-            };
-            let Some(status) = status else { return; };
-            if status.close_requested { close_panel(&ui, &state); return; }
-            let current = (status.ready, status.error.clone(), status.error_code);
-            if previous.as_ref() != Some(&current) {
-                state.borrow().services.api.event("media.web_state", serde_json::json!({
-                    "ready": status.ready, "error": status.error, "errorCode": status.error_code, "refererConfigured": status.referer_configured
-                }));
-                ui.set_web_video_status(status.error.unwrap_or_else(|| if status.ready { "".into() } else { "Открываем видео…".into() }).into());
-                previous = Some(current);
-            }
-        });
-    });
 }
 #[cfg(feature = "benchmark")]
 fn start_benchmark(ui: &AppWindow, state: &State, hwnd: isize) -> Result<Option<Timer>, String> {
@@ -1160,21 +1079,6 @@ fn bind(ui: &AppWindow, state: &State) {
         };
         open_media(&ui, &state, index);
     });
-    handler!(on_open_media_source, |ui, state| {
-        let media = {
-            let s = state.borrow();
-            s.catalog
-                .get(s.selected)
-                .and_then(|g| g.media.get(s.gallery_index))
-                .cloned()
-        };
-        if let Some(media) = media
-            && let Err(error) =
-                chillhub_native::media::open_external_video(&media.provider, &media.url)
-        {
-            toast(&ui, &state, &error);
-        }
-    });
     handler!(on_mod_search_edited, |ui, state, query| {
         state.borrow_mut().mod_query = query.to_string();
         refresh_mods(&ui, &state);
@@ -1199,11 +1103,8 @@ fn bind(ui: &AppWindow, state: &State) {
                 .and_then(|g| g.media.get(s.gallery_index))
                 .and_then(|m| m.variants.iter().find(|v| v.height == quality as u32))
                 .map(|variant| {
-                    let address = chillhub_native::media::location(
-                        &variant.url,
-                        &s.data_root,
-                        &s.services.api,
-                    )?;
+                    let address =
+                        chillhub_native::media::video_location(&variant.url, &s.services.api)?;
                     s.video
                         .as_ref()
                         .ok_or_else(|| "Видеоплеер недоступен".to_string())?
@@ -1238,13 +1139,6 @@ fn bind(ui: &AppWindow, state: &State) {
                 && ui.get_show_video()
             {
                 video.set_rect(video_rect(&ui));
-            }
-            if let Some(video) = s.web_video.as_mut() {
-                let _ =
-                    video.set_visible(ui.get_show_web_video() && video.status().error.is_none());
-                if ui.get_show_web_video() {
-                    let _ = video.set_rect(web_video_rect(&ui));
-                }
             }
         }
     });
@@ -1388,7 +1282,6 @@ fn run() -> Result<(), String> {
         gallery_generation: 0,
         gallery_index: 0,
         video: None,
-        web_video: None,
         native_hwnd: 0,
         video_timer: Timer::default(),
         toast_timer: Timer::default(),

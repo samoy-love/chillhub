@@ -69,7 +69,7 @@ func validateVideoVariants(prefix string, media GameMedia) error {
 			return fmt.Errorf("presentation.%s.variants[%d]: неверное или повторяющееся качество видео", prefix, i)
 		}
 		seen[v.Height] = true
-		if err := presentationURL(fmt.Sprintf("%s.variants[%d].url", prefix, i), v.URL, false); err != nil {
+		if err := serverVideoURL(fmt.Sprintf("%s.variants[%d].url", prefix, i), v.URL); err != nil {
 			return err
 		}
 	}
@@ -228,54 +228,21 @@ func validateMediaDimensionsAndDate(prefix string, media GameMedia) error {
 }
 
 func validateVideoProvider(prefix string, media GameMedia) error {
-	switch media.Provider {
-	case "", "file":
-		return nil
-	case "youtube", "rutube":
-		u, err := url.Parse(media.URL)
-		if err != nil || u.Port() != "" {
-			return fmt.Errorf("presentation.%s.url: неверная ссылка видеопровайдера", prefix)
-		}
-		if externalVideoURL(media.Provider, u) {
-			return nil
-		}
-		return fmt.Errorf("presentation.%s.url: ссылка не соответствует выбранному видеопровайдеру", prefix)
-	default:
-		return fmt.Errorf("presentation.%s.provider: выберите file, youtube или rutube", prefix)
+	if media.Provider != "" && media.Provider != "file" {
+		return fmt.Errorf("presentation.%s.provider: используйте файл на сервере Chill Hub", prefix)
 	}
+	return serverVideoURL(prefix+".url", media.URL)
 }
 
-func externalVideoURL(provider string, u *url.URL) bool {
-	host := strings.ToLower(u.Hostname())
-	if provider == "youtube" {
-		switch host {
-		case "youtu.be":
-			return validVideoID(strings.TrimPrefix(u.Path, "/"), 11)
-		case "youtube.com", "www.youtube.com", "m.youtube.com":
-			return u.Path == "/watch" && validVideoID(u.Query().Get("v"), 11)
-		default:
-			return false
-		}
+func serverVideoURL(field, value string) error {
+	if err := presentationURL(field, value, false); err != nil {
+		return err
 	}
-	if host != "rutube.ru" && host != "www.rutube.ru" {
-		return false
+	u, err := url.Parse(value)
+	if err != nil || (u.IsAbs() && (u.Scheme != "https" || u.Host != "launcher.samoy.love")) || u.Host != "" && !u.IsAbs() || !strings.HasPrefix(u.Path, "/assets/") || !strings.HasSuffix(u.Path, ".mp4") {
+		return fmt.Errorf("presentation.%s: нужен MP4 с сервера Chill Hub", field)
 	}
-	id := strings.TrimSuffix(strings.TrimPrefix(u.Path, "/video/"), "/")
-	decoded, err := hex.DecodeString(id)
-	return strings.HasPrefix(u.Path, "/video/") && err == nil && len(decoded) == 16
-}
-
-func validVideoID(id string, length int) bool {
-	if len(id) != length {
-		return false
-	}
-	for _, c := range id {
-		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' {
-			continue
-		}
-		return false
-	}
-	return true
+	return nil
 }
 
 func validatePresentationMods(mods []ModDescription) error {

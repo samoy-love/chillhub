@@ -19,13 +19,12 @@ struct Request {
     install: PathBuf,
     games: PathBuf,
     version: String,
-    needs_webview: bool,
     allow_downgrade: bool,
 }
 
 impl Request {
     fn parse(args: &[String]) -> Result<Self, String> {
-        if args.len() != 6
+        if args.len() != 5
             || !matches!(
                 args[0].as_str(),
                 "install" | "uninstall" | "preview-install" | "preview-uninstall"
@@ -40,7 +39,6 @@ impl Request {
             install: args[2].clone().into(),
             games: args[3].clone().into(),
             version: args[4].clone(),
-            needs_webview: args[5] == "1",
             allow_downgrade: false,
         };
         if !request.preview && (!request.engine.is_absolute() || !request.engine.is_file()) {
@@ -120,7 +118,7 @@ fn validate_paths(install: &Path, games: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn engine_command(request: &Request, shortcut: bool, delete_games: bool, webview: bool) -> Command {
+fn engine_command(request: &Request, shortcut: bool, delete_games: bool) -> Command {
     let mut cmd = Command::new(&request.engine);
     cmd.arg("/S");
     if request.removing {
@@ -133,9 +131,6 @@ fn engine_command(request: &Request, shortcut: bool, delete_games: bool, webview
         }
         if !shortcut {
             cmd.arg("/NODESKTOP");
-        }
-        if webview {
-            cmd.arg("/WEBVIEW2");
         }
     }
     // NSIS consumes the remainder of the Windows command line for /D and _?.
@@ -158,20 +153,14 @@ fn engine_command(request: &Request, shortcut: bool, delete_games: bool, webview
     cmd
 }
 
-fn execute(
-    request: &Request,
-    shortcut: bool,
-    delete_games: bool,
-    webview: bool,
-) -> Result<String, String> {
+fn execute(request: &Request, shortcut: bool, delete_games: bool) -> Result<String, String> {
     if request.preview {
         return Err("Это предпросмотр: файлы и настройки не изменяются.".into());
     }
-    let status = engine_command(request, shortcut, delete_games, webview)
+    let status = engine_command(request, shortcut, delete_games)
         .status()
         .map_err(|e| format!("Не удалось начать операцию: {e}"))?;
-    let missing_webview = !request.removing && webview && status.code() == Some(20);
-    if !status.success() && !missing_webview {
+    if !status.success() {
         return Err(format!(
             "Операция не завершена (код {}). Закройте Chill Hub и игры, проверьте свободное место и доступ к папке. Для более старой версии нужно отдельное подтверждение.",
             status.code().unwrap_or(-1)
@@ -195,9 +184,6 @@ fn execute(
             .map_err(|_| "Не удалось проверить установленную версию. Повторите установку.")?;
         if version.trim() != request.version || !request.install.join("ChillHub.exe").is_file() {
             return Err("Проверка установленной версии не прошла. Повторите установку.".into());
-        }
-        if missing_webview {
-            return Ok("Лаунчер установлен, но компонент для YouTube установить не удалось. Игры и обычные трейлеры работают. Подключитесь к интернету и повторите установку, чтобы добавить компонент.".into());
         }
         Ok(
             "Лаунчер установлен. Настройка антивируса доступна в разделе «Помощь» после запуска."
@@ -237,7 +223,6 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
     ui.set_version(request.version.clone().into());
     ui.set_install_path(request.install.to_string_lossy().as_ref().into());
     ui.set_games_path(request.games.to_string_lossy().as_ref().into());
-    ui.set_needs_webview(request.needs_webview);
     if !request.removing && !request.preview {
         use winreg::{RegKey, enums::HKEY_CURRENT_USER};
         let installed = RegKey::predef(HKEY_CURRENT_USER)
@@ -352,15 +337,13 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
         request.games = games;
         let shortcut = ui.get_desktop_shortcut();
         let delete_games = ui.get_delete_games();
-        let webview = ui.get_install_webview();
         ui.set_busy(true);
         ui.set_error(false);
         ui.set_message("Подготавливаем файлы. Это может занять несколько минут.".into());
         let weak = ui.as_weak();
         let log = log.clone();
         std::thread::spawn(move || {
-            let result =
-                helper_runtime::caught(|| execute(&request, shortcut, delete_games, webview));
+            let result = helper_runtime::caught(|| execute(&request, shortcut, delete_games));
             if let Some(log) = log {
                 let _ = log.record(
                     if result.is_ok() {
@@ -411,13 +394,11 @@ mod tests {
             install.display().to_string(),
             games.display().to_string(),
             "1.8.4".to_owned(),
-            "1".to_owned(),
         ];
         let log = HelperLog::in_directory(temporary.path(), HelperKind::Setup).unwrap();
         let ui =
             create_window(Arc::new(Request::parse(&args).unwrap()), Some(log.clone())).unwrap();
         assert!(!ui.get_removing());
-        assert!(ui.get_needs_webview());
         assert_eq!(ui.get_version(), "1.8.4");
         ui.set_install_path("relative".into());
         ui.invoke_submit();
@@ -493,11 +474,10 @@ mod tests {
             "C:\\Chill Hub",
             "D:\\Игры вместе",
             "1.8.2",
-            "0",
         ]
         .map(str::to_owned);
         let request = Request::parse(&args).unwrap();
-        let command = engine_command(&request, false, false, true);
+        let command = engine_command(&request, false, false);
         let args: Vec<_> = command
             .get_args()
             .map(|s| s.to_string_lossy().into_owned())
@@ -507,7 +487,6 @@ mod tests {
             [
                 "/S",
                 "/NODESKTOP",
-                "/WEBVIEW2",
                 "/GAMESDIR=\"D:\\Игры вместе\"",
                 "/D=C:\\Chill Hub"
             ]
@@ -515,7 +494,7 @@ mod tests {
         let mut rollback = request;
         rollback.allow_downgrade = true;
         assert!(
-            engine_command(&rollback, true, false, false)
+            engine_command(&rollback, true, false)
                 .get_args()
                 .any(|arg| arg == "/ALLOWDOWNGRADE")
         );
@@ -558,12 +537,11 @@ mod tests {
             "C:\\ChillHub",
             "C:\\Games\\ChillHub",
             "1.8.1",
-            "0",
         ]
         .map(str::to_owned);
         let request = Request::parse(&args).unwrap();
         assert!(
-            execute(&request, false, true, true)
+            execute(&request, false, true)
                 .unwrap_err()
                 .contains("предпросмотр")
         );

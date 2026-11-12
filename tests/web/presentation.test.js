@@ -23,7 +23,7 @@ test('video qualities survive editing, reordering and reject corrupt metadata', 
 });
 const D = require('../../server/admin_ui/registry-diff.js');
 
-const sample = () => ({ description: 'Вместе на вершину', modpackDescription: 'Позволяет играть большой компанией', modpackVersion: 'Lart_Iste-PeakFriendsEdition-2.0.15', modpackRevision: '0123456789abcdef0123456789abcdef', genre: 'Кооператив', heroUrl: '/assets/hero.jpg', highlights: ['Четыре игрока'], media: [{ kind: 'video', url: 'https://cdn.example.com/trailer.mp4', posterUrl: '/assets/poster.jpg', caption: 'Трейлер' }], mods: [{ id: 'more', name: 'More Players', russianName: 'Больше игроков', description: 'Снимает лимит группы', category: 'Кооператив', version: '1.0', url: 'https://thunderstore.io/c/peak/' }] });
+const sample = () => ({ description: 'Вместе на вершину', modpackDescription: 'Позволяет играть большой компанией', modpackVersion: 'Lart_Iste-PeakFriendsEdition-2.0.15', modpackRevision: '0123456789abcdef0123456789abcdef', genre: 'Кооператив', heroUrl: '/assets/hero.jpg', highlights: ['Четыре игрока'], media: [{ kind: 'video', url: 'https://launcher.samoy.love/assets/trailer.mp4', posterUrl: '/assets/poster.jpg', caption: 'Трейлер' }], mods: [{ id: 'more', name: 'More Players', russianName: 'Больше игроков', description: 'Снимает лимит группы', category: 'Кооператив', version: '1.0', url: 'https://thunderstore.io/c/peak/' }] });
 
 test('editor round-trips every presentation field without executing markup', () => {
   const data = sample(); data.description = '<img src=x onerror=alert(1)>';
@@ -46,9 +46,9 @@ test('media and mods can be added, reordered and removed without mutating saved 
   assert.equal(P.change(original, 'mods', 'add').mods.length, 2);
 });
 
-test('external videos and mod benefits survive edit, reorder and validation', () => {
+test('server videos and mod benefits survive edit, reorder and validation', () => {
   const p = sample();
-  p.media.push({kind:'video',url:'https://www.youtube.com/watch?v=GWuF23poTf4',provider:'youtube',role:'gameplay',sourceUrl:'https://www.youtube.com/watch?v=GWuF23poTf4',author:'Marmok',publishedAt:'2025-03-07',width:0,height:0,posterUrl:'/assets/repo.jpg',caption:'Как играют друзья'});
+  p.media.push({kind:'video',url:'/assets/gameplay.mp4',provider:'file',role:'gameplay',sourceUrl:'https://store.steampowered.com/app/123',author:'Marmok',publishedAt:'2025-03-07',width:0,height:0,posterUrl:'/assets/repo.jpg',caption:'Как играют друзья'});
   p.modBenefits = [{title:'Большая команда',description:'Отправляйтесь за добычей вместе с друзьями',icon:'users'}];
   const doc = new JSDOM(V.presentationForm(p)).window.document;
   assert.deepEqual(P.read(doc.querySelector('[data-presentation]')), P.normalize(p));

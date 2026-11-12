@@ -15,7 +15,7 @@ func samplePresentation() *Presentation {
 		ModpackDescription: "Позволяет играть большой компанией",
 		ModpackVersion:     "Lart_Iste-PeakFriendsEdition-2.0.15", ModpackRevision: "0123456789abcdef0123456789abcdef",
 		HeroURL: "/assets/games/peak/hero.jpg", Highlights: []string{"До четырёх игроков"},
-		Media: []GameMedia{{Kind: "video", URL: "https://video.akamai.steamstatic.com/trailer.mp4", PosterURL: "/assets/peak/poster.jpg", Caption: "Трейлер"}},
+		Media: []GameMedia{{Kind: "video", URL: "https://launcher.samoy.love/assets/trailer.mp4", PosterURL: "/assets/peak/poster.jpg", Caption: "Трейлер"}},
 		Mods:  []ModDescription{{ID: "more-players", Name: "More Players", RussianName: "Больше игроков", Description: "Снимает лимит группы", Category: "Совместная игра", Version: "1.2", URL: "https://thunderstore.io/c/peak/"}},
 	}
 }
@@ -58,10 +58,10 @@ func TestVideoVariants(t *testing.T) {
 	}
 }
 
-func TestPresentationExternalMediaAndBenefits(t *testing.T) {
+func TestPresentationServerMediaAndBenefits(t *testing.T) {
 	p := samplePresentation()
 	p.ModBenefits = []ModBenefit{{Title: "Большая команда", Description: "Отправляйтесь за добычей вместе с друзьями", Icon: "users"}}
-	p.Media = append(p.Media, GameMedia{Kind: "video", URL: "https://www.youtube.com/watch?v=GWuF23poTf4", Provider: "youtube", Role: "gameplay", SourceURL: "https://www.youtube.com/watch?v=GWuF23poTf4", Author: "Marmok", PublishedAt: "2025-03-07"})
+	p.Media = append(p.Media, GameMedia{Kind: "video", URL: "/assets/gameplay.mp4", Provider: "file", Role: "gameplay", SourceURL: "https://store.steampowered.com/app/123", Author: "Marmok", PublishedAt: "2025-03-07"})
 	if err := ValidatePresentation(p); err != nil {
 		t.Fatal(err)
 	}
@@ -208,5 +208,29 @@ func TestEmptyPresentationArraysNeverSerializeAsNull(t *testing.T) {
 	raw := string(mustJSON(t, &Presentation{Description: "Text"}))
 	if strings.Contains(raw, ":null") {
 		t.Fatalf("native Vec fields cannot read null: %s", raw)
+	}
+}
+
+func TestMergeReplacesNestedPresentationWithoutReusingMedia(t *testing.T) {
+	old := Entry{GameID: "peak", Title: "Keep title", Presentation: &Presentation{Genre: "Old genre", Media: []GameMedia{{Kind: "video", URL: "/assets/old.mp4", Provider: "file", Role: "trailer", Variants: []VideoVariant{{URL: "/assets/720.mp4", Width: 1280, Height: 720, Bytes: 10}}}}}}
+	body := []byte(`{"items":[{"gameId":"peak","presentation":{"media":[{"kind":"image","url":"/assets/shot.jpg"}]}}]}`)
+	items := []Entry{{GameID: "peak"}}
+	merged := mergeWithStored(items, body, map[string]Entry{"peak": old})[0]
+	if merged.Title != old.Title || merged.Presentation.Genre != "Old genre" || len(merged.Presentation.Media) != 1 {
+		t.Fatalf("incorrect replacement: %#v", merged)
+	}
+	image := merged.Presentation.Media[0]
+	if image.Provider != "" || image.Role != "" || len(image.Variants) != 0 {
+		t.Fatalf("image inherited video fields: %#v", image)
+	}
+	if old.Presentation.Media[0].Kind != "video" {
+		t.Fatal("mutated stored entry")
+	}
+	if err := ValidatePresentation(merged.Presentation); err != nil {
+		t.Fatal(err)
+	}
+	preserved := mergeWithStored([]Entry{{GameID: "peak"}}, []byte(`{"items":[{"gameId":"peak"}]}`), map[string]Entry{"peak": old})[0]
+	if !reflect.DeepEqual(preserved.Presentation, old.Presentation) {
+		t.Fatal("omitted presentation must remain unchanged")
 	}
 }

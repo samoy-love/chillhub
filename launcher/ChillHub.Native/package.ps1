@@ -41,7 +41,6 @@ foreach ($relative in @(& (Join-Path $repo 'scripts/native-package-assets.ps1') 
 }
 # Optimized image variants have derived art/<game>/hero|tile-N paths in the UI.
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'art') -Destination (Join-Path $payload 'art') -Recurse
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'runtime/web-video') -Destination (Join-Path $payload 'web-video') -Recurse
 New-Item -ItemType Directory -Path (Join-Path $payload 'Data'),(Join-Path $payload 'mpv') | Out-Null
 foreach ($file in @('games.json','changelog.json')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Data/$file") -Destination (Join-Path $payload "Data/$file") }
 foreach ($file in @('mpv.exe','d3dcompiler_43.dll','source.json')) { Copy-Item -LiteralPath (Join-Path $MpvDirectory $file) -Destination (Join-Path $payload 'mpv') }

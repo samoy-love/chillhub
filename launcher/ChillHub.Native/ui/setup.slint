@@ -45,8 +45,6 @@ export component SetupWindow inherits Window {
     in-out property <string> games-path;
     in-out property <bool> desktop-shortcut: true;
     in-out property <bool> delete-games: false;
-    in-out property <bool> install-webview: false;
-    in property <bool> needs-webview;
     in property <string> downgrade-from;
     in-out property <bool> allow-downgrade: false;
     in property <bool> busy;
@@ -72,7 +70,6 @@ export component SetupWindow inherits Window {
                     if !root.removing && !root.done && (!root.busy || root.picking): SetupField { label: "Папка для игр"; value <=> root.games-path; enabled: !root.busy; browse => { root.browse(true); } }
                     if root.removing && !root.done && !root.busy: Text { text: "Лаунчер\n" + root.install-path + "\n\nИгры\n" + root.games-path; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
                     if !root.removing && !root.done && !root.busy: SetupToggle { text: "Создать ярлык на рабочем столе"; checked <=> root.desktop-shortcut; enabled: !root.busy; }
-                    if !root.removing && !root.done && !root.busy && root.needs-webview: SetupToggle { text: "Добавить компонент для YouTube (нужен интернет)"; checked <=> root.install-webview; enabled: !root.busy; }
                     if !root.removing && !root.done && !root.busy && root.downgrade-from != "": SetupToggle { text: "Заменить более новую версию " + root.downgrade-from + " на " + root.version; checked <=> root.allow-downgrade; enabled: !root.busy; }
                     if root.removing && !root.done && !root.busy: SetupToggle { text: "Также удалить игры без возможности восстановления"; checked <=> root.delete-games; enabled: !root.busy; }
                     if root.removing && !root.done && !root.busy: AuxiliaryButton { text: "Управление исключениями антивируса"; enabled: !root.busy; clicked => { root.security(); } }

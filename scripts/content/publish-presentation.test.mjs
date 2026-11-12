@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { publishPresentation } from './publish-presentation.mjs';
 
-const sample = { description:'Исследуйте остров', genre:'Кооператив',modpackDescription:'',modpackVersion:'',modpackRevision:'',heroUrl:'https://example.com/hero.jpg',highlights:['Друзья'],media:[{kind:'video',url:'https://example.com/trailer.mp4',posterUrl:'',caption:'Трейлер'},{kind:'image',url:'https://example.com/1.jpg',posterUrl:'',caption:'Скриншот'},{kind:'image',url:'https://example.com/2.jpg',posterUrl:'',caption:'Скриншот'}],mods:[],modBenefits:[] };
+const sample = { description:'Исследуйте остров', genre:'Кооператив',modpackDescription:'',modpackVersion:'',modpackRevision:'',heroUrl:'https://example.com/hero.jpg',highlights:['Друзья'],media:[{kind:'video',url:'https://launcher.samoy.love/assets/trailer.mp4',posterUrl:'',caption:'Трейлер'},{kind:'image',url:'https://example.com/1.jpg',posterUrl:'',caption:'Скриншот'},{kind:'image',url:'https://example.com/2.jpg',posterUrl:'',caption:'Скриншот'}],mods:[],modBenefits:[] };
 
 async function fixture(t, options={}) {
   const output=await mkdtemp(path.join(os.tmpdir(),'chillhub-presentation-'));

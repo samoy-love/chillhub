@@ -46,17 +46,6 @@
         "height": 1080
       },
       {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=F9meqfOSzAA",
-        "posterUrl": "https://i.ytimg.com/vi/F9meqfOSzAA/hqdefault.jpg",
-        "caption": "Игра с друзьями · Joe Speen",
-        "sourceUrl": "https://www.youtube.com/watch?v=F9meqfOSzAA",
-        "author": "Joe Speen",
-        "publishedAt": "2026-11-08"
-      },
-      {
         "kind": "image",
         "provider": "file",
         "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/screenshot-1.jpg",
@@ -134,17 +123,6 @@
         "author": "Lefto Studio",
         "width": 1920,
         "height": 1080
-      },
-      {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=F7rliIICyzY",
-        "posterUrl": "https://i.ytimg.com/vi/F7rliIICyzY/hqdefault.jpg",
-        "caption": "Игра с друзьями · JOHAN",
-        "sourceUrl": "https://www.youtube.com/watch?v=F7rliIICyzY",
-        "author": "JOHAN",
-        "publishedAt": "2026-09-11"
       },
       {
         "kind": "image",
@@ -240,17 +218,6 @@
         "author": "Zeekerss",
         "width": 1920,
         "height": 1080
-      },
-      {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=gsLztQaZNas",
-        "posterUrl": "https://i.ytimg.com/vi/gsLztQaZNas/hqdefault.jpg",
-        "caption": "Игра с друзьями · Marmok",
-        "sourceUrl": "https://www.youtube.com/watch?v=gsLztQaZNas",
-        "author": "Marmok",
-        "publishedAt": "2023-12-15"
       },
       {
         "kind": "image",
@@ -1782,17 +1749,6 @@
         "height": 1080
       },
       {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=Z9TK8IjS6PY",
-        "posterUrl": "https://i.ytimg.com/vi/Z9TK8IjS6PY/hqdefault.jpg",
-        "caption": "Игра с друзьями · Coffi Channel",
-        "sourceUrl": "https://www.youtube.com/watch?v=Z9TK8IjS6PY",
-        "author": "Coffi Channel",
-        "publishedAt": "2026-01-14"
-      },
-      {
         "kind": "image",
         "provider": "file",
         "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/screenshot-1.jpg",
@@ -1886,17 +1842,6 @@
         "author": "Dazed Games",
         "width": 1920,
         "height": 1080
-      },
-      {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=PixGCKKpeFY",
-        "posterUrl": "https://i.ytimg.com/vi/PixGCKKpeFY/hqdefault.jpg",
-        "caption": "Игра с друзьями · JOHAN",
-        "sourceUrl": "https://www.youtube.com/watch?v=PixGCKKpeFY",
-        "author": "JOHAN",
-        "publishedAt": "2026-08-28"
       },
       {
         "kind": "image",
@@ -2218,17 +2163,6 @@
         "author": "semiwork",
         "width": 1920,
         "height": 1080
-      },
-      {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=GWuF23poTf4",
-        "posterUrl": "https://i.ytimg.com/vi/GWuF23poTf4/hqdefault.jpg",
-        "caption": "Игра с друзьями · Marmok",
-        "sourceUrl": "https://www.youtube.com/watch?v=GWuF23poTf4",
-        "author": "Marmok",
-        "publishedAt": "2025-03-07"
       },
       {
         "kind": "image",
@@ -2968,17 +2902,6 @@
         "height": 1080
       },
       {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=4maGPVyRWUI",
-        "posterUrl": "https://i.ytimg.com/vi/4maGPVyRWUI/hqdefault.jpg",
-        "caption": "Игра с друзьями · Marmok",
-        "sourceUrl": "https://www.youtube.com/watch?v=4maGPVyRWUI",
-        "author": "Marmok",
-        "publishedAt": "2025-05-04"
-      },
-      {
         "kind": "image",
         "provider": "file",
         "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/screenshot-1.jpg",
@@ -3072,17 +2995,6 @@
         "author": "Team PEAK",
         "width": 1920,
         "height": 1080
-      },
-      {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=D85J9Wxzzm8",
-        "posterUrl": "https://i.ytimg.com/vi/D85J9Wxzzm8/hqdefault.jpg",
-        "caption": "Игра с друзьями · Marmok",
-        "sourceUrl": "https://www.youtube.com/watch?v=D85J9Wxzzm8",
-        "author": "Marmok",
-        "publishedAt": "2025-08-23"
       },
       {
         "kind": "image",
@@ -5260,17 +5172,6 @@
         "author": "Mike Klubnika, GDeavid",
         "width": 1920,
         "height": 1080
-      },
-      {
-        "kind": "video",
-        "provider": "youtube",
-        "role": "gameplay",
-        "url": "https://www.youtube.com/watch?v=OTYIoEuKMmE",
-        "posterUrl": "https://i.ytimg.com/vi/OTYIoEuKMmE/hqdefault.jpg",
-        "caption": "Игра с друзьями · JOHAN",
-        "sourceUrl": "https://www.youtube.com/watch?v=OTYIoEuKMmE",
-        "author": "JOHAN",
-        "publishedAt": "2026-09-04"
       },
       {
         "kind": "image",

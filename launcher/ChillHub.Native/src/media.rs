@@ -360,51 +360,24 @@ pub fn invalidate_image(value: &str, bundle: &Path, cache: &Path, api: &ApiClien
     }
 }
 
-pub fn external_video_url(provider: &str, value: &str) -> Result<url::Url, String> {
-    let url = url::Url::parse(value).map_err(|_| "Некорректная ссылка на видео")?;
-    let host = url.host_str().unwrap_or_default();
-    let allowed = match provider {
-        "youtube" => matches!(host, "www.youtube.com" | "youtube.com" | "youtu.be"),
-        "rutube" => matches!(host, "rutube.ru" | "www.rutube.ru"),
-        _ => false,
-    };
-    if !allowed
-        || url.scheme() != "https"
+pub fn video_location(value: &str, api: &ApiClient) -> Result<String, String> {
+    let url = api
+        .base
+        .join("/")
+        .and_then(|base| base.join(value))
+        .map_err(|_| "Некорректный адрес видео")?;
+    if value.is_empty()
+        || url.origin() != api.base.origin()
+        || !matches!(url.scheme(), "https" | "http")
         || !url.username().is_empty()
         || url.password().is_some()
-        || url.port().is_some()
+        || url.fragment().is_some()
+        || !url.path().starts_with("/assets/")
+        || !url.path().ends_with(".mp4")
     {
-        return Err("Неподдерживаемая ссылка на видео".into());
+        return Err("Видео доступно только с сервера Chill Hub".into());
     }
-    Ok(url)
-}
-pub fn open_external_video(provider: &str, value: &str) -> Result<(), String> {
-    let url = external_video_url(provider, value)?;
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
-        let target: Vec<_> = url.as_str().encode_utf16().chain(Some(0)).collect();
-        let result = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                target.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        } as isize;
-        if result <= 32 {
-            Err("Не удалось открыть видео в браузере".into())
-        } else {
-            Ok(())
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = url;
-        Err("Доступно только в Windows".into())
-    }
+    Ok(url.to_string())
 }
 
 pub fn trim_cache(cache: &Path) -> Result<(), String> {
@@ -571,19 +544,28 @@ mod tests {
     }
 
     #[test]
-    fn external_playback_only_opens_https_on_declared_video_provider() {
-        assert!(external_video_url("youtube", "https://www.youtube.com/watch?v=test").is_ok());
-        assert!(external_video_url("rutube", "https://rutube.ru/video/test/").is_ok());
-        for url in [
-            "file:///C:/x.exe",
-            "https://youtube.com.evil.test/watch?v=x",
-            "https://user@youtube.com/x",
-            "http://youtube.com/x",
-            "https://youtube.com:444/x",
+    fn video_is_a_direct_file_from_the_configured_server() {
+        let api = ApiClient::new("https://launcher.samoy.love").unwrap();
+        assert_eq!(
+            video_location("/assets/movie.mp4", &api).unwrap(),
+            "https://launcher.samoy.love/assets/movie.mp4"
+        );
+        for bad in [
+            "https://youtube.com/watch?v=test",
+            "https://example.com/assets/video.mp4",
+            "https://launcher.samoy.love.evil.test/assets/video.mp4",
+            "//example.com/assets/video.mp4",
+            "https://user@launcher.samoy.love/assets/video.mp4",
+            "/assets/video.m3u8",
+            "/watch",
+            "",
+            "/assets/video.mp4#external",
         ] {
-            assert!(external_video_url("youtube", url).is_err(), "{url}");
+            assert!(video_location(bad, &api).is_err(), "{bad}");
         }
-        assert!(external_video_url("file", "https://youtube.com/watch?v=test").is_err());
+        let local = ApiClient::new("http://127.0.0.1:54321").unwrap();
+        assert!(video_location("/assets/movie.mp4", &local).is_ok());
+        assert!(video_location("http://127.0.0.1:54322/assets/movie.mp4", &local).is_err());
     }
     #[test]
     fn payload_cannot_read_arbitrary_files() {

@@ -291,7 +291,7 @@
     },
     {
       "id": "installer-migration",
-      "scope": "Per-user same install path; Roaming config preserved; games separate; three native exe resources; no .NET runtime; optional installed WebView2 is loaded only when a YouTube video opens",
+      "scope": "Per-user same install path; Roaming config preserved; games separate; three native exe resources; no .NET runtime; no browser runtime; native player uses server files only",
       "original": [
         "scripts/installer.nsi",
         "scripts/build-installer.ps1"
@@ -355,16 +355,13 @@
       ]
     },
     {
-      "id": "official-youtube-embed",
-      "scope": "New requested feature: official iframe only, HTTPS application identity/Referer, author restrictions respected, lazy WebView2 load, external navigation blocked and close cancels pending initialization",
+      "id": "server-only-video",
+      "scope": "Native player accepts direct MP4 files from the configured server only; no browser player or external-video fallback",
       "original": [],
       "tests": [
-        "web_video::tests::only_real_youtube_video_links_are_accepted",
-        "web_video::tests::player_uses_official_api_and_first_party_identity_without_fallback_bypass",
-        "web_video::tests::playback_messages_recover_loading_but_keep_platform_restrictions_visible",
-        "web_video::tests::recoverable_browser_subprocess_exits_do_not_hide_the_player"
+        "media::tests::video_is_a_direct_file_from_the_configured_server"
       ],
-      "manual": "pending: real packaged YouTube playback, author-denied video, missing runtime fallback, Escape/focus, close-before-ready and browser-process exit after closing; unit tests do not establish these native behaviours"
+      "manual": "pending: packaged playback and quality switching after browser removal"
     },
     {
       "id": "automatic-error-reports",

@@ -40,26 +40,26 @@ try{
   await page.goto(base+'/admin/#games');
   await page.locator('[data-tab="presentation"]').click();
   assert.equal(await page.locator('[data-p-row="mods"]').count(),233);
-  assert.equal(await page.locator('[data-p-row="media"]').count(),5);
+  assert.equal(await page.locator('[data-p-row="media"]').count(),4);
   assert.equal(await page.locator('[data-p-row="modBenefits"]').count(),3);
   assert.equal(await page.locator('[data-p-field="instructions"]').count(),0);
   await page.screenshot({path:path.join(output,'desktop-overview.png')});
   await page.locator('[data-p-row="modBenefits"]').first().scrollIntoViewIfNeeded();
   await page.screenshot({path:path.join(output,'desktop-benefits.png')});
   await page.locator('[data-p-row="media"]').nth(1).scrollIntoViewIfNeeded();
-  await page.screenshot({path:path.join(output,'desktop-gameplay.png')});
+  await page.screenshot({path:path.join(output,'desktop-server-video.png')});
   const trailer=page.locator('[data-p-row="media"]').first();
   await trailer.locator('details summary').click();
   await trailer.locator('[data-p-key="quality720url"]').scrollIntoViewIfNeeded();
   await page.screenshot({path:path.join(output,'desktop-video-qualities.png')});
   assert.equal(await trailer.locator('[data-p-key="quality720url"]').inputValue(),'/assets/media/test-720.mp4');
-  assert.equal(await page.locator('[data-p-row="media"]').nth(1).locator('[data-p-key="provider"]').inputValue(),'youtube');
+  assert.equal(await page.locator('[data-p-row="media"]').nth(0).locator('[data-p-key="provider"]').inputValue(),'file');
   await page.locator('[data-p-row="modBenefits"]').first().locator('[data-p-key="title"]').fill('Команда друзей');
   await page.locator('[data-game-do="save"]').click();
   await page.waitForFunction(()=>document.body.textContent.includes('Сохранено'));
   await page.waitForLoadState('networkidle');
   assert(saved);assert.equal(saved.items[0].presentation.mods.length,233);
-  assert.equal(saved.items[0].presentation.media.length,5);
+  assert.equal(saved.items[0].presentation.media.length,4);
   assert.deepEqual(saved.items[0].presentation.media[0].variants,videoQualities);
   assert.equal(saved.items[0].presentation.modBenefits[0].title,'Команда друзей');
   assert.equal(saved.items[0].mods.steamAppId,'3527290');
@@ -73,6 +73,6 @@ try{
     assert(size.content<=size.viewport,`Horizontal overflow at ${width}: ${size.content}; ${JSON.stringify(overflow)}`);layouts.push(size);
   }
   assert.deepEqual(errors,[]);
-  const report={valid:true,serverWrites:0,localFixtureSaves:1,games:['peak'],mods:233,media:5,benefits:3,layouts,browserErrors:errors};
+  const report={valid:true,serverWrites:0,localFixtureSaves:1,games:['peak'],mods:233,media:4,benefits:3,layouts,browserErrors:errors};
   const {writeFile}=await import('node:fs/promises');await writeFile(path.join(output,'result.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report));
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

@@ -56,21 +56,6 @@
         "Source": "https://store.steampowered.com/app/2929250/"
       },
       {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/over-the-hill/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · Joe Speen",
-        "Url": "https://www.youtube.com/watch?v=F9meqfOSzAA",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=F9meqfOSzAA",
-        "Author": "Joe Speen",
-        "PublishedAt": "2026-11-08",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=F9meqfOSzAA"
-      },
-      {
         "Kind": "image",
         "Variants": [],
         "Path": "Assets/Media/over-the-hill/screenshot-1.jpg",
@@ -177,21 +162,6 @@
         "Source": "https://store.steampowered.com/app/4656000/"
       },
       {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/bombanana/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · JOHAN",
-        "Url": "https://www.youtube.com/watch?v=F7rliIICyzY",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=F7rliIICyzY",
-        "Author": "JOHAN",
-        "PublishedAt": "2026-09-11",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=F7rliIICyzY"
-      },
-      {
         "Kind": "image",
         "Variants": [],
         "Path": "Assets/Media/bombanana/screenshot-1.jpg",
@@ -296,21 +266,6 @@
         "Width": 1920,
         "Height": 1080,
         "Source": "https://store.steampowered.com/app/1966720/"
-      },
-      {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/lethal-company/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · Marmok",
-        "Url": "https://www.youtube.com/watch?v=gsLztQaZNas",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=gsLztQaZNas",
-        "Author": "Marmok",
-        "PublishedAt": "2023-12-15",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=gsLztQaZNas"
       },
       {
         "Kind": "image",
@@ -1885,21 +1840,6 @@
         "Source": "https://store.steampowered.com/app/3124540/"
       },
       {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/farfarwest/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · Coffi Channel",
-        "Url": "https://www.youtube.com/watch?v=Z9TK8IjS6PY",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=Z9TK8IjS6PY",
-        "Author": "Coffi Channel",
-        "PublishedAt": "2026-01-14",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=Z9TK8IjS6PY"
-      },
-      {
         "Kind": "image",
         "Variants": [],
         "Path": "Assets/Media/farfarwest/screenshot-1.jpg",
@@ -2004,21 +1944,6 @@
         "Width": 1920,
         "Height": 1080,
         "Source": "https://store.steampowered.com/app/4001890/"
-      },
-      {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/how-to-fish/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · JOHAN",
-        "Url": "https://www.youtube.com/watch?v=PixGCKKpeFY",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=PixGCKKpeFY",
-        "Author": "JOHAN",
-        "PublishedAt": "2026-08-28",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=PixGCKKpeFY"
       },
       {
         "Kind": "image",
@@ -2367,21 +2292,6 @@
         "Width": 1920,
         "Height": 1080,
         "Source": "https://store.steampowered.com/app/3241660/"
-      },
-      {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/repo/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · Marmok",
-        "Url": "https://www.youtube.com/watch?v=GWuF23poTf4",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=GWuF23poTf4",
-        "Author": "Marmok",
-        "PublishedAt": "2025-03-07",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=GWuF23poTf4"
       },
       {
         "Kind": "image",
@@ -3164,21 +3074,6 @@
         "Source": "https://store.steampowered.com/app/2625420/"
       },
       {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/drive-beyond-horizons/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · Marmok",
-        "Url": "https://www.youtube.com/watch?v=4maGPVyRWUI",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=4maGPVyRWUI",
-        "Author": "Marmok",
-        "PublishedAt": "2025-05-04",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=4maGPVyRWUI"
-      },
-      {
         "Kind": "image",
         "Variants": [],
         "Path": "Assets/Media/drive-beyond-horizons/screenshot-1.jpg",
@@ -3283,21 +3178,6 @@
         "Width": 1920,
         "Height": 1080,
         "Source": "https://store.steampowered.com/app/3527290/"
-      },
-      {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/peak/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · Marmok",
-        "Url": "https://www.youtube.com/watch?v=D85J9Wxzzm8",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=D85J9Wxzzm8",
-        "Author": "Marmok",
-        "PublishedAt": "2025-08-23",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=D85J9Wxzzm8"
       },
       {
         "Kind": "image",
@@ -5518,21 +5398,6 @@
         "Width": 1920,
         "Height": 1080,
         "Source": "https://store.steampowered.com/app/4108000/"
-      },
-      {
-        "Kind": "video",
-        "Variants": [],
-        "Path": "Assets/Media/machine-party/gameplay-poster.jpg",
-        "Caption": "Игра с друзьями · JOHAN",
-        "Url": "https://www.youtube.com/watch?v=OTYIoEuKMmE",
-        "Provider": "youtube",
-        "Role": "gameplay",
-        "SourceUrl": "https://www.youtube.com/watch?v=OTYIoEuKMmE",
-        "Author": "JOHAN",
-        "PublishedAt": "2026-09-04",
-        "Width": 0,
-        "Height": 0,
-        "Source": "https://www.youtube.com/watch?v=OTYIoEuKMmE"
       },
       {
         "Kind": "image",

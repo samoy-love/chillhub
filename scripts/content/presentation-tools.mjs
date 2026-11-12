@@ -43,8 +43,7 @@ export function validatePresentation(presentation, expectedPackages) {
     assert(['image','video'].includes(media.kind));
     validateURL(media.url); validateURL(media.posterUrl, true); text(media.caption,240,true);
     if (media.kind === 'video') {
-      if (['youtube','rutube'].includes(media.provider)) assert(P.providerUrl(media.url,media.provider),'Invalid external provider');
-      else assert(/\.(mp4|webm|m3u8|mpd)(\?|$)/i.test(media.url), `Trailer needs a direct playable URL: ${media.url}`);
+      assert(/\.(mp4|webm|m3u8|mpd)(\?|$)/i.test(media.url), `Trailer needs a direct playable URL: ${media.url}`);
     }
   }
   assert(Array.isArray(presentation.mods) && presentation.mods.length <= 256);

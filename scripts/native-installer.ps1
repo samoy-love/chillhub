@@ -30,8 +30,6 @@ if (!$MakeNsis -or !(Test-Path -LiteralPath $MakeNsis)) { throw 'NSIS не на�
 if ($package.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Установщику нужна числовая версия major.minor.patch.' }
 $output = Join-Path (Split-Path $manifestPath) "ChillHub-$($package.version)-Native-Setup.exe"
 if (Test-Path -LiteralPath $output) { throw "Файл уже существует: $output. Создайте новую упаковку." }
-. (Join-Path $PSScriptRoot 'ensure-webview2-bootstrapper.ps1')
-$bootstrapper = Ensure-WebView2Bootstrapper -RedistDir (Join-Path $PSScriptRoot 'Redist') -Required
 & (Join-Path $PSScriptRoot 'native-installer-artwork.ps1') -OutputDirectory (Split-Path $manifestPath)
 $parameters = @('/V2','/DNATIVE_CLIENT',"/DNATIVE_OUTPUT=$output","/DPAYLOAD_DIR=$payload","/DAPP_VERSION=$($package.version)","/DAPP_VERSION_NUMERIC=$($package.version).0")
 $parameters += "/DNATIVE_SIDEBAR=$(Join-Path (Split-Path $manifestPath) 'installer-sidebar.bmp')"
@@ -39,7 +37,7 @@ if ($FastCompress) { $parameters += '/DFAST_COMPRESS' }
 $parameters += Join-Path $PSScriptRoot 'installer.nsi'
 & $MakeNsis @parameters
 if ($LASTEXITCODE -or !(Test-Path -LiteralPath $output)) { throw "NSIS завершился с ошибкой $LASTEXITCODE" }
-$result = [ordered]@{ installer=$output; version=$package.version; sha256=(Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant(); size=(Get-Item -LiteralPath $output).Length; compiler=(& $MakeNsis /VERSION | Out-String).Trim(); compression=if($FastCompress){'solid-zlib'}else{'solid-lzma-64MiB'}; nativeClient=$true; installed=$false; webView2Bootstrapper=$bootstrapper; webView2InstallPolicy='Optional when missing; ordinary-user bootstrap; requires Internet; existing shared runtime reused; full runtime not bundled' }
+$result = [ordered]@{ installer=$output; version=$package.version; sha256=(Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant(); size=(Get-Item -LiteralPath $output).Length; compiler=(& $MakeNsis /VERSION | Out-String).Trim(); compression=if($FastCompress){'solid-zlib'}else{'solid-lzma-64MiB'}; nativeClient=$true; installed=$false }
 $json = $result | ConvertTo-Json -Depth 5
 $json | Set-Content -LiteralPath (Join-Path (Split-Path $manifestPath) 'installer-info.json') -Encoding utf8NoBOM
 $json

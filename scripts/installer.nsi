@@ -226,13 +226,11 @@ BrandingText "Chill Hub"
 !endif
 
 ; Finish page settings: show prerequisites first, then run app
+!ifndef NATIVE_CLIENT
 !define MUI_FINISHPAGE_SHOWREADME
-!ifdef NATIVE_CLIENT
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "Установить компонент для видео YouTube (нужен интернет)"
-!else
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "Доустановить WebView2 (нужен для показа новостей)"
-!endif
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION InstallPrereqs
+!endif
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Запустить ${APP_TITLE}"
 !define MUI_FINISHPAGE_RUN_FUNCTION RunAppAfterInstall
@@ -705,20 +703,8 @@ Section "Install" SecInstall
   FileWrite $4 "${APP_VERSION}"
   FileClose $4
 
-  ; Prepare prerequisite installers in $PLUGINSDIR for optional install on Finish
+!ifndef NATIVE_CLIENT
   SetOutPath "$PLUGINSDIR\Redist"
-!ifdef NATIVE_CLIENT
-  ; Native release always contains the verified bootstrapper, never the full runtime.
-  File "Redist\${PREREQ_WEBVIEW2}"
-  ${GetParameters} $R0
-  ClearErrors
-  ${GetOptions} $R0 "/WEBVIEW2" $R1
-  ${IfNot} ${Errors}
-    Call InstallPrereqs
-  ${EndIf}
-!else
-  ; Only legacy non-release CI may continue without the download.
-  ; Release build-installer.ps1 requires it before invoking NSIS.
   File /nonfatal "Redist\${PREREQ_WEBVIEW2}"
 !endif
 
@@ -998,13 +984,11 @@ Function .onInit
   ; Only the graphical entrypoint starts Slint. The child /S process executes
   ; these same installation sections and never recursively opens another UI.
   IfSilent native_setup_worker
-  Call DetectWebView2
-  IntOp $R2 1 - $WebView2Present
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /oname=ChillHub.Setup.exe "${PAYLOAD_DIR}\ChillHub.Updater.exe"
   ClearErrors
-  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui install "$EXEPATH" "$INSTDIR" "$GAMES_DIR" "${APP_VERSION}" "$R2"' $R3
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui install "$EXEPATH" "$INSTDIR" "$GAMES_DIR" "${APP_VERSION}"' $R3
   ${If} ${Errors}
     MessageBox MB_ICONSTOP "Не удалось открыть установщик. Скачайте Chill Hub заново."
     SetErrorLevel 1
@@ -1049,7 +1033,9 @@ continue:
   ; уже ПОСЛЕ клика. Пользователю Windows 11, где рантайм предустановлен,
   ; предлагали доустановить то, что у него есть, — и он либо тратил время, либо
   ; снимал галочку, гадая, не сломает ли этим новости.
+!ifndef NATIVE_CLIENT
   Call DetectWebView2
+!endif
 FunctionEnd
 
 ; ============================================================================
@@ -1277,10 +1263,12 @@ Function FinishPageShow
 !ifdef NATIVE_CLIENT
   Call NativeTheme
 !endif
+!ifndef NATIVE_CLIENT
   ${If} $WebView2Present == 1
     SendMessage $mui.FinishPage.ShowReadme ${BM_SETCHECK} ${BST_UNCHECKED} 0
     ShowWindow $mui.FinishPage.ShowReadme ${SW_HIDE}
   ${EndIf}
+!endif
 FunctionEnd
 
 !ifdef NATIVE_CLIENT
@@ -1330,6 +1318,7 @@ FunctionEnd
 ; Смотрим оба улья: рантайм ставится либо на машину (HKLM, обычный случай —
 ; приехал с Edge), либо в профиль пользователя (HKCU). Непустая версия в
 ; значении "pv" и означает установленный рантайм.
+!ifndef NATIVE_CLIENT
 Function DetectWebView2
   StrCpy $WebView2Present 0
   ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
@@ -1365,18 +1354,14 @@ Function InstallPrereqs
     StrCmp $WebView2Present 1 skip prereq_failed
 prereq_failed:
   DetailPrint "WebView2 Runtime is not available after optional setup."
-!ifdef NATIVE_CLIENT
-  ; The Slint frontend must also show the warning in silent worker mode.
-  SetErrorLevel 20
-  MessageBox MB_OK|MB_ICONEXCLAMATION "Не удалось установить компонент для видео YouTube. Игры будут работать, а видео пока можно открыть в браузере. Подключитесь к интернету и повторите установку Chill Hub, чтобы добавить компонент." /SD IDOK
-!else
   MessageBox MB_OK|MB_ICONEXCLAMATION "Не удалось установить компонент для новостей. Игры будут работать. Подключитесь к интернету и повторите установку Chill Hub, чтобы добавить компонент." /SD IDOK
-!endif
 skip:
   ; If user asked to run app, do it now after prereqs
   StrCmp $LaunchAfterFlag 1 0 +2
     ExecShell "open" "$INSTDIR\${APP_EXE}"
 FunctionEnd
+
+!endif
 
 Function .onInstSuccess
   ; If only "Run app" was selected (without prereqs), launch now
@@ -1411,7 +1396,7 @@ Function un.onInit
     SetErrorLevel 1
     Quit
   ${EndIf}
-  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui uninstall "$PLUGINSDIR\UninstallWorker.exe" "$INSTDIR" "$Un_GamesDir" "${APP_VERSION}" "0"' $R3
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui uninstall "$PLUGINSDIR\UninstallWorker.exe" "$INSTDIR" "$Un_GamesDir" "${APP_VERSION}"' $R3
   ${If} ${Errors}
     SetErrorLevel 1
   ${Else}

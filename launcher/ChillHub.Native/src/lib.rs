@@ -26,8 +26,6 @@ pub mod setup;
 pub mod shortcuts;
 pub mod transfer;
 pub mod update;
-#[cfg(feature = "web-video")]
-pub mod web_video;
 #[cfg(any(feature = "launcher-ui", feature = "helper-ui"))]
 pub mod ui {
     slint::include_modules!();

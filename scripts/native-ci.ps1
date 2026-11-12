@@ -5,9 +5,6 @@ $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../launcher/ChillHub
 New-Item -ItemType Directory -Path (Join-Path $project 'dist') -Force | Out-Null
 $log=Join-Path $project 'dist/ci-tests.log'
 & (Join-Path $project 'build.ps1') -FormatCheck
-. (Join-Path $PSScriptRoot 'ensure-webview2-bootstrapper.ps1')
-$null = Ensure-WebView2Bootstrapper -RedistDir (Join-Path $PSScriptRoot 'Redist') -Required
-& (Join-Path $PSScriptRoot 'native-bootstrapper-tests.ps1')
 & (Join-Path $PSScriptRoot 'native-mutation-policy-tests.ps1')
 & (Join-Path $project 'build.ps1') -Clippy -Target $Target
 $previousQa = $env:CHILLHUB_UI_QA

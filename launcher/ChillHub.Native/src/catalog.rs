@@ -72,6 +72,8 @@ pub fn load(path: &Path) -> Result<Vec<Game>, String> {
                 media.optimized_index = Some(index);
             }
         }
+        game.media
+            .retain(|m| m.kind != "video" || matches!(m.provider.as_str(), "" | "file"));
     }
     // Stable sorting keeps the source order of the remaining library entries.
     games.sort_by_key(|game| match game.id.as_str() {
@@ -123,6 +125,7 @@ pub fn from_live(records: &[GameRecord], seed: &[Game]) -> Vec<Game> {
                 g.media = p
                     .media
                     .iter()
+                    .filter(|m| m.kind != "video" || matches!(m.provider.as_str(), "" | "file"))
                     .map(|m| {
                         let fallback = g.media.iter().find(|seed| {
                             seed.kind == m.kind
@@ -292,10 +295,15 @@ mod tests {
                     {"url":"/assets/720.mp4","width":1280,"height":720,"bytes":12345},
                     {"url":"/assets/1080.mp4","width":1920,"height":1080,"bytes":23456}
                 ]
-            }]}
+            }, {"kind":"video", "provider":"youtube", "url":"https://www.youtube.com/watch?v=abcdefghijk"}]}
         }))
         .unwrap();
         let games = from_live(&[record], &[]);
+        assert_eq!(
+            games[0].media.len(),
+            1,
+            "retired external cards must be hidden"
+        );
         let media = &games[0].media[0];
         assert_eq!(media.variants.len(), 2);
         assert_eq!(media.variants[0].url, "/assets/720.mp4");

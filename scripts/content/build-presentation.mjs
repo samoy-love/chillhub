@@ -10,7 +10,6 @@ const read = async filename => JSON.parse(await readFile(filename, 'utf8'));
 const harvest = await read(path.join(directory, '.cache/harvest.json'));
 const editorial = await read(path.join(directory, 'games-ru.json'));
 const benefitSources = await read(path.join(directory, 'benefit-sources.json'));
-const gameplay = await read(path.join(directory, 'gameplay-verification.json'));
 const prepared = await read(path.join(directory, '.cache/media-upload-plan.json'));
 const oldSeed = await read(path.join(dataDirectory, 'games.json'));
 const translations = {};
@@ -37,11 +36,9 @@ for (const game of harvest.registry.items) {
   const screenshots = (store.value.screenshots || []).slice(0, 3);
   if (screenshots.length < 2) throw new Error(`Too few official screenshots: ${id}`);
   const ready = prepared.games[id];
-  const creator = gameplay.games[id];
-  if (!ready || !creator || ready.trailerId !== movie.id) throw new Error(`Missing verified prepared media: ${id}`);
+  if (!ready || ready.trailerId !== movie.id) throw new Error(`Missing verified prepared media: ${id}`);
   const media = [
     { kind: 'video', provider:'file', role:'trailer', url: ready.trailer.url, variants:ready.trailer.variants || [], posterUrl: ready.poster.url, caption: 'Официальный трейлер', sourceUrl:ready.source, author:(store.value.developers||[]).join(', '), width:1920,height:1080 },
-    { kind: 'video', provider:'youtube', role:'gameplay', url:creator.url,posterUrl:creator.posterUrl,caption:`Игра с друзьями · ${creator.author}`,sourceUrl:creator.url,author:creator.author,publishedAt:creator.publishedAt },
     ...ready.screenshots.map(shot => ({ kind: 'image', provider:'file',url: shot.url, posterUrl: shot.url, caption: shot.caption,sourceUrl:shot.sourceUrl,width:shot.width,height:shot.height })),
   ];
   const mods = [];
@@ -78,7 +75,7 @@ for (const game of harvest.registry.items) {
     Media: media.map((m, index) => ({
       Kind: m.kind,
       Variants: m.variants || [],
-      Path: `Assets/Media/${id}/${index === 0 ? 'trailer-poster.jpg' : index === 1 ? 'gameplay-poster.jpg' : `screenshot-${index - 1}.jpg`}`,
+      Path: `Assets/Media/${id}/${index === 0 ? 'trailer-poster.jpg' : `screenshot-${index}.jpg`}`,
       Caption: m.caption, Url: m.url, Provider:m.provider,Role:m.role||'',SourceUrl:m.sourceUrl||'', Author:m.author||'',PublishedAt:m.publishedAt||'',Width:m.width||0,Height:m.height||0,
       Source: m.sourceUrl || `https://store.steampowered.com/app/${store.appId}/`,
     })),
@@ -88,7 +85,7 @@ for (const game of harvest.registry.items) {
     gameVersion: game.latestVersion, modpackVersion: game.mods?.version || '', modpackRevision: game.mods?.revision || '',
     steamAppId: store.appId, steamSource: `https://store.steampowered.com/api/appdetails?appids=${store.appId}&l=russian&cc=us`,
     trailerName: movie.name, trailerId: movie.id, trailerFormat: 'mp4-h264-aac-1080p', trailer:publicAsset(ready.trailer),
-    gameplay:creator, screenshots:ready.screenshots.map(publicAsset),
+    screenshots:ready.screenshots.map(publicAsset),
     modBenefits:(text.modBenefits || []).map((benefit,index)=>{
       const packages=benefitSources[id]?.[index];
       if(!packages?.length || packages.some(p=>!source.tree.includes(p.id))) throw new Error(`Unverified mod benefit: ${id} ${index}`);

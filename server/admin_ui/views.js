@@ -792,7 +792,7 @@
       '<section class="stack"><h3>Скриншоты и трейлеры</h3>' +
       media.map((m, i) => '<fieldset class="presentation-row" data-p-row="media"><legend>Файл ' + (i + 1) + '</legend>' +
         '<div class="field"><label for="p-media-' + i + '-kind">Тип</label><select id="p-media-' + i + '-kind" data-p-key="kind"><option value="image"' + (m.kind === 'video' ? '' : ' selected') + '>Скриншот</option><option value="video"' + (m.kind === 'video' ? ' selected' : '') + '>Видео</option></select></div>' +
-        '<div class="cols cols--2">' + select('provider', 'Воспроизведение', m.provider, [['', 'Файл в лаунчере'], ['file', 'Файл в лаунчере'], ['youtube', 'Открыть YouTube'], ['rutube', 'Открыть RUTUBE']], 'media-' + i + '-') + select('role', 'Назначение', m.role, [['', 'Скриншот / не указано'], ['trailer', 'Официальный трейлер'], ['gameplay', 'Как играют другие']], 'media-' + i + '-') + '</div>' +
+        '<div class="cols cols--2">' + select('provider', 'Воспроизведение', m.provider, [['', 'Файл на сервере Chill Hub'], ['file', 'Файл на сервере Chill Hub']], 'media-' + i + '-') + select('role', 'Назначение', m.role, [['', 'Скриншот / не указано'], ['trailer', 'Официальный трейлер'], ['gameplay', 'Как играют другие']], 'media-' + i + '-') + '</div>' +
         field('url', 'Ссылка на файл', m.url, 2048, 0, 'media-' + i + '-') +
         '<details class="presentation-qualities"><summary>Качество видео · 1080p / 720p / 480p</summary><p class="muted">Для файлов на сервере. Пустые варианты не показываются игрокам. Размер и разрешение указаны в отчёте подготовки видео.</p>' +
         [480, 720, 1080].map(h => { const v = (m.variants || []).find(v => v.height === h) || {}; return '<fieldset class="presentation-quality"><legend>' + h + 'p</legend>' +

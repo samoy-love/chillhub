@@ -29,14 +29,14 @@ test('редактор карточки сохраняет описание, п�
   window.document.querySelector('[data-p-field="highlights"]').value = 'Совместная игра\nИсследование острова';
   window.document.querySelector('[data-p-action="add"][data-p-group="media"]').click();
   window.document.querySelector('[data-p-key="kind"]').value = 'video';
-  window.document.querySelector('[data-p-key="url"]').value = 'https://cdn.example.com/trailer.mp4';
+  window.document.querySelector('[data-p-key="url"]').value = 'https://launcher.samoy.love/assets/trailer.mp4';
   window.document.querySelector('[data-game-do="save"]').click();
   assert.ok(await until(() => calls.some((c) => c.method === 'POST' && c.url.endsWith('games/save'))));
   const sent = calls.find((c) => c.method === 'POST' && c.url.endsWith('games/save')).body.items[0];
   assert.equal(sent.presentation.description, 'Стало');
   assert.deepStrictEqual(sent.presentation.highlights, ['Совместная игра', 'Исследование острова']);
   assert.equal(sent.presentation.media[0].kind, 'video');
-  assert.equal(sent.presentation.media[0].url, 'https://cdn.example.com/trailer.mp4');
+  assert.equal(sent.presentation.media[0].url, 'https://launcher.samoy.love/assets/trailer.mp4');
   assert.equal(sent.mods.steamFolder, 'Outer/Inner');
   assert.equal(sent.exeRelativePath, '');
 });

@@ -36,14 +36,13 @@ for (const game of bundled) {
   assert.equal(game.Mods.length,p.mods.length);
   assert.deepEqual(game.Mods.map(m=>`${m.Id}-${m.Version}`).toSorted(),source.packages.map(p=>p.id).toSorted());
   assert.equal(game.ModpackDescription,p.modpackDescription);
-  assert.equal(p.media.filter(m=>m.kind==='video').length,2);
+  assert.equal(p.media.filter(m=>m.kind==='video').length,1);
   assert.equal(p.media.filter(m=>m.kind==='image').length,3);
   assert.deepEqual(game.ModBenefits,p.modBenefits);
   assert.equal(p.media.find(m=>m.role==='trailer').height,1080);
   for (const media of p.media) for (const variant of media.variants || []) {
     assert(prepared === null || prepared.files.some(f => f.url === variant.url && f.bytes === variant.bytes && f.height === variant.height && f.width === variant.width), `Unprepared video quality: ${game.Id} ${variant.height}`);
   }
-  assert(source.gameplay.views>0 && source.gameplay.author && source.gameplay.publishedAt);
   report.push({gameId:game.Id,gameVersion:game.GameVersion,modpackVersion:source.modpackVersion,modpackRevision:source.modpackRevision,packages:p.mods.length,media:p.media.length,trailer:source.trailerFormat});
 }
 let liveChecked=false;
@@ -59,7 +58,6 @@ if (process.argv.includes('--live')) {
     if(source.packageSource){const tree=await(await request(source.packageSource)).json();assert.deepEqual(tree.tree.toSorted(),source.packages.map(p=>p.id).toSorted());}
     const hero=await fetch(presentations[game.gameId].heroUrl,{method:'HEAD',signal:AbortSignal.timeout(15000)});assert(hero.ok,`Unavailable hero: ${game.gameId}`);
     for(const media of presentations[game.gameId].media){
-      if(media.provider==='youtube'||media.provider==='rutube')continue;
       if(prepared){assert(prepared.files.some(f=>f.url===media.url),`Unprepared media ${media.url}`);continue;}
       const response=await fetch(media.url,{method:'HEAD',signal:AbortSignal.timeout(15000)});assert(response.ok,`Unavailable media: ${game.gameId} ${response.status} ${media.url}`);
       if(media.kind==='video'&&media.url.includes('.m3u8')){

@@ -71,8 +71,8 @@
       if (m.kind === 'image' && ((m.provider && m.provider !== 'file') || m.role)) bad('media.' + i, 'У скриншота не бывает видеопровайдера или роли');
       if (m.kind === 'video') {
         if (!['', 'trailer', 'gameplay'].includes(m.role)) bad('media.' + i + '.role', 'Выберите назначение видео');
-        if (!['', 'file', 'youtube', 'rutube'].includes(m.provider)) bad('media.' + i + '.provider', 'Выберите способ воспроизведения');
-        if (['youtube', 'rutube'].includes(m.provider) && !providerUrl(m.url, m.provider)) bad('media.' + i + '.url', 'Ссылка не соответствует выбранному видеосервису');
+        if (!['', 'file'].includes(m.provider)) bad('media.' + i + '.provider', 'Выберите способ воспроизведения');
+        if (!serverVideoUrl(m.url)) bad('media.' + i + '.url', 'Укажите MP4 с сервера Chill Hub');
       }
       if (m.variants.length) {
         if (m.kind !== 'video' || !['', 'file'].includes(m.provider) || m.variants.length > 3) bad('media.' + i + '.variants', 'До трёх вариантов качества доступны только у видеофайла');
@@ -80,6 +80,7 @@
         m.variants.forEach((v, j) => {
           const key = 'media.' + i + '.variants.' + j;
           link(key + '.url', v.url, false);
+          if (!serverVideoUrl(v.url)) bad(key + '.url', 'Укажите MP4 с сервера Chill Hub');
           if (!HEIGHTS.includes(v.height) || seen.has(v.height) || !Number.isInteger(v.width) || v.width < 2 || v.width > 3840 || v.width % 2 || !Number.isSafeInteger(v.bytes) || v.bytes <= 0 || v.bytes > 10 * 1024 ** 3) bad(key, 'Проверьте разрешение и размер видео');
           seen.add(v.height);
         });
@@ -132,15 +133,13 @@
     return Object.values(p).every((v) => !v.length) ? null : p;
   }
 
-  function providerUrl(value, provider) {
+  function serverVideoUrl(value) {
     if (!safeUrl(value, false)) return false;
     try {
-      const u = new URL(value);
-      if (u.port) return false;
-      if (provider === 'youtube') return (u.hostname === 'youtu.be' && /^\/[A-Za-z0-9_-]{11}$/.test(u.pathname)) || (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(u.hostname) && u.pathname === '/watch' && /^[A-Za-z0-9_-]{11}$/.test(u.searchParams.get('v') || ''));
-      return ['rutube.ru', 'www.rutube.ru'].includes(u.hostname) && /^\/video\/[a-f0-9]{32}\/?$/i.test(u.pathname);
+      const u = new URL(value, 'https://launcher.samoy.love');
+      return u.origin === 'https://launcher.samoy.love' && u.pathname.startsWith('/assets/') && u.pathname.endsWith('.mp4');
     } catch { return false; }
   }
 
-  return { normalize, problems, safeUrl, providerUrl, change, read };
+  return { normalize, problems, safeUrl, serverVideoUrl, change, read };
 });
