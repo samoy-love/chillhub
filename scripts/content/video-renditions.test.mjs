@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, rm, stat} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {profiles, encodingArgs, sourceDetails, prepareVideo, run, probe} from './video-renditions.mjs';
+import {profiles, compactProfiles, encodingArgs, sourceDetails, prepareVideo, run, probe} from './video-renditions.mjs';
 
 test('rendition policy preserves frames, caps peaks and makes seekable H.264', () => {
   for (const profile of profiles) {
@@ -21,6 +21,12 @@ test('rendition policy preserves frames, caps peaks and makes seekable H.264', (
   assert.equal(qsv[qsv.indexOf('-preset')+1],'slow');
   assert.equal(qsv[qsv.indexOf('-global_quality')+1],'22');
   assert(!qsv.includes('libx264')&&!qsv.includes('-crf')&&!qsv.includes('-maxrate'));
+  const compactArgs=encodingArgs('source.mp4','out.mp4',compactProfiles[0]);
+  assert.equal(compactArgs[compactArgs.indexOf('-crf')+1],'22');
+  assert.equal(compactArgs[compactArgs.indexOf('-maxrate')+1],'8000k');
+  assert.equal(compactArgs[compactArgs.indexOf('-bufsize')+1],'16000k');
+  const compactQsv=encodingArgs('source.mp4','out.mp4',compactProfiles[2],'qsv');
+  assert.equal(compactQsv[compactQsv.indexOf('-global_quality')+1],'27');
   assert.throws(()=>encodingArgs('in','out',profiles[0],'unknown'),/Unsupported video encoder/);
 });
 
@@ -35,6 +41,14 @@ test('real QSV encoder produces seekable H.264 renditions', {skip:process.env.CH
       const info=await probe(variant.localPath,process.env.FFPROBE);
       assert.equal(info.streams[0].codec_name,'h264');
       assert.equal(info.streams[0].pix_fmt,'yuv420p');
+    }
+    const compact=await prepareVideo({input,output:path.join(root,'compact-output'),encoder:'qsv',profile:'compact',ffmpeg:process.env.FFMPEG,ffprobe:process.env.FFPROBE});
+    assert.deepEqual(compact.variants.map(v=>v.height),[720,480]);
+    for(const variant of compact.variants){
+      const info=await probe(variant.localPath,process.env.FFPROBE);
+      assert.equal(info.streams[0].codec_name,'h264');
+      assert.equal(info.streams[0].pix_fmt,'yuv420p');
+      assert.equal(info.streams[0].height,variant.height);
     }
   }finally{await rm(root,{recursive:true,force:true});}
 });
@@ -65,5 +79,15 @@ test('real encoder: no upscaling, audio and duration preserved, immutable output
     }
     const second=await prepareVideo({input,output:path.join(root,'output')});
     assert.deepEqual(second,report);
+    const compact=await prepareVideo({input,output:path.join(root,'compact-output'),profile:'compact'});
+    assert.deepEqual(compact.variants.map(v=>v.height),[720,480]);
+    for (const v of compact.variants) {
+      const info=await probe(v.localPath);
+      assert.equal(info.streams[0].height,v.height);
+      assert.equal(info.streams[0].codec_name,'h264');
+      assert.equal(info.streams[0].pix_fmt,'yuv420p');
+      assert(Math.abs(Number(info.format.duration)-1)<0.1);
+    }
+    await assert.rejects(()=>prepareVideo({input,output:path.join(root,'invalid-profile'),profile:'invalid'}),/Unsupported rendition profile/);
   } finally { await rm(root,{recursive:true,force:true}); }
 });

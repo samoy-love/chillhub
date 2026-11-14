@@ -74,6 +74,7 @@ test('rejects invalid rendition names, dimensions, duplicate heights, and unsafe
     const sorted=await run('sample',[{...valid,name:'gameplay-480p-eeeeeeeeeeeeeeee.mp4',width:854,height:480},
       {...valid,name:'gameplay-1080p-ffffffffffffffff.mp4',width:1920,height:1080},valid]);
     assert.deepEqual(sorted.gameplay.variants.map(v=>v.height),[1080,720,480]);
+    await assert.rejects(()=>prepareGameplay({gameId:'sample',input,poster,author:'Автор',caption:'Подпись',plan:{games:{sample:{}},files:[]},output:path.join(root,'out'),profile:'unknown',prepareVideo:async()=>({variants:[valid]})}),/Unsupported rendition profile/);
     await assert.rejects(()=>prepareGameplay({gameId:'sample',input,poster,author:'Автор',caption:'Gameplay video',plan:{games:{sample:{}},files:[]},output:path.join(root,'out'),prepareVideo:async()=>({variants:[valid]})}),/Caption must be Russian/);
   }finally{await rm(root,{recursive:true,force:true});}
 });
@@ -101,11 +102,11 @@ test('CLI workflow writes a JSON-serializable updated media plan', async()=>{
     };
     const args=['node','prepare-gameplay.mjs','--game-id','sample','--input',input,'--poster',poster,
       '--author','Автор канала','--caption','Запись прохождения','--plan',planPath,'--output',path.join(root,'release-media'),
-      '--encoder','qsv'];
+      '--encoder','qsv','--profile','compact'];
     await writeFile(planPath+'.gameplay.lock','other writer');
     await assert.rejects(runCli(args,{prepareVideo}),/Another gameplay import is writing this plan/);
     await rm(planPath+'.gameplay.lock',{force:true});
-    const result=await runCli(args,{prepareVideo:async args=>{assert.equal(args.encoder,'qsv');return prepareVideo(args);}});
+    const result=await runCli(args,{prepareVideo:async args=>{assert.equal(args.encoder,'qsv');assert.equal(args.profile,'compact');return prepareVideo(args);}});
     const saved=JSON.parse(await readFile(planPath,'utf8'));
     assert.doesNotThrow(()=>JSON.stringify(result));
     assert.equal(saved.games.sample.gameplay.author,'Автор канала');
@@ -114,10 +115,13 @@ test('CLI workflow writes a JSON-serializable updated media plan', async()=>{
     assert.equal(saved.files.length,2);
     assert.equal(result.serverWrites,0);
     assert.equal(await readFile(planPath+'.part','utf8').catch(()=>''),'');
+    const defaultProfileArgs=args.slice(0,args.indexOf('--profile'));
+    await runCli(defaultProfileArgs,{prepareVideo:async options=>{assert.equal(options.profile,'standard');return prepareVideo(options);}});
     const planBeforeFailure=await readFile(planPath,'utf8');
     const invalidArgs=args.slice();invalidArgs[invalidArgs.indexOf(input)] = path.join(root,'missing.mp4');
     await assert.rejects(runCli(invalidArgs,{prepareVideo}),/Invalid local gameplay video/);
     assert.equal(await readFile(planPath,'utf8'),planBeforeFailure);
     assert.equal(await readFile(planPath+'.gameplay.lock','utf8').catch(()=>''),'');
+    await assert.rejects(runCli([...args,'--profile','unrecognized'],{prepareVideo}),/Profile must be standard or compact/);
   }finally{await rm(root,{recursive:true,force:true});}
 });

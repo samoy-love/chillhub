@@ -1,14 +1,16 @@
 // Build a verified artifact for deploy-kit. This script never connects to a server.
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { readFile, mkdir, copyFile, lstat, realpath, rm, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, lstat, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import {mergeMediaManifest, validateMediaManifest} from './media-history.mjs';
+import {mergeMediaManifest, validateMediaManifest, fileHash} from './media-history.mjs';
+import {stageMediaFile} from './stage-media-files.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const cache = path.join(root, 'scripts/content/.cache');
+const hardlinkSetting = process.env.CHILLHUB_STAGE_HARDLINK || '';
+assert(['', '1'].includes(hardlinkSetting), 'CHILLHUB_STAGE_HARDLINK must be unset or 1');
+const hardlinkEnabled = hardlinkSetting === '1';
 const sourceRoot = await realpath(path.join(cache, 'release-media'));
 const plan = JSON.parse(await readFile(path.join(cache, 'media-upload-plan.json'), 'utf8'));
 assert.equal(Object.keys(plan.games).length, 9, 'Expected all nine games');
@@ -42,9 +44,7 @@ for (const entry of plan.files) {
   const relative = path.relative(sourceRoot, source);
   assert(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'Source outside prepared media');
   assert.equal((await lstat(source)).size, entry.bytes, 'Media size changed');
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(source)) hash.update(chunk);
-  assert.equal(hash.digest('hex'), entry.sha256, 'Media checksum changed');
+  assert.equal(await fileHash(source), entry.sha256, 'Media checksum changed');
   verified.push({ source, entry });
   sources.set(entry.relativePath, source);
 }
@@ -59,18 +59,26 @@ for (const entry of manifest.files) {
   const source = await realpath(candidate);
   assert.equal(path.dirname(source), historicalRoot, 'Archived media escaped its cache');
   assert.equal((await lstat(source)).size, entry.bytes, 'Archived media size changed');
-  const hash = createHash('sha256'); for await (const chunk of createReadStream(source)) hash.update(chunk);
-  assert.equal(hash.digest('hex'), entry.sha256, 'Archived media checksum changed');
+  assert.equal(await fileHash(source), entry.sha256, 'Archived media checksum changed');
   sources.set(entry.path, source);
 }
 // Only this fixed build-output directory is replaced, after every source passed.
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
+const staged = {linkedFiles: 0, linkedBytes: 0, copiedFiles: 0, copiedBytes: 0};
 for (const entry of manifest.files) {
   const destination = path.join(output, entry.path);
   await mkdir(path.dirname(destination), { recursive: true });
-  await copyFile(sources.get(entry.path), destination);
+  const result = await stageMediaFile({source: sources.get(entry.path), destination, entry, hardlinkEnabled});
+  if (result.method === 'linked') {
+    staged.linkedFiles++;
+    staged.linkedBytes += entry.bytes;
+  } else {
+    staged.copiedFiles++;
+    staged.copiedBytes += entry.bytes;
+  }
 }
 await writeFile(path.join(output, 'media-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log(JSON.stringify({ files: manifest.files.length, bytes: manifest.files.reduce((sum, entry) => sum + entry.bytes, 0),
-  currentFiles: current.files.length, inheritedFiles: manifest.files.length - current.files.length }));
+  currentFiles: current.files.length, inheritedFiles: manifest.files.length - current.files.length,
+  hardlinkEnabled, ...staged, serverWrites: 0 }));

@@ -11,7 +11,7 @@ import {prepareVideo as defaultPrepareVideo} from './video-renditions.mjs';
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const publicBase = 'https://launcher.samoy.love/assets/';
 
-export async function prepareGameplay({gameId, input, poster, author, caption, plan, output, encoder = 'software', month = new Date().toISOString().slice(0, 7), prepareVideo = defaultPrepareVideo}) {
+export async function prepareGameplay({gameId, input, poster, author, caption, plan, output, encoder = 'software', profile = 'standard', month = new Date().toISOString().slice(0, 7), prepareVideo = defaultPrepareVideo}) {
   assert(/^[a-z0-9-]+$/.test(gameId || ''), 'Invalid gameId');
   assert(typeof author === 'string' && author.trim() && [...author].length <= 160, 'Author is required (maximum 160 characters)');
   assert(typeof caption === 'string' && caption.trim() && [...caption].length <= 240 && /[а-яё]/i.test(caption), 'Caption must be Russian (maximum 240 characters)');
@@ -26,7 +26,8 @@ export async function prepareGameplay({gameId, input, poster, author, caption, p
   const gameDir = path.resolve(output, gameId);
   await mkdir(gameDir, {recursive:true});
   assert(['software','qsv'].includes(encoder), `Unsupported video encoder: ${encoder}`);
-  const report = await prepareVideo({input, output:gameDir, name:`gameplay-${gameId}`, encoder});
+  assert(['standard','compact'].includes(profile), `Unsupported rendition profile: ${profile}`);
+  const report = await prepareVideo({input, output:gameDir, name:`gameplay-${gameId}`, encoder, profile});
   assert(Array.isArray(report.variants) && report.variants.length > 0, 'No gameplay renditions were prepared');
   const versionPath = `media/${month}/${gameId}`;
   const checkedVariants = report.variants.map(v => {
@@ -79,10 +80,11 @@ export async function prepareGameplay({gameId, input, poster, author, caption, p
 export async function runCli(args, {prepareVideo = defaultPrepareVideo} = {}) {
   const {values:options}=parseArgs({args:args.slice(2),allowPositionals:false,options:{
     'game-id':{type:'string'},input:{type:'string'},poster:{type:'string'},author:{type:'string'},caption:{type:'string'},
-    plan:{type:'string'},output:{type:'string'},encoder:{type:'string',default:'software'},
+    plan:{type:'string'},output:{type:'string'},encoder:{type:'string',default:'software'},profile:{type:'string',default:'standard'},
   }});
   for (const key of ['game-id','input','poster','author','caption']) assert(options[key], `Missing --${key}`);
   assert(['software','qsv'].includes(options.encoder), 'Encoder must be software or qsv');
+  assert(['standard','compact'].includes(options.profile), 'Profile must be standard or compact');
   const planPath = path.resolve(options.plan || path.join(directory,'.cache/media-upload-plan.json'));
   const lockPath = planPath+'.gameplay.lock';
   let lock;
@@ -94,7 +96,7 @@ export async function runCli(args, {prepareVideo = defaultPrepareVideo} = {}) {
     const plan = JSON.parse(await readFile(planPath,'utf8'));
     const output = options.output || path.join(directory,'.cache/release-media');
     const result = await prepareGameplay({gameId:options['game-id'],input:options.input,poster:options.poster,
-      author:options.author,caption:options.caption,plan,output,encoder:options.encoder,prepareVideo});
+      author:options.author,caption:options.caption,plan,output,encoder:options.encoder,profile:options.profile,prepareVideo});
     const temp = planPath+'.part';
     await writeFile(temp,JSON.stringify(result.plan,null,2)+'\n');
     await rename(temp,planPath);

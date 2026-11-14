@@ -10,6 +10,11 @@ export const profiles = [
   {height:720, crf:21, maxrate:5000, audio:128, qsvQuality:23},
   {height:480, crf:22, maxrate:2200, audio:96, qsvQuality:25},
 ];
+export const compactProfiles = [
+  {height:1080, crf:22, maxrate:8000, audio:160, qsvQuality:26},
+  {height:720, crf:23, maxrate:4000, audio:128, qsvQuality:26},
+  {height:480, crf:24, maxrate:1800, audio:96, qsvQuality:27},
+];
 
 export function run(exe, args, timeout = 3 * 60 * 60 * 1000) {
   return new Promise((resolve, reject) => {
@@ -51,9 +56,10 @@ export function sourceDetails(info) {
   return {video, audio, duration};
 }
 
-export async function prepareVideo({input, output, name = 'video', encoder = 'software', ffmpeg = process.env.FFMPEG || 'ffmpeg', ffprobe = process.env.FFPROBE || 'ffprobe'}) {
+export async function prepareVideo({input, output, name = 'video', encoder = 'software', profile = 'standard', ffmpeg = process.env.FFMPEG || 'ffmpeg', ffprobe = process.env.FFPROBE || 'ffprobe'}) {
   assert(/^[a-z0-9-]+$/.test(name), 'Use a simple media name');
   assert(['software','qsv'].includes(encoder), `Unsupported video encoder: ${encoder}`);
+  assert(['standard','compact'].includes(profile), `Unsupported rendition profile: ${profile}`);
   input = path.resolve(input); output = path.resolve(output);
   const original = await stat(input);
   assert(original.isFile() && original.size > 0 && original.size <= 10 * 1024 ** 3, 'Invalid source file');
@@ -62,25 +68,26 @@ export async function prepareVideo({input, output, name = 'video', encoder = 'so
   const temporary = await mkdtemp(path.join(output, '.encode-'));
   const variants = [];
   try {
-    for (const profile of profiles.filter(p => p.height <= info.video.height)) {
-      const encoded = path.join(temporary, `${profile.height}.mp4`);
-      await run(ffmpeg, encodingArgs(input, encoded, profile, encoder));
+    const selectedProfiles = (profile === 'compact' ? compactProfiles : profiles).filter(p => p.height <= info.video.height);
+    for (const rendition of selectedProfiles) {
+      const encoded = path.join(temporary, `${rendition.height}.mp4`);
+      await run(ffmpeg, encodingArgs(input, encoded, rendition, encoder));
       // A compact compatible original needs only a fast-start remux, not another generation of loss.
-      if (info.video.height === profile.height && info.video.codec_name === 'h264' && info.video.pix_fmt === 'yuv420p' && (!info.audio || info.audio.codec_name === 'aac') && original.size < (await stat(encoded)).size) {
+      if (info.video.height === rendition.height && info.video.codec_name === 'h264' && info.video.pix_fmt === 'yuv420p' && (!info.audio || info.audio.codec_name === 'aac') && original.size < (await stat(encoded)).size) {
         await run(ffmpeg, ['-hide_banner','-nostdin','-loglevel','warning','-i',input,'-map','0:v:0','-map','0:a:0?','-c','copy','-map_metadata','-1','-movflags','+faststart','-y',encoded]);
       }
       const result = sourceDetails(await probe(encoded, ffprobe));
-      assert(result.video.height === profile.height && result.video.width <= 3840 && result.video.width % 2 === 0 && result.video.codec_name === 'h264' && result.video.pix_fmt === 'yuv420p', 'Invalid rendition format');
+      assert(result.video.height === rendition.height && result.video.width <= 3840 && result.video.width % 2 === 0 && result.video.codec_name === 'h264' && result.video.pix_fmt === 'yuv420p', 'Invalid rendition format');
       assert(Math.abs(result.duration - info.duration) < 0.25, 'Rendition duration changed');
       assert(Boolean(info.audio) === Boolean(result.audio), 'Rendition lost audio');
       const sha256 = await fileHash(encoded), bytes = (await stat(encoded)).size;
       assert(bytes > 0 && bytes <= 10 * 1024 ** 3, 'Rendition too large');
-      const filename = `${name}-${profile.height}p-${sha256.slice(0,16)}.mp4`;
+      const filename = `${name}-${rendition.height}p-${sha256.slice(0,16)}.mp4`;
       const destination = path.join(output, filename);
       const existing = await stat(destination).catch(e => { if (e.code !== 'ENOENT') throw e; });
       if (existing) assert(await fileHash(destination) === sha256, 'Immutable media name collision');
       else { await copyFile(encoded, destination + '.part'); await rename(destination + '.part', destination); }
-      variants.push({name:filename, localPath:destination, width:result.video.width, height:profile.height, bytes, sha256, durationSeconds:result.duration});
+      variants.push({name:filename, localPath:destination, width:result.video.width, height:rendition.height, bytes, sha256, durationSeconds:result.duration});
     }
     return {sourceBytes:original.size, sourceSha256:await fileHash(input), variants};
   } finally { await rm(temporary, {recursive:true, force:true}); }
