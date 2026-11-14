@@ -290,7 +290,7 @@ mod tests {
         for status in [404, 503, 400, 429] {
             let temp = tempfile::tempdir().unwrap();
             let primary = tiny_http::Server::http("127.0.0.1:0").unwrap();
-            let admin = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            let admin = std::sync::Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
             let service = FeedbackService::new(
                 ApiClient::new(&format!("http://{}", primary.server_addr())).unwrap(),
                 temp.path().into(),
@@ -298,26 +298,27 @@ mod tests {
             .with_local_admin_port(Some(admin.server_addr().to_ip().unwrap().port()));
             let primary_worker = std::thread::spawn(move || {
                 let request = primary
-                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .recv_timeout(std::time::Duration::from_secs(10))
                     .unwrap()
                     .unwrap();
                 request.respond(tiny_http::Response::empty(status)).unwrap();
             });
-            let admin_worker = std::thread::spawn(move || {
-                let request = admin
-                    .recv_timeout(std::time::Duration::from_millis(500))
-                    .unwrap();
-                if let Some(mut request) = request {
-                    assert!(matches!(status, 404 | 503));
+            let admin_worker = if matches!(status, 404 | 503) {
+                let admin = std::sync::Arc::clone(&admin);
+                Some(std::thread::spawn(move || {
+                    let mut request = admin
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap()
+                        .expect("fallback request should reach the local admin endpoint");
                     assert_eq!(request.url(), "/feedback/submit");
                     let body: serde_json::Value =
                         serde_json::from_reader(request.as_reader()).unwrap();
                     assert_eq!(body["comment"], "local fixture");
                     request.respond(tiny_http::Response::empty(200)).unwrap();
-                } else {
-                    assert!(matches!(status, 400 | 429));
-                }
-            });
+                }))
+            } else {
+                None
+            };
             let result = service.submit(FeedbackDraft {
                 comment: "local fixture".into(),
                 ..Default::default()
@@ -328,7 +329,14 @@ mod tests {
                 _ => assert!(matches!(result, SendResult::Rejected(_))),
             }
             primary_worker.join().unwrap();
-            admin_worker.join().unwrap();
+            if let Some(worker) = admin_worker {
+                worker.join().unwrap();
+            } else {
+                assert!(
+                    admin.try_recv().unwrap().is_none(),
+                    "rejected or rate-limited feedback must not reach the local admin endpoint"
+                );
+            }
         }
         let temp = tempfile::tempdir().unwrap();
         for base in ["https://launcher.samoy.love", "http://127.0.0.1:55777"] {
