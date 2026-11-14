@@ -13,6 +13,11 @@ try {
     $env:CHILLHUB_UI_QA = '1'
     # A combined graph is used only for coverage. Release helpers remain separate
     # software-only builds, verified by build.ps1's dependency check.
+    # --no-report disables cargo-llvm-cov's automatic clean. Cached instrumented
+    # workspace artifacts can retain stale source mappings, so remove those while
+    # keeping dependency artifacts from the shared target cache.
+    & cargo llvm-cov clean --workspace
+    if ($LASTEXITCODE) { throw 'Не удалось очистить инструментированные артефакты Native.' }
     & cargo llvm-cov --locked --package chillhub-native --features helper-ui --all-targets --no-report
     if ($LASTEXITCODE) { throw 'Не прошли инструментированные тесты Native.' }
     # Ignore test sources and generated/dependency code, never application modules.
