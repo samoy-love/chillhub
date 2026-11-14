@@ -1,5 +1,6 @@
 //! Controller integration tests use the headless testing backend and loopback fixtures.
 use super::*;
+use crate::catalog::Media;
 use chillhub_native::{
     config::ConfigStore,
     manifest::{Manifest, ManifestFile},
@@ -530,6 +531,75 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     if !ui.get_update_checked() || !ui.get_update_error() || ui.get_update_available()
                         || captured.borrow().update.is_some() || !ui.get_update_target().is_empty() {
                         return Err("failed update check retained a usable stale release or hid the failure".into());
+                    }
+                    let bundle = captured.borrow().data_root.clone();
+                    let assets = bundle.join("Assets");
+                    fs::create_dir_all(&assets).map_err(|error| error.to_string())?;
+                    image::RgbaImage::from_pixel(3, 2, image::Rgba([30, 120, 210, 255]))
+                        .save(assets.join("gallery-fixture.png"))
+                        .map_err(|error| error.to_string())?;
+                    let variants = [1080, 720, 480]
+                        .into_iter()
+                        .map(|height| chillhub_native::model::VideoVariant {
+                            url: format!("/assets/gameplay-{height}.mp4"),
+                            width: height * 16 / 9,
+                            height,
+                            bytes: u64::from(height) * 10,
+                        })
+                        .collect();
+                    captured.borrow_mut().catalog = vec![Game {
+                        id: "gallery-fixture".into(),
+                        title: "Галерея проверки".into(),
+                        media: vec![
+                            Media {
+                                kind: "video".into(),
+                                provider: "file".into(),
+                                caption: "Трейлер".into(),
+                                url: "/assets/trailer.mp4".into(),
+                                variants: vec![chillhub_native::model::VideoVariant {
+                                    url: "/assets/trailer-1080.mp4".into(),
+                                    width: 1920,
+                                    height: 1080,
+                                    bytes: 100,
+                                }],
+                                ..Default::default()
+                            },
+                            Media {
+                                kind: "video".into(),
+                                provider: "file".into(),
+                                caption: "Совместная игра".into(),
+                                url: "/assets/gameplay-1080.mp4".into(),
+                                variants,
+                                ..Default::default()
+                            },
+                            Media {
+                                kind: "image".into(),
+                                path: "Assets/gallery-fixture.png".into(),
+                                caption: "Кадр игры".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }];
+                    captured.borrow_mut().selected = 0;
+                    open_media(&ui, &captured, 1);
+                    if !ui.get_selected_media_is_video()
+                        || ui.get_gallery_index() != 1
+                        || ui.get_gallery_caption() != "Совместная игра"
+                        || ui.get_video_qualities().row_count() != 3
+                        || ui.get_video_quality() != 1080
+                    {
+                        return Err("the second gallery item did not open as the gameplay video with quality choices".into());
+                    }
+                    open_media(&ui, &captured, 2);
+                    *stage.borrow_mut() = (85, 0);
+                }
+                85 if ui.get_gallery_index() == 2 && ui.get_gallery_image().size().width > 0 => {
+                    if ui.get_selected_media_is_video()
+                        || ui.get_gallery_caption() != "Кадр игры"
+                        || ui.get_gallery_image().size().height == 0
+                    {
+                        return Err("the gallery did not return from the second video to the image".into());
                     }
                     return Ok(true);
                 }
