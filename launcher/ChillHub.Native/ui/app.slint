@@ -1,5 +1,6 @@
 import { ScrollView, Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { LocalizedTextInput } from "localized_text_input.slint";
 
 export struct GameRow { id: string, title: string, icon: image, has-mods: bool, status: string, status-kind: string }
 export struct MediaTile { poster: image, caption: string, is-video: bool }
@@ -129,7 +130,7 @@ component SearchField inherits Rectangle {
         x: 34px; y: 0px; width: parent.width - 46px; height: parent.height;
         text: root.placeholder; color: #a09da9; font-size: 13px; vertical-alignment: center;
     }
-    input := TextInput {
+    input := LocalizedTextInput {
         enabled: root.enabled;
         x: 34px; y: 0px; width: parent.width - (root.shortcut ? 78px : 46px); height: parent.height;
         text <=> root.text;
@@ -156,7 +157,7 @@ component FormField inherits Rectangle {
     height: 40px; border-radius: 8px; background: #25242d;
     border-width: 1px; border-color: #393741;
     forward-focus: input;
-    input := TextInput { x: 12px; y: 0px; width: parent.width - 24px; height: parent.height; text <=> root.text; enabled: root.enabled; single-line: true; color: Theme.ink; font-size: 13px; vertical-alignment: center; selection-background-color: #655580; selection-foreground-color: white; accessible-label: root.label; accessible-enabled: root.enabled; edited => { root.edited(self.text); } }
+    input := LocalizedTextInput { x: 12px; y: 0px; width: parent.width - 24px; height: parent.height; text <=> root.text; enabled: root.enabled; single-line: true; color: Theme.ink; font-size: 13px; vertical-alignment: center; selection-background-color: #655580; selection-foreground-color: white; accessible-label: root.label; accessible-enabled: root.enabled; edited => { root.edited(self.text); } }
 }
 
 component BenefitCard inherits Rectangle {
@@ -183,14 +184,14 @@ component SpinBox inherits Rectangle {
     changed value => { number.text = root.value; }
     function step(amount: int) { root.value = clamp(root.value + amount, root.minimum, root.maximum); number.text = root.value; }
     ActionButton { x: 2px; y: 2px; width: 30px; height: parent.height - 4px; text: "−"; accessible-name: root.label + ": уменьшить"; compact: true; quiet: true; enabled: root.enabled && root.value > root.minimum; clicked => { root.step(-1); } }
-    number := TextInput { x: 34px; y: 0px; width: parent.width - 68px; height: parent.height; text: root.value;
+    number := LocalizedTextInput { x: 34px; y: 0px; width: parent.width - 68px; height: parent.height; text: root.value;
         color: Theme.ink; font-size: 13px; single-line: true; input-type: InputType.number; horizontal-alignment: center; vertical-alignment: center;
         enabled: root.enabled; accessible-label: root.label; accessible-enabled: root.enabled;
         selection-background-color: #655580; selection-foreground-color: white;
         edited => { if self.text.is-float() && self.text.to-float() >= root.minimum && self.text.to-float() <= root.maximum { root.value = round(self.text.to-float()); } }
         accepted => { self.text = root.value; }
         changed has-focus => { if !self.has-focus { self.text = root.value; } }
-        key-pressed(event) => { if event.text == Key.UpArrow { root.step(1); return accept; } if event.text == Key.DownArrow { root.step(-1); return accept; } reject }
+        key-pressed(event) => { if number.handle-russian-edit-shortcut(event) == accept { return accept; } if event.text == Key.UpArrow { root.step(1); return accept; } if event.text == Key.DownArrow { root.step(-1); return accept; } reject }
     }
     ActionButton { x: parent.width - 32px; y: 2px; width: 30px; height: parent.height - 4px; text: "+"; accessible-name: root.label + ": увеличить"; compact: true; quiet: true; enabled: root.enabled && root.value < root.maximum; clicked => { root.step(1); } }
 }
@@ -275,7 +276,7 @@ component TextEdit inherits Rectangle {
     border-radius: 8px; border-width: 1px; border-color: #393741; background: #25242d;
     editor-scroll := ScrollView { x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 20px; enabled: root.enabled;
         content-width: self.width - 14px; content-height: max(self.height, input.preferred-height);
-        input := TextInput { x: 0px; y: 0px; width: editor-scroll.content-width; height: editor-scroll.content-height; text <=> root.text; enabled: root.enabled; single-line: false; wrap: root.wrap;
+        input := LocalizedTextInput { x: 0px; y: 0px; width: editor-scroll.content-width; height: editor-scroll.content-height; text <=> root.text; enabled: root.enabled; single-line: false; wrap: root.wrap;
             font-size: root.font-size; font-family: root.font-family; color: Theme.ink; selection-background-color: #655580; selection-foreground-color: white;
             page-height: editor-scroll.height; accessible-label: root.label; accessible-enabled: root.enabled;
             edited => { root.edited(self.text); }
@@ -599,8 +600,8 @@ export component AppWindow inherits Window {
         focus-on-tab-navigation: false;
         capture-key-pressed(event) => {
             if event.text == Key.Escape && root.panel-kind != "" { if root.feedback-exit-confirm { root.feedback-exit-confirm = false; } else { root.request-close(); } return accept; }
-            if event.modifiers.control && (event.text == "k" || event.text == "K") && root.panel-kind == "" { library-search.focus(); return accept; }
-            if event.modifiers.control && (event.text == "r" || event.text == "R") && root.panel-kind == "" && !root.operation-busy && !root.loading { root.action-requested("retry-catalog"); return accept; }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && !event.modifiers.shift && (event.text == "k" || event.text == "K" || event.text == "л" || event.text == "Л") && root.panel-kind == "" { library-search.focus(); return accept; }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && !event.modifiers.shift && (event.text == "r" || event.text == "R" || event.text == "к" || event.text == "К") && root.panel-kind == "" && !root.operation-busy && !root.loading { root.action-requested("retry-catalog"); return accept; }
             reject
         }
         key-pressed(event) => {

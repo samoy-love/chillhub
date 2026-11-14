@@ -49,6 +49,39 @@ fn key(window: &slint::Window, key: Key) {
     window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
     settle();
 }
+fn text_key(window: &slint::Window, text: &str) {
+    window.dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+    settle();
+}
+fn shortcut(window: &slint::Window, text: &str) {
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Control.into(),
+    });
+    window.dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+    window.dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Control.into(),
+    });
+    settle();
+}
+fn click_input(window: &slint::Window, input: &ElementHandle) {
+    let position = input.absolute_position();
+    let size = input.size();
+    let center = slint::LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    );
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    settle();
+}
 fn resize(window: &slint::Window, width: u32, height: u32, scale: f32) {
     window.dispatch_event(WindowEvent::ScaleFactorChanged {
         scale_factor: scale,
@@ -518,6 +551,165 @@ fn real_ui_headless_layout_and_actions() {
     })))
     .expect("headless platform only");
     let mut h = Harness::new();
+    // Exercise the actual TextInput event path with EN and RU key text, including
+    // Slint's clipboard-backed methods and ordinary character entry.
+    {
+        let keyboard = Harness::new();
+        keyboard.panel("mods", "Состав модпака", "");
+        keyboard.ui.set_mods(model(vec![]));
+        let input = ElementHandle::find_by_accessible_label(
+            &keyboard.ui,
+            "Найти мод по названию или описанию",
+        )
+        .find(|element| element.accessible_enabled() == Some(true))
+        .expect("mod search TextInput is available");
+        for (select_all, copy, paste, cut, sample) in [
+            ("a", "c", "v", "x", "моды EN"),
+            ("ф", "с", "м", "ч", "моды RU"),
+        ] {
+            input.set_accessible_value(sample);
+            click_input(keyboard.ui.window(), &input);
+            shortcut(keyboard.ui.window(), select_all);
+            shortcut(keyboard.ui.window(), copy);
+
+            input.set_accessible_value("замена");
+            click_input(keyboard.ui.window(), &input);
+            shortcut(keyboard.ui.window(), select_all);
+            shortcut(keyboard.ui.window(), paste);
+            assert_eq!(
+                input.accessible_value().as_deref(),
+                Some(sample),
+                "paste with {paste}"
+            );
+
+            input.set_accessible_value(sample);
+            click_input(keyboard.ui.window(), &input);
+            shortcut(keyboard.ui.window(), select_all);
+            shortcut(keyboard.ui.window(), cut);
+            assert_eq!(
+                input.accessible_value().as_deref(),
+                Some(""),
+                "cut with {cut}"
+            );
+        }
+        for (first, second, undo, redo) in [("a", "b", "z", "y"), ("ф", "и", "я", "н")] {
+            input.set_accessible_value("");
+            click_input(keyboard.ui.window(), &input);
+            text_key(keyboard.ui.window(), first);
+            text_key(keyboard.ui.window(), second);
+            let expected = format!("{first}{second}");
+            shortcut(keyboard.ui.window(), undo);
+            assert_eq!(
+                input.accessible_value().as_deref(),
+                Some(""),
+                "undo with {undo}"
+            );
+            shortcut(keyboard.ui.window(), redo);
+            assert_eq!(
+                input.accessible_value().as_deref(),
+                Some(expected.as_str()),
+                "redo with {redo}"
+            );
+        }
+        for character in ["a", "ф"] {
+            input.set_accessible_value("");
+            click_input(keyboard.ui.window(), &input);
+            text_key(keyboard.ui.window(), character);
+            assert_eq!(
+                input.accessible_value().as_deref(),
+                Some(character),
+                "plain {character} input"
+            );
+        }
+
+        // Global shortcuts remain available under either layout and ignore Alt/Shift/Meta.
+        keyboard.panel("", "", "");
+        keyboard.ui.set_search("".into());
+        let weak = keyboard.ui.as_weak();
+        keyboard
+            .ui
+            .on_search_edited(move |value| weak.upgrade().unwrap().set_search(value));
+        // Close the modal and explicitly materialize/focus a different live control.
+        let filter = ElementHandle::find_by_accessible_label(&keyboard.ui, "Только игры с модами")
+            .next()
+            .expect("mods filter button is available");
+        click_input(keyboard.ui.window(), &filter);
+        text_key(keyboard.ui.window(), "q");
+        assert_eq!(
+            keyboard.ui.get_search(),
+            "",
+            "typing outside the input leaves library search unchanged"
+        );
+        keyboard.actions.borrow_mut().clear();
+        shortcut(keyboard.ui.window(), "r");
+        assert_eq!(
+            keyboard.actions.borrow().last().map(String::as_str),
+            Some("retry-catalog")
+        );
+        keyboard.actions.borrow_mut().clear();
+        shortcut(keyboard.ui.window(), "к");
+        assert_eq!(
+            keyboard.actions.borrow().last().map(String::as_str),
+            Some("retry-catalog")
+        );
+        for (modifiers, key) in [
+            ([Key::Control, Key::Alt], "r"),
+            ([Key::Control, Key::Alt], "к"),
+            ([Key::Control, Key::Shift], "r"),
+            ([Key::Control, Key::Meta], "r"),
+        ] {
+            keyboard.actions.borrow_mut().clear();
+            for modifier in modifiers {
+                keyboard
+                    .ui
+                    .window()
+                    .dispatch_event(WindowEvent::KeyPressed {
+                        text: modifier.into(),
+                    });
+            }
+            text_key(keyboard.ui.window(), key);
+            for modifier in modifiers.into_iter().rev() {
+                keyboard
+                    .ui
+                    .window()
+                    .dispatch_event(WindowEvent::KeyReleased {
+                        text: modifier.into(),
+                    });
+            }
+            settle();
+            assert_ne!(
+                keyboard.actions.borrow().last().map(String::as_str),
+                Some("retry-catalog"),
+                "modified Ctrl+{key} is not consumed"
+            );
+        }
+
+        keyboard.ui.set_search("".into());
+        shortcut(keyboard.ui.window(), "k");
+        text_key(keyboard.ui.window(), "e");
+        assert_eq!(
+            keyboard.ui.get_search(),
+            "e",
+            "Ctrl+K focuses library search in EN layout"
+        );
+        // Re-materialize the focus tree outside the input before the RU alias.
+        click_input(keyboard.ui.window(), &filter);
+        text_key(keyboard.ui.window(), "q");
+        assert_eq!(
+            keyboard.ui.get_search(),
+            "e",
+            "typing outside the input leaves the existing search unchanged"
+        );
+        shortcut(keyboard.ui.window(), "л");
+        text_key(keyboard.ui.window(), "ж");
+        assert_eq!(
+            keyboard.ui.get_search(),
+            "eж",
+            "Ctrl+Л focuses library search in RU layout"
+        );
+        keyboard.ui.hide().unwrap();
+    }
+
     h.capture("main", 1360, 850, 1.0);
     let karaoke_ticks = Rc::new(std::cell::Cell::new(0));
     let counter = karaoke_ticks.clone();

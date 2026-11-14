@@ -1,0 +1,17 @@
+// Slint 1.18 resolves standard Ctrl shortcuts from the current-layout text.
+// Handle Russian-layout aliases here and leave Latin keys to TextInput.
+export component LocalizedTextInput inherits TextInput {
+    public function handle-russian-edit-shortcut(event: KeyEvent) -> EventResult {
+        if event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && !event.modifiers.shift {
+            if event.text == "ф" || event.text == "Ф" { root.select-all(); return accept; }
+            if event.text == "с" || event.text == "С" { root.copy(); return accept; }
+            if event.text == "ч" || event.text == "Ч" { root.cut(); return accept; }
+            if event.text == "м" || event.text == "М" { root.paste(); return accept; }
+            if event.text == "я" || event.text == "Я" { root.undo(); return accept; }
+            if event.text == "н" || event.text == "Н" { root.redo(); return accept; }
+        }
+        reject
+    }
+
+    key-pressed(event) => { root.handle-russian-edit-shortcut(event) }
+}
