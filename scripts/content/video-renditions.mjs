@@ -6,9 +6,9 @@ import path from 'node:path';
 import {fileHash} from './media-history.mjs';
 
 export const profiles = [
-  {height:1080, crf:20, maxrate:10000, audio:160},
-  {height:720, crf:21, maxrate:5000, audio:128},
-  {height:480, crf:22, maxrate:2200, audio:96},
+  {height:1080, crf:20, maxrate:10000, audio:160, qsvQuality:22},
+  {height:720, crf:21, maxrate:5000, audio:128, qsvQuality:23},
+  {height:480, crf:22, maxrate:2200, audio:96, qsvQuality:25},
 ];
 
 export function run(exe, args, timeout = 3 * 60 * 60 * 1000) {
@@ -26,13 +26,16 @@ export async function probe(filename, ffprobe = process.env.FFPROBE || 'ffprobe'
   return JSON.parse(await run(ffprobe, ['-v','error','-show_streams','-show_format','-of','json',filename], 60000));
 }
 
-export function encodingArgs(input, output, profile) {
+export function encodingArgs(input, output, profile, encoder = 'software') {
+  assert(['software','qsv'].includes(encoder), `Unsupported video encoder: ${encoder}`);
+  const videoArgs = encoder === 'qsv'
+    ? ['-c:v','h264_qsv','-preset','slow','-global_quality',String(profile.qsvQuality)]
+    : ['-c:v','libx264','-preset','slow','-crf',String(profile.crf),
+      '-maxrate',`${profile.maxrate}k`,'-bufsize',`${profile.maxrate * 2}k`,'-threads','4'];
   return ['-hide_banner','-nostdin','-loglevel','warning','-i', input,
     '-map','0:v:0','-map','0:a:0?','-map_metadata','-1','-sn','-dn',
     '-vf',`scale=-2:${profile.height}:flags=lanczos,setsar=1`,
-    '-c:v','libx264','-preset','slow','-crf',String(profile.crf),
-    '-maxrate',`${profile.maxrate}k`,'-bufsize',`${profile.maxrate * 2}k`,
-    '-pix_fmt','yuv420p','-threads','4','-g','120',
+    ...videoArgs,'-pix_fmt','yuv420p','-g','120',
     '-c:a','aac','-b:a',`${profile.audio}k`,'-ac','2',
     '-movflags','+faststart','-y',output];
 }
@@ -48,8 +51,9 @@ export function sourceDetails(info) {
   return {video, audio, duration};
 }
 
-export async function prepareVideo({input, output, name = 'video', ffmpeg = process.env.FFMPEG || 'ffmpeg', ffprobe = process.env.FFPROBE || 'ffprobe'}) {
+export async function prepareVideo({input, output, name = 'video', encoder = 'software', ffmpeg = process.env.FFMPEG || 'ffmpeg', ffprobe = process.env.FFPROBE || 'ffprobe'}) {
   assert(/^[a-z0-9-]+$/.test(name), 'Use a simple media name');
+  assert(['software','qsv'].includes(encoder), `Unsupported video encoder: ${encoder}`);
   input = path.resolve(input); output = path.resolve(output);
   const original = await stat(input);
   assert(original.isFile() && original.size > 0 && original.size <= 10 * 1024 ** 3, 'Invalid source file');
@@ -60,7 +64,7 @@ export async function prepareVideo({input, output, name = 'video', ffmpeg = proc
   try {
     for (const profile of profiles.filter(p => p.height <= info.video.height)) {
       const encoded = path.join(temporary, `${profile.height}.mp4`);
-      await run(ffmpeg, encodingArgs(input, encoded, profile));
+      await run(ffmpeg, encodingArgs(input, encoded, profile, encoder));
       // A compact compatible original needs only a fast-start remux, not another generation of loss.
       if (info.video.height === profile.height && info.video.codec_name === 'h264' && info.video.pix_fmt === 'yuv420p' && (!info.audio || info.audio.codec_name === 'aac') && original.size < (await stat(encoded)).size) {
         await run(ffmpeg, ['-hide_banner','-nostdin','-loglevel','warning','-i',input,'-map','0:v:0','-map','0:a:0?','-c','copy','-map_metadata','-1','-movflags','+faststart','-y',encoded]);

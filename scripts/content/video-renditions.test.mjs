@@ -16,6 +16,27 @@ test('rendition policy preserves frames, caps peaks and makes seekable H.264', (
     assert.equal(args[args.indexOf('-pix_fmt')+1], 'yuv420p');
     assert(!args.includes('-r'), 'do not discard frames');
   }
+  const qsv=encodingArgs('source.mp4','out.mp4',profiles[0],'qsv');
+  assert.equal(qsv[qsv.indexOf('-c:v')+1],'h264_qsv');
+  assert.equal(qsv[qsv.indexOf('-preset')+1],'slow');
+  assert.equal(qsv[qsv.indexOf('-global_quality')+1],'22');
+  assert(!qsv.includes('libx264')&&!qsv.includes('-crf')&&!qsv.includes('-maxrate'));
+  assert.throws(()=>encodingArgs('in','out',profiles[0],'unknown'),/Unsupported video encoder/);
+});
+
+test('real QSV encoder produces seekable H.264 renditions', {skip:process.env.CHILLHUB_TEST_QSV!=='1'||!process.env.FFMPEG||!process.env.FFPROBE}, async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'chillhub-qsv-'));
+  try{
+    const input=path.join(root,'source.mp4');
+    await run(process.env.FFMPEG,['-hide_banner','-nostdin','-loglevel','error','-f','lavfi','-i','testsrc2=size=1280x720:rate=30','-f','lavfi','-i','sine=frequency=440','-t','1','-c:v','libx264','-preset','ultrafast','-crf','10','-c:a','aac','-y',input]);
+    const report=await prepareVideo({input,output:path.join(root,'output'),encoder:'qsv',ffmpeg:process.env.FFMPEG,ffprobe:process.env.FFPROBE});
+    assert.deepEqual(report.variants.map(v=>v.height),[720,480]);
+    for(const variant of report.variants){
+      const info=await probe(variant.localPath,process.env.FFPROBE);
+      assert.equal(info.streams[0].codec_name,'h264');
+      assert.equal(info.streams[0].pix_fmt,'yuv420p');
+    }
+  }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test('reject sources that need manual rotation or HDR treatment', () => {

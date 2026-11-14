@@ -2,7 +2,7 @@
 // This tool never fetches media or publishes files.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {copyFile, mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
+import {copyFile, mkdir, open, readFile, rename, rm, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {parseArgs} from 'node:util';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -11,21 +11,22 @@ import {prepareVideo as defaultPrepareVideo} from './video-renditions.mjs';
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const publicBase = 'https://launcher.samoy.love/assets/';
 
-export async function prepareGameplay({gameId, input, poster, author, caption, plan, output, month = new Date().toISOString().slice(0, 7), prepareVideo = defaultPrepareVideo}) {
+export async function prepareGameplay({gameId, input, poster, author, caption, plan, output, encoder = 'software', month = new Date().toISOString().slice(0, 7), prepareVideo = defaultPrepareVideo}) {
   assert(/^[a-z0-9-]+$/.test(gameId || ''), 'Invalid gameId');
   assert(typeof author === 'string' && author.trim() && [...author].length <= 160, 'Author is required (maximum 160 characters)');
   assert(typeof caption === 'string' && caption.trim() && [...caption].length <= 240 && /[а-яё]/i.test(caption), 'Caption must be Russian (maximum 240 characters)');
   assert(/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month), 'Invalid media month');
-  const inputInfo = await stat(input);
-  assert(inputInfo.isFile() && inputInfo.size > 0 && inputInfo.size <= 10 * 1024 ** 3, 'Invalid local gameplay video');
-  const posterInfo = await stat(poster);
-  assert(posterInfo.isFile() && posterInfo.size > 0 && posterInfo.size <= 12 * 1024 * 1024, 'Invalid poster file');
+  const inputInfo = await stat(input).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+  assert(inputInfo?.isFile() && inputInfo.size > 0 && inputInfo.size <= 10 * 1024 ** 3, 'Invalid local gameplay video');
+  const posterInfo = await stat(poster).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+  assert(posterInfo?.isFile() && posterInfo.size > 0 && posterInfo.size <= 12 * 1024 * 1024, 'Invalid poster file');
   assert(['.jpg','.jpeg'].includes(path.extname(poster).toLowerCase()), 'Poster must be a local JPEG file');
   assert(plan?.games && Object.hasOwn(plan.games, gameId) && Array.isArray(plan.files), `Game is missing from media plan: ${gameId}`);
 
   const gameDir = path.resolve(output, gameId);
   await mkdir(gameDir, {recursive:true});
-  const report = await prepareVideo({input, output:gameDir, name:`gameplay-${gameId}`});
+  assert(['software','qsv'].includes(encoder), `Unsupported video encoder: ${encoder}`);
+  const report = await prepareVideo({input, output:gameDir, name:`gameplay-${gameId}`, encoder});
   assert(Array.isArray(report.variants) && report.variants.length > 0, 'No gameplay renditions were prepared');
   const versionPath = `media/${month}/${gameId}`;
   const checkedVariants = report.variants.map(v => {
@@ -78,18 +79,27 @@ export async function prepareGameplay({gameId, input, poster, author, caption, p
 export async function runCli(args, {prepareVideo = defaultPrepareVideo} = {}) {
   const {values:options}=parseArgs({args:args.slice(2),allowPositionals:false,options:{
     'game-id':{type:'string'},input:{type:'string'},poster:{type:'string'},author:{type:'string'},caption:{type:'string'},
-    plan:{type:'string'},output:{type:'string'},
+    plan:{type:'string'},output:{type:'string'},encoder:{type:'string',default:'software'},
   }});
   for (const key of ['game-id','input','poster','author','caption']) assert(options[key], `Missing --${key}`);
-  const planPath = options.plan || path.join(directory,'.cache/media-upload-plan.json');
-  const plan = JSON.parse(await readFile(planPath,'utf8'));
-  const output = options.output || path.join(directory,'.cache/release-media');
-  const result = await prepareGameplay({gameId:options['game-id'],input:options.input,poster:options.poster,
-    author:options.author,caption:options.caption,plan,output,prepareVideo});
-  const temp = planPath+'.part';
-  await writeFile(temp,JSON.stringify(result.plan,null,2)+'\n');
-  await rename(temp,planPath);
-  return {gameId:options['game-id'],planPath,plan:result.plan,gameplay:result.gameplay,serverWrites:0};
+  assert(['software','qsv'].includes(options.encoder), 'Encoder must be software or qsv');
+  const planPath = path.resolve(options.plan || path.join(directory,'.cache/media-upload-plan.json'));
+  const lockPath = planPath+'.gameplay.lock';
+  let lock;
+  try { lock=await open(lockPath,'wx'); }
+  catch(error){ if(error.code==='EEXIST') throw new Error('Another gameplay import is writing this plan'); throw error; }
+  try { await lock.writeFile(`${process.pid}\n`); }
+  catch(error){ await lock.close(); await rm(lockPath,{force:true}); throw error; }
+  try {
+    const plan = JSON.parse(await readFile(planPath,'utf8'));
+    const output = options.output || path.join(directory,'.cache/release-media');
+    const result = await prepareGameplay({gameId:options['game-id'],input:options.input,poster:options.poster,
+      author:options.author,caption:options.caption,plan,output,encoder:options.encoder,prepareVideo});
+    const temp = planPath+'.part';
+    await writeFile(temp,JSON.stringify(result.plan,null,2)+'\n');
+    await rename(temp,planPath);
+    return {gameId:options['game-id'],planPath,plan:result.plan,gameplay:result.gameplay,serverWrites:0};
+  } finally { await lock.close(); await rm(lockPath,{force:true}); }
 }
 
 async function main(args) {

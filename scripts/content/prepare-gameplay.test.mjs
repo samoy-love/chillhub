@@ -99,14 +99,25 @@ test('CLI workflow writes a JSON-serializable updated media plan', async()=>{
       await writeFile(localPath,bytes);
       return {variants:[{name:filename,localPath,width:1280,height:720,bytes:bytes.length,sha256}]};
     };
-    const result=await runCli(['node','prepare-gameplay.mjs','--game-id','sample','--input',input,'--poster',poster,
-      '--author','Автор канала','--caption','Запись прохождения','--plan',planPath,'--output',path.join(root,'release-media')],{prepareVideo});
+    const args=['node','prepare-gameplay.mjs','--game-id','sample','--input',input,'--poster',poster,
+      '--author','Автор канала','--caption','Запись прохождения','--plan',planPath,'--output',path.join(root,'release-media'),
+      '--encoder','qsv'];
+    await writeFile(planPath+'.gameplay.lock','other writer');
+    await assert.rejects(runCli(args,{prepareVideo}),/Another gameplay import is writing this plan/);
+    await rm(planPath+'.gameplay.lock',{force:true});
+    const result=await runCli(args,{prepareVideo:async args=>{assert.equal(args.encoder,'qsv');return prepareVideo(args);}});
     const saved=JSON.parse(await readFile(planPath,'utf8'));
+    assert.doesNotThrow(()=>JSON.stringify(result));
     assert.equal(saved.games.sample.gameplay.author,'Автор канала');
     assert.equal(saved.games.sample.gameplay.caption,'Запись прохождения');
     assert.equal(saved.games.sample.gameplay.variants[0].height,720);
     assert.equal(saved.files.length,2);
     assert.equal(result.serverWrites,0);
     assert.equal(await readFile(planPath+'.part','utf8').catch(()=>''),'');
+    const planBeforeFailure=await readFile(planPath,'utf8');
+    const invalidArgs=args.slice();invalidArgs[invalidArgs.indexOf(input)] = path.join(root,'missing.mp4');
+    await assert.rejects(runCli(invalidArgs,{prepareVideo}),/Invalid local gameplay video/);
+    assert.equal(await readFile(planPath,'utf8'),planBeforeFailure);
+    assert.equal(await readFile(planPath+'.gameplay.lock','utf8').catch(()=>''),'');
   }finally{await rm(root,{recursive:true,force:true});}
 });

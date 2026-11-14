@@ -32,6 +32,25 @@ node scripts/content/prepare-gameplay.mjs \
   --caption "Коротко о том, что происходит в ролике"
 ```
 
+По умолчанию используется программный `libx264` с профилем `slow` и четырьмя
+потоками. На машине с Intel Quick Sync можно явно выбрать аппаратный энкодер:
+
+```sh
+node scripts/content/prepare-gameplay.mjs \
+  --game-id lethal-company \
+  --input /path/to/authorized-recording.mp4 \
+  --poster /path/to/poster.jpg \
+  --author "Имя автора" \
+  --caption "Коротко о том, что происходит в ролике" \
+  --encoder qsv
+```
+
+QSV не включается автоматически и не переключается молча на программное
+кодирование. Если Intel-драйвер не поддерживает энкодер, команда завершится
+ошибкой; повторите её без `--encoder qsv` или с `--encoder software`. Настройки
+QSV подобраны по 20-секундному фрагменту одного ролика: это сравнение размера и
+SSIM, а не гарантия одинакового качества или скорости на полном видео.
+
 Команда обновит локальный план в `scripts/content/.cache/media-upload-plan.json`
 и сохранит подготовленные файлы в `scripts/content/.cache/release-media/`. Эти
 файлы пока никуда не отправляются.
