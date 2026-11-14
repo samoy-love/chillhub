@@ -290,8 +290,13 @@ impl Harness {
         self.ui.set_selected_game(index as i32);
         self.ui.set_description(text(g, "Description").into());
         self.ui.set_genre(text(g, "Genre").into());
-        self.ui
-            .set_hero(picture(&self.base, &format!("art/{id}/hero.webp")));
+        let hero_source = text(g, "Hero");
+        let hero_path = if hero_source.ends_with("/hero.jpg") {
+            format!("art/{id}/hero.webp")
+        } else {
+            hero_source.to_owned()
+        };
+        self.ui.set_hero(picture(&self.base, &hero_path));
         self.ui.set_hero_progress(1.0);
         self.ui
             .set_supports_steam(g["SteamSupported"].as_bool().unwrap());
@@ -434,6 +439,8 @@ impl Harness {
             }
             let id = if self.ui.get_panel_kind().is_empty() {
                 "AppWindow::sidebar"
+            } else if self.ui.get_gallery_open() {
+                "AppWindow::viewer"
             } else {
                 "AppWindow::modal"
             };
@@ -442,9 +449,15 @@ impl Harness {
                 .expect(id);
             assert_in_bounds(&container, width as f32, height as f32, name);
             if !self.ui.get_panel_kind().is_empty() {
-                let close = ElementHandle::find_by_element_id(&self.ui, "AppWindow::modal-close")
-                    .next()
-                    .unwrap();
+                let close = if self.ui.get_gallery_open() {
+                    ElementHandle::find_by_accessible_label(&self.ui, "Закрыть просмотр")
+                        .next()
+                        .unwrap()
+                } else {
+                    ElementHandle::find_by_element_id(&self.ui, "AppWindow::modal-close")
+                        .next()
+                        .unwrap()
+                };
                 assert_in_bounds(&close, width as f32, height as f32, name);
                 let form_id = match self.ui.get_panel_kind().as_str() {
                     "settings" => Some("AppWindow::settings-form"),
@@ -544,6 +557,7 @@ fn assert_in_bounds(element: &ElementHandle, width: f32, height: f32, context: &
 
 #[test]
 fn real_ui_headless_layout_and_actions() {
+    use slint::Model;
     slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
         mock_time: true,
         threading: false,
@@ -1326,8 +1340,145 @@ fn real_ui_headless_layout_and_actions() {
     h.ui.set_panel_body("Все установленные игры есть в каталоге.".into());
     h.capture("orphans-empty", 1120, 720, 1.0);
     h.panel("gallery", "Галерея", "");
+    let original_media = h.ui.get_media().iter().collect::<Vec<_>>();
+    let image_index = original_media
+        .iter()
+        .position(|item| !item.is_video)
+        .expect("fixture has an image card");
+    let peak = h
+        .catalog
+        .iter()
+        .find(|game| text(game, "Id") == "peak")
+        .unwrap();
+    let photo = &peak["Media"][image_index];
+    let photo_path = text(photo, "Path");
+    let (photo_width, photo_height) = image::image_dimensions(h.base.join(photo_path))
+        .expect("first image media has a decoded source");
+    h.ui.set_gallery_index(image_index as i32);
     h.ui.set_selected_media_is_video(false);
+    h.ui.set_gallery_caption(text(photo, "Caption").into());
+    h.ui.set_gallery_image(picture(&h.base, photo_path));
+    h.ui.set_gallery_image_aspect(photo_width as f32 / photo_height.max(1) as f32);
     h.capture("gallery-image", 1120, 720, 2.0);
+    assert!(
+        h.ui.get_video_width() > 700.0,
+        "viewer geometry spans the canvas stage"
+    );
+    let mut long_strip = original_media.clone();
+    while long_strip.len() < 12 {
+        long_strip.push(original_media[0].clone());
+    }
+    h.ui.set_media(model(long_strip));
+    resize(h.ui.window(), 900, 500, 1.0);
+    h.ui.set_gallery_index(11);
+    settle();
+    assert!(
+        h.ui.get_viewer_strip_offset() < 0.0,
+        "selected thumbnail scrolls into view when the strip overflows"
+    );
+    h.ui.set_gallery_index(0);
+    h.ui.set_media(model(original_media.clone()));
+    resize(h.ui.window(), 1120, 720, 2.0);
+    settle();
+    let photo_center = slint::LogicalPosition::new(
+        h.ui.get_video_x() + h.ui.get_video_width() / 2.0,
+        h.ui.get_video_y() + h.ui.get_video_height() / 2.0,
+    );
+    h.ui.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: photo_center,
+        delta_x: 0.0,
+        delta_y: 300.0,
+    });
+    settle();
+    assert_eq!(h.ui.get_viewer_photo_zoom(), 1.5, "wheel-up zooms in");
+    h.ui.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: photo_center,
+        delta_x: 300.0,
+        delta_y: 0.0,
+    });
+    settle();
+    assert_eq!(
+        h.ui.get_viewer_photo_zoom(),
+        1.5,
+        "horizontal wheel movement does not change photo scale"
+    );
+    h.ui.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: photo_center,
+        delta_x: 0.0,
+        delta_y: -300.0,
+    });
+    settle();
+    assert_eq!(
+        h.ui.get_viewer_photo_zoom(),
+        1.0,
+        "wheel-down returns to fit"
+    );
+    h.click("Увеличить изображение");
+    assert_eq!(h.ui.get_viewer_photo_zoom(), 1.5);
+    h.ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: photo_center,
+    });
+    settle();
+    assert_eq!(
+        h.ui.get_viewer_photo_pan_y(),
+        0.0,
+        "hover does not drag a zoomed photo"
+    );
+    h.ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: photo_center,
+        button: PointerEventButton::Left,
+    });
+    h.ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(photo_center.x, photo_center.y + 80.0),
+    });
+    h.ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: slint::LogicalPosition::new(photo_center.x, photo_center.y + 80.0),
+        button: PointerEventButton::Left,
+    });
+    settle();
+    assert!(
+        h.ui.get_viewer_photo_pan_y() > 0.0,
+        "drag pans the zoomed photo"
+    );
+    h.click("Вписать изображение");
+    assert_eq!(h.ui.get_viewer_photo_zoom(), 1.0);
+    assert_eq!(
+        h.ui.get_viewer_photo_pan_y(),
+        0.0,
+        "fit recenters a previously panned photo"
+    );
+    for _ in 0..2 {
+        h.ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: photo_center,
+            button: PointerEventButton::Left,
+        });
+        h.ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: photo_center,
+            button: PointerEventButton::Left,
+        });
+        mock_elapsed_time(Duration::from_millis(50));
+    }
+    assert!(
+        h.ui.get_viewer_fullscreen(),
+        "double-clicking a photo enters fullscreen"
+    );
+    key(h.ui.window(), Key::Escape);
+    assert!(!h.ui.get_viewer_fullscreen());
+    h.ui.set_gallery_image_state("error".into());
+    let retries = Rc::new(RefCell::new(0));
+    let retry_count = retries.clone();
+    h.ui.on_media_retry(move || *retry_count.borrow_mut() += 1);
+    h.click("Попробовать ещё раз");
+    assert_eq!(
+        *retries.borrow(),
+        1,
+        "image failure exposes a working retry action"
+    );
+    h.ui.set_gallery_image_state("ready".into());
+    h.click("Скрыть ленту материалов");
+    assert!(!h.ui.get_viewer_filmstrip_open());
+    h.click("Показать ленту материалов");
+    assert!(h.ui.get_viewer_filmstrip_open());
     h.ui.set_selected_media_is_video(true);
     h.ui.set_video_duration(103.0);
     h.ui.set_video_position(37.0);
@@ -1340,12 +1491,33 @@ fn real_ui_headless_layout_and_actions() {
         let selected = Rc::new(RefCell::new(0));
         let received = selected.clone();
         h.ui.on_video_quality_selected(move |height| *received.borrow_mut() = height);
-        h.click("Качество видео 720p");
+        let stage_bottom = h.ui.get_video_y() + h.ui.get_video_height();
+        h.click("Выбрать качество видео");
+        let quality = ElementHandle::find_by_accessible_label(&h.ui, "720p")
+            .find(|element| element.accessible_enabled() == Some(true))
+            .unwrap();
+        assert!(
+            quality.absolute_position().y >= stage_bottom,
+            "quality options stay in the footer below the native video stage"
+        );
+        key(h.ui.window(), Key::Escape);
+        assert!(
+            !h.ui.get_viewer_quality_open() && h.ui.get_gallery_open(),
+            "Escape closes the quality picker before the viewer"
+        );
+        h.click("Выбрать качество видео");
+        h.click("720p");
         assert_eq!(*selected.borrow(), 720);
+        assert_eq!(
+            h.ui.get_video_y() + h.ui.get_video_height(),
+            stage_bottom,
+            "opening and selecting quality does not resize the native video surface"
+        );
         h.ui.set_video_failed(true);
         h.ui.set_video_time_label("Ошибка видео".into());
         h.capture("gallery-video-error", 900, 500, 1.0);
-        h.click("Качество видео 480p");
+        h.click("Выбрать качество видео");
+        h.click("480p");
         assert_eq!(
             *selected.borrow(),
             480,
@@ -1353,11 +1525,35 @@ fn real_ui_headless_layout_and_actions() {
         );
         h.ui.set_video_failed(false);
         h.ui.set_video_time_label("0:37 / 1:43".into());
+        let media = h.ui.get_media().iter().collect::<Vec<_>>();
+        let video_index = media
+            .iter()
+            .position(|item| item.is_video)
+            .expect("fixture has video media");
+        let image_index = media
+            .iter()
+            .position(|item| !item.is_video)
+            .expect("fixture has image media");
+        h.ui.set_gallery_index(video_index as i32);
+        h.ui.set_selected_media_is_video(true);
+        h.ui.set_viewer_quality_open(true);
+        h.ui.set_gallery_index(image_index as i32);
+        h.ui.set_selected_media_is_video(false);
+        settle();
+        assert!(
+            !h.ui.get_viewer_quality_open(),
+            "changing media closes the quality picker"
+        );
+        h.ui.set_gallery_index(video_index as i32);
+        h.ui.set_selected_media_is_video(true);
     }
     // The child HWND video surface is intentionally not created in a UI test.
     assert!(h.ui.get_show_video());
     assert!(h.ui.get_video_width() > 500.0);
-    assert!(h.ui.get_video_height() > 200.0);
+    assert!(
+        h.ui.get_video_height() > 200.0,
+        "small viewer retains a useful video stage"
+    );
     h.ui.window()
         .dispatch_event(WindowEvent::KeyPressed { text: " ".into() });
     h.ui.window()
@@ -1372,14 +1568,98 @@ fn real_ui_headless_layout_and_actions() {
         h.actions.borrow().contains(&"video-toggle".to_owned()),
         "Space pauses the newly opened video"
     );
+    let seeks = Rc::new(RefCell::new(Vec::new()));
+    let seek_values = seeks.clone();
+    h.ui.on_video_seek(move |seconds| seek_values.borrow_mut().push(seconds));
+    let steps = Rc::new(RefCell::new(Vec::new()));
+    let gallery_steps = steps.clone();
+    h.ui.on_gallery_step(move |delta| gallery_steps.borrow_mut().push(delta));
+    h.ui.set_selected_media_is_video(false);
+    key(h.ui.window(), Key::RightArrow);
+    assert_eq!(
+        steps.borrow().last().copied(),
+        Some(1),
+        "photo arrows navigate gallery material"
+    );
+    h.ui.set_selected_media_is_video(true);
+    let mutes = Rc::new(RefCell::new(0));
+    let mute_count = mutes.clone();
+    h.ui.on_video_mute_toggle(move || *mute_count.borrow_mut() += 1);
+    text_key(h.ui.window(), "ь");
+    assert_eq!(
+        *mutes.borrow(),
+        1,
+        "Russian layout mute shortcut is handled"
+    );
+    h.ui.set_video_position(37.0);
+    key(h.ui.window(), Key::LeftArrow);
+    assert_eq!(
+        seeks.borrow().last().copied(),
+        Some(32.0),
+        "video arrows seek by five seconds"
+    );
     h.ui.window().dispatch_event(WindowEvent::KeyPressed {
-        text: Key::Escape.into(),
+        text: Key::Shift.into(),
     });
+    key(h.ui.window(), Key::RightArrow);
     h.ui.window().dispatch_event(WindowEvent::KeyReleased {
-        text: Key::Escape.into(),
+        text: Key::Shift.into(),
+    });
+    assert_eq!(
+        steps.borrow().last().copied(),
+        Some(1),
+        "Shift+arrow navigates the gallery"
+    );
+    let fullscreen = Rc::new(RefCell::new(Vec::new()));
+    let fullscreen_changes = fullscreen.clone();
+    h.ui.on_viewer_fullscreen_changed(move |value| fullscreen_changes.borrow_mut().push(value));
+    text_key(h.ui.window(), "F");
+    assert!(h.ui.get_viewer_fullscreen());
+    assert!(
+        !h.ui.get_viewer_filmstrip_open(),
+        "fullscreen prioritizes the media stage"
+    );
+    key(h.ui.window(), Key::Escape);
+    assert!(!h.ui.get_viewer_fullscreen());
+    assert!(
+        h.ui.get_viewer_filmstrip_open(),
+        "leaving fullscreen restores the normal filmstrip state"
+    );
+    assert_eq!(
+        h.ui.get_panel_kind(),
+        "gallery",
+        "Escape exits fullscreen before closing viewer"
+    );
+    assert_eq!(fullscreen.borrow().as_slice(), &[true, false]);
+    let photo_index = original_media
+        .iter()
+        .position(|item| !item.is_video)
+        .expect("fixture has a photo after video");
+    h.ui.set_gallery_index(photo_index as i32);
+    h.ui.set_selected_media_is_video(false);
+    h.ui.set_viewer_photo_zoom(1.5);
+    settle();
+    let drag_center = slint::LogicalPosition::new(
+        h.ui.get_video_x() + h.ui.get_video_width() / 2.0,
+        h.ui.get_video_y() + h.ui.get_video_height() / 2.0,
+    );
+    h.ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: drag_center,
+        button: PointerEventButton::Left,
+    });
+    h.ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(drag_center.x, drag_center.y + 30.0),
+    });
+    h.ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: slint::LogicalPosition::new(drag_center.x, drag_center.y + 30.0),
+        button: PointerEventButton::Left,
     });
     settle();
-    assert!(h.ui.get_panel_kind().is_empty(), "Escape closes the modal");
+    key(h.ui.window(), Key::Escape);
+    assert!(
+        h.ui.get_panel_kind().is_empty(),
+        "Escape closes the viewer after switching video to a dragged photo"
+    );
     h.panel("settings", "Настройки", "");
     if h.qa {
         resize(h.ui.window(), 1360, 850, 1.0);

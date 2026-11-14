@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
-use video::{VideoPlayer, VideoRect};
+use video::{VideoAction, VideoPlayer, VideoRect};
 
 type State = Rc<RefCell<AppState>>;
 static PANIC_CONTEXT: std::sync::OnceLock<(chillhub_native::net::ApiClient, PathBuf)> =
@@ -63,6 +63,8 @@ struct AppState {
     gallery_index: usize,
     video: Option<VideoPlayer>,
     native_hwnd: isize,
+    viewer_restore: Option<ViewerRestore>,
+    viewer_previous_volume: Option<f64>,
     video_timer: Timer,
     toast_timer: Timer,
     report_notices: std::collections::VecDeque<String>,
@@ -92,6 +94,11 @@ struct AppState {
     shortcut: Option<ShortcutRequest>,
     update: Option<chillhub_native::update::UpdateRelease>,
     offline: bool,
+}
+struct ViewerRestore {
+    size: slint::winit_030::winit::dpi::PhysicalSize<u32>,
+    position: Option<slint::winit_030::winit::dpi::PhysicalPosition<i32>>,
+    maximized: bool,
 }
 fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
     Rc::new(VecModel::from(
@@ -373,7 +380,7 @@ fn select_game(ui: &AppWindow, state: &State, index: usize) {
             };
             let bundled = hero_source.starts_with("Assets/") || hero_source.starts_with("art/");
             if remote != bundled {
-                let pixels = if bundled {
+                let pixels = if bundled && hero_source.ends_with("/hero.jpg") {
                     image_pixels_for_epoch(
                         &art.join(&id).join("hero.webp"),
                         1800,
@@ -570,6 +577,7 @@ fn clear_game(ui: &AppWindow, state: &State) {
     ui.set_can_play(false);
 }
 fn close_panel(ui: &AppWindow, state: &State) {
+    ui.set_viewer_fullscreen(false);
     {
         let mut s = state.borrow_mut();
         s.gallery_generation += 1;
@@ -579,6 +587,7 @@ fn close_panel(ui: &AppWindow, state: &State) {
         }
     }
     ui.set_selected_media_is_video(false);
+    ui.set_gallery_image_state("ready".into());
     ui.set_panel_kind("".into());
     ui.set_gallery_image(Image::default());
     security_offers::after_panel_closed(ui, state);
@@ -727,11 +736,60 @@ fn video_rect(ui: &AppWindow) -> VideoRect {
         radius: (10.0 * scale).round() as i32,
     }
 }
+fn set_viewer_fullscreen(ui: &AppWindow, state: &State, enabled: bool) {
+    use slint::winit_030::{WinitWindowAccessor, winit};
+    if enabled {
+        if state.borrow().viewer_restore.is_some() {
+            return;
+        }
+        ui.window().with_winit_window(|window| {
+            let restore = ViewerRestore {
+                size: window.inner_size(),
+                position: window.outer_position().ok(),
+                maximized: window.is_maximized(),
+            };
+            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(
+                window.current_monitor(),
+            )));
+            window.focus_window();
+            state.borrow_mut().viewer_restore = Some(restore);
+        });
+    } else {
+        let restore = state.borrow_mut().viewer_restore.take();
+        let Some(restore) = restore else {
+            return;
+        };
+        ui.window().with_winit_window(|window| {
+            window.set_fullscreen(None);
+            if restore.maximized {
+                window.set_maximized(true);
+            } else {
+                window.set_maximized(false);
+                let _ = window.request_inner_size(restore.size);
+                if let Some(position) = restore.position {
+                    window.set_outer_position(position);
+                }
+            }
+            window.focus_window();
+        });
+    }
+}
 fn open_media(ui: &AppWindow, state: &State, index: usize) {
+    use slint::winit_030::WinitWindowAccessor;
     if state.borrow().catalog.is_empty() {
         return;
     }
-    close_panel(ui, state);
+    ui.set_viewer_quality_open(false);
+    if ui.get_gallery_open() {
+        let mut s = state.borrow_mut();
+        s.gallery_generation += 1;
+        s.video_timer.stop();
+        if let Some(video) = &mut s.video {
+            video.close();
+        }
+    } else {
+        close_panel(ui, state);
+    }
     let (game, data, generation) = {
         let mut s = state.borrow_mut();
         let Some(game) = s.catalog.get(s.selected).cloned() else {
@@ -743,12 +801,17 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
     let Some(media) = game.media.get(index) else {
         return;
     };
+    if media.kind != "video" {
+        ui.set_gallery_image(Image::default());
+        ui.set_gallery_image_state("loading".into());
+    }
     let services = state.borrow().services.clone();
     ui.set_panel_title(game.title.into());
     ui.set_panel_subtitle(media.caption.clone().into());
     ui.set_gallery_caption(media.caption.clone().into());
     ui.set_gallery_index(index as i32);
     ui.set_panel_kind("gallery".into());
+    ui.set_viewer_photo_zoom(1.0);
     ui.set_selected_media_is_video(media.kind == "video");
     let mut qualities: Vec<i32> = media.variants.iter().map(|v| v.height as i32).collect();
     qualities.sort_unstable();
@@ -781,11 +844,16 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
     let path = match location {
         Ok(p) => PathBuf::from(p),
         Err(error) => {
+            if media.kind != "video" {
+                ui.set_gallery_image_state("error".into());
+            }
             toast(ui, state, &error);
             return;
         }
     };
     if media.kind == "video" {
+        ui.set_gallery_image_state("ready".into());
+        ui.set_gallery_image(Image::default());
         services.api.event(
             "media.trailer_open",
             serde_json::json!({"game": game.id, "index": index}),
@@ -807,7 +875,15 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
                     .video
                     .as_mut()
                     .ok_or_else(|| "Видеоплеер недоступен".to_string())
-                    .and_then(|video| video.open(&path, rect));
+                    .and_then(|video| {
+                        video.open(&path, rect)?;
+                        video.set_volume(if ui.get_video_muted() {
+                            0.0
+                        } else {
+                            ui.get_video_volume() as f64 * 100.0
+                        });
+                        Ok(())
+                    });
                 if let Err(error) = result {
                     ui.set_video_failed(true);
                     ui.set_video_time_label("Ошибка видео".into());
@@ -827,11 +903,34 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
                                 video.set_rect(video_rect(&ui));
                                 video.reveal_if_ready();
                             }
+                            let actions = state
+                                .borrow_mut()
+                                .video
+                                .as_mut()
+                                .map(VideoPlayer::take_actions)
+                                .unwrap_or_default();
+                            for action in actions {
+                                match action {
+                                    VideoAction::TogglePause => {
+                                        if let Some(video) = state.borrow().video.as_ref() {
+                                            video.set_paused(video.status().is_playing());
+                                        }
+                                        ui.window()
+                                            .with_winit_window(|window| window.focus_window());
+                                    }
+                                    VideoAction::ToggleFullscreen => {
+                                        ui.set_viewer_fullscreen(!ui.get_viewer_fullscreen());
+                                        ui.window()
+                                            .with_winit_window(|window| window.focus_window());
+                                    }
+                                }
+                            }
                             let status = state.borrow().video.as_ref().map(VideoPlayer::status);
                             if let Some(status) = status {
                                 ui.set_video_position(status.position as f32);
                                 ui.set_video_duration(status.duration as f32);
                                 ui.set_video_volume((status.volume / 100.0) as f32);
+                                ui.set_video_muted(status.volume <= 0.001);
                                 ui.set_video_playing(status.is_playing());
                                 ui.set_video_failed(status.error.is_some());
                                 let label = if status.error.is_some() {
@@ -877,15 +976,26 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
                 if let Some(ui) = weak.upgrade() {
                     ACTIVE_STATE.with(|slot| {
                         if let Some(state) = slot.borrow().as_ref()
-                            && state.borrow().gallery_generation == generation {
-                                match pixels {
-                                    Ok(pixels) => ui.set_gallery_image(from_pixels(pixels)),
-                                    Err(_) => {
-                                        ui.set_gallery_caption("Не удалось загрузить изображение. Попробуйте открыть его ещё раз.".into());
-                                        toast(&ui, state, "Не удалось загрузить изображение. Проверьте подключение.");
-                                    }
+                            && state.borrow().gallery_generation == generation
+                        {
+                            match pixels {
+                                Ok(pixels) => {
+                                    ui.set_gallery_image_aspect(
+                                        pixels.width() as f32 / pixels.height().max(1) as f32,
+                                    );
+                                    ui.set_gallery_image(from_pixels(pixels));
+                                    ui.set_gallery_image_state("ready".into());
+                                }
+                                Err(_) => {
+                                    ui.set_gallery_image_state("error".into());
+                                    toast(
+                                        &ui,
+                                        state,
+                                        "Не удалось загрузить изображение. Проверьте подключение.",
+                                    );
                                 }
                             }
+                        }
                     });
                 }
             });
@@ -1064,6 +1174,10 @@ fn bind(ui: &AppWindow, state: &State) {
     handler!(on_media_selected, |ui, state, index| {
         open_media(&ui, &state, index.max(0) as usize);
     });
+    handler!(on_media_retry, |ui, state| {
+        let index = state.borrow().gallery_index;
+        open_media(&ui, &state, index);
+    });
     handler!(on_gallery_step, |ui, state, delta| {
         let index = {
             let s = state.borrow();
@@ -1128,10 +1242,39 @@ fn bind(ui: &AppWindow, state: &State) {
             video.seek(seconds as f64);
         }
     });
-    handler!(on_video_volume_changed, |_ui, state, volume| {
+    handler!(on_video_volume_changed, |ui, state, volume| {
         if let Some(video) = state.borrow().video.as_ref() {
             video.set_volume(volume as f64 * 100.0);
         }
+        ui.set_video_muted(volume <= 0.001);
+    });
+    handler!(on_video_mute_toggle, |ui, state| {
+        let mut s = state.borrow_mut();
+        let Some(current) = s.video.as_ref().map(|video| video.status().volume) else {
+            return;
+        };
+        if current > 0.0 {
+            s.viewer_previous_volume = Some(current);
+            if let Some(video) = s.video.as_ref() {
+                video.set_volume(0.0);
+            }
+            ui.set_video_volume(0.0);
+            ui.set_video_muted(true);
+        } else {
+            let restored = s
+                .viewer_previous_volume
+                .take()
+                .unwrap_or(60.0)
+                .clamp(1.0, 100.0);
+            if let Some(video) = s.video.as_ref() {
+                video.set_volume(restored);
+            }
+            ui.set_video_volume((restored / 100.0) as f32);
+            ui.set_video_muted(false);
+        }
+    });
+    handler!(on_viewer_fullscreen_changed, |ui, state, fullscreen| {
+        set_viewer_fullscreen(&ui, &state, fullscreen);
     });
     handler!(on_video_geometry_changed, |ui, state| {
         if let Ok(mut s) = state.try_borrow_mut()
@@ -1282,6 +1425,8 @@ fn run() -> Result<(), String> {
         gallery_index: 0,
         video: None,
         native_hwnd: 0,
+        viewer_restore: None,
+        viewer_previous_volume: None,
         video_timer: Timer::default(),
         toast_timer: Timer::default(),
         report_notices: Default::default(),

@@ -10,6 +10,7 @@ const dataDirectory = path.join(root, 'launcher/ChillHub.Native/Data');
 const read = async filename => JSON.parse(await readFile(filename, 'utf8'));
 const harvest = await read(path.join(directory, '.cache/harvest.json'));
 const editorial = await read(path.join(directory, 'games-ru.json'));
+const curation = await read(path.join(directory, 'media-curation.json'));
 const benefitSources = await read(path.join(directory, 'benefit-sources.json'));
 const prepared = await read(path.join(directory, '.cache/media-upload-plan.json'));
 const oldSeed = await read(path.join(dataDirectory, 'games.json'));
@@ -66,10 +67,16 @@ for (const game of harvest.registry.items) {
     }
   }
   const gallery = harvest.galleries[id];
-  const heroUrl = gallery?.value?.cover ? new URL(encodeURIComponent(gallery.value.cover), gallery.url).href : screenshots[0].path_full;
+  const heroSelection = curation[id]?.heroScreenshot;
+  const heroShot = heroSelection === undefined ? null : ready.screenshots[heroSelection];
+  if (heroSelection !== undefined && (!Number.isInteger(heroSelection) || heroSelection < 0 || !heroShot)) {
+    throw new Error(`Invalid hero screenshot selection: ${id}`);
+  }
+  const heroUrl = heroShot?.url || (gallery?.value?.cover ? new URL(encodeURIComponent(gallery.value.cover), gallery.url).href : screenshots[0].path_full);
   presentations[id] = { ...text, modpackVersion: game.mods?.version || '', modpackRevision: game.mods?.revision || '', heroUrl, media, mods };
   output.push({
-    ...original, Description: text.description, Genre: text.genre, Highlights: text.highlights,
+    ...original, Hero: heroShot ? `Assets/Media/${id}/${heroShot.name}` : original.Hero,
+    Description: text.description, Genre: text.genre, Highlights: text.highlights,
     GameVersion: game.latestVersion, HasMods: Boolean(game.mods?.hasLatest), LocalSupported: Boolean(game.hasLatest),
     SteamSupported: Boolean(game.mods?.steamAppId), SteamAppId: game.mods?.steamAppId || '',
     ModpackName: game.mods?.displayName || '', ModpackVersion: game.mods?.displayVersion || '', ModpackRevision: game.mods?.revision || '',

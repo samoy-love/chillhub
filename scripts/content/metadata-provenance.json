@@ -335,11 +335,18 @@
       ],
       "modBenefits": [
         {
-          "title": "Большая команда",
+          "title": "До 16 игроков",
           "packages": [
             {
               "id": "notnotnotswipez-MoreCompany-1.14.0",
-              "source": "https://thunderstore.io/api/experimental/package/notnotnotswipez/MoreCompany/1.14.0/"
+              "source": "https://thunderstore.io/api/experimental/package/notnotnotswipez/MoreCompany/1.14.0/",
+              "configuration": {
+                "path": "BepInEx/config/me.swipez.melonloader.morecompany.cfg",
+                "sha256": "c33498e2ad8ca6e510aa143d96e225f4bfc39cf72a01f7573269b6d489e937c2",
+                "maxPlayers": 16,
+                "revision": "d4c098e16e2387d5f6f2b4650970059f",
+                "sourceURL": "https://launcher.samoy.love/content/_mods/lethal-company/ASTeam-LethalReloaded-2.3.1/files/BepInEx/config/me.swipez.melonloader.morecompany.cfg"
+              }
             }
           ]
         },
@@ -1409,7 +1416,7 @@
       ],
       "modBenefits": [
         {
-          "title": "До 32 рыбаков",
+          "title": "Больше рыбаков",
           "packages": [
             {
               "id": "Kalamies-MorePlayers-0.1.1",
@@ -1418,7 +1425,7 @@
           ]
         },
         {
-          "title": "Понятнее рыба и боссы",
+          "title": "Здоровье и подсказки",
           "packages": [
             {
               "id": "evansvl-BossTimer-0.1.6",
@@ -2333,11 +2340,18 @@
       ],
       "modBenefits": [
         {
-          "title": "Вся компания вместе",
+          "title": "До 20 участников",
           "packages": [
             {
               "id": "glarmer-PEAK_Unlimited-4.0.1",
-              "source": "https://thunderstore.io/api/experimental/package/glarmer/PEAK_Unlimited/4.0.1/"
+              "source": "https://thunderstore.io/api/experimental/package/glarmer/PEAK_Unlimited/4.0.1/",
+              "configuration": {
+                "path": "BepInEx/config/PEAKUnlimited.cfg",
+                "sha256": "2ab9163fb1a86e237d5fddcbae2fc59e2cd8f3ac63abcbf97e4adb762e94cd24",
+                "maxPlayers": 20,
+                "revision": "57c08e021ec3080533ecbe36c1ee4566",
+                "sourceURL": "https://launcher.samoy.love/content/_mods/peak/Lart_Iste-PeakFriendsEdition-2.0.15/files/BepInEx/config/PEAKUnlimited.cfg"
+              }
             },
             {
               "id": "Isotope-PEAKLobbyBrowser-1.4.0",
@@ -2363,7 +2377,7 @@
           ]
         },
         {
-          "title": "Новые образы и находки",
+          "title": "Косметика и снаряжение",
           "packages": [
             {
               "id": "RizetsuArie-Cute_Cosmetics-1.0.1",

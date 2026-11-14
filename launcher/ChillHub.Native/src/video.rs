@@ -2,6 +2,7 @@
 //! Rectangles use physical pixels in the parent HWND's client area.
 
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::ffi::{OsStr, c_void};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -46,6 +47,15 @@ unsafe extern "system" {
     fn SetWindowRgn(window: isize, region: isize, redraw: i32) -> i32;
     fn DestroyWindow(window: isize) -> i32;
     fn IsWindow(window: isize) -> i32;
+    #[cfg(test)]
+    fn IsWindowEnabled(window: isize) -> i32;
+    fn EnableWindow(window: isize, enable: i32) -> i32;
+    fn EnumChildWindows(
+        parent: isize,
+        callback: unsafe extern "system" fn(isize, isize) -> i32,
+        parameter: isize,
+    ) -> i32;
+    fn GetWindowThreadProcessId(window: isize, process_id: *mut u32) -> u32;
 }
 
 #[link(name = "gdi32")]
@@ -81,6 +91,12 @@ pub struct VideoRect {
     pub width: i32,
     pub height: i32,
     pub radius: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoAction {
+    TogglePause,
+    ToggleFullscreen,
 }
 
 #[derive(Clone, Debug)]
@@ -150,6 +166,8 @@ pub struct VideoPlayer {
     log_dir: PathBuf,
     child: Option<Child>,
     commands: Option<mpsc::Sender<Value>>,
+    actions: Arc<Mutex<VecDeque<VideoAction>>>,
+    input_conf_path: Option<PathBuf>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     state: Arc<Mutex<VideoStatus>>,
@@ -202,6 +220,8 @@ impl VideoPlayer {
             log_dir,
             child: None,
             commands: None,
+            actions: Arc::new(Mutex::new(VecDeque::new())),
+            input_conf_path: None,
             stop: Arc::new(AtomicBool::new(false)),
             worker: None,
             state: Arc::new(Mutex::new(VideoStatus::default())),
@@ -244,6 +264,18 @@ impl VideoPlayer {
         let stderr = File::create(self.log_dir.join(format!("mpv-{session}.stderr.log")))
             .map_err(|error| error.to_string())?;
         let diagnostics = File::create(&diagnostics_path).map_err(|error| error.to_string())?;
+        let input_conf_path = self.log_dir.join(format!("mpv-input-{session}.conf"));
+        let mut input_conf = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&input_conf_path)
+            .map_err(|error| error.to_string())?;
+        let write_result = input_conf.write_all(INPUT_CONF.as_bytes());
+        drop(input_conf);
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&input_conf_path);
+            return Err(error.to_string());
+        }
         let mut command = Command::new(&self.mpv_exe);
         command.args([
             "--no-config",
@@ -252,7 +284,9 @@ impl VideoPlayer {
             "--terminal=no",
             "--input-default-bindings=no",
             "--input-vo-keyboard=no",
-            "--input-cursor=no",
+            // The embedded video needs pointer events for the scoped mouse bindings.
+            "--input-cursor=yes",
+            "--input-doubleclick-time=250",
             "--osc=no",
             "--osd-level=0",
             "--border=no",
@@ -277,6 +311,7 @@ impl VideoPlayer {
         command
             .arg(format!("--wid={}", self.window as u32))
             .arg(format!("--input-ipc-server={pipe_name}"))
+            .arg(format!("--input-conf={}", input_conf_path.display()))
             .arg(format!("--log-file={}", log_path.display()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -284,9 +319,14 @@ impl VideoPlayer {
             .creation_flags(0x0800_0000); // CREATE_NO_WINDOW suppresses the console, not the embedded renderer.
         // Keep the host hidden while mpv initializes its native child and swapchain.
         // The playback timer reveals it once the IPC reports video progress.
-        let child = command
-            .spawn()
-            .map_err(|error| format!("Не удалось запустить видео: {error}"))?;
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = fs::remove_file(&input_conf_path);
+                return Err(format!("Не удалось запустить видео: {error}"));
+            }
+        };
+        self.input_conf_path = Some(input_conf_path);
         let process_handle = child.as_raw_handle() as isize;
         let initial = VideoStatus {
             pid: Some(child.id()),
@@ -299,15 +339,17 @@ impl VideoPlayer {
         *self.state.lock().unwrap_or_else(|error| error.into_inner()) = initial;
         self.stop = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::channel();
-        let state = Arc::clone(&self.state);
-        let stop = Arc::clone(&self.stop);
+        let shared = WorkerShared {
+            state: Arc::clone(&self.state),
+            actions: Arc::clone(&self.actions),
+            stop: Arc::clone(&self.stop),
+        };
         self.worker = Some(thread::spawn(move || {
             run_worker(
                 pipe_name,
                 process_handle,
                 receiver,
-                state,
-                stop,
+                shared,
                 diagnostics,
                 path.to_string_lossy().into_owned(),
             );
@@ -404,6 +446,9 @@ impl VideoPlayer {
             return false;
         }
         if ready {
+            if let Some(child) = self.child.as_ref() {
+                enable_process_children(self.window, child.id());
+            }
             unsafe { ShowWindow(self.window, 8) };
             self.visible = true;
         }
@@ -453,6 +498,14 @@ impl VideoPlayer {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
+    /// Returns mouse actions received from mpv for the UI thread to apply.
+    pub fn take_actions(&mut self) -> Vec<VideoAction> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .drain(..)
+            .collect()
+    }
     pub fn close(&mut self) {
         self.visible = false;
         unsafe { ShowWindow(self.window, 0) };
@@ -466,6 +519,13 @@ impl VideoPlayer {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        if let Some(input_conf_path) = self.input_conf_path.take() {
+            let _ = fs::remove_file(input_conf_path);
+        }
+        self.actions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.ready = false;
         state.pid = None;
@@ -493,6 +553,33 @@ impl Drop for VideoPlayer {
     }
 }
 
+struct EnableProcessChildren {
+    process_id: u32,
+}
+
+unsafe extern "system" fn enable_process_child(window: isize, parameter: isize) -> i32 {
+    let context = unsafe { &*(parameter as *const EnableProcessChildren) };
+    let mut process_id = 0;
+    unsafe { GetWindowThreadProcessId(window, &mut process_id) };
+    if process_id == context.process_id {
+        // mpv creates its embedded renderer as a disabled child HWND. That
+        // makes Windows send pointer hits to the host instead of the renderer.
+        unsafe { EnableWindow(window, 1) };
+    }
+    1
+}
+
+fn enable_process_children(parent: isize, process_id: u32) {
+    let context = EnableProcessChildren { process_id };
+    unsafe {
+        EnumChildWindows(
+            parent,
+            enable_process_child,
+            &context as *const EnableProcessChildren as isize,
+        );
+    }
+}
+
 const PROPERTIES: &[&str] = &[
     "time-pos",
     "duration",
@@ -510,12 +597,75 @@ const PROPERTIES: &[&str] = &[
     "audio-codec-name",
 ];
 
+const INPUT_CONF: &str = "MBTN_LEFT script-message chillhub left-click\nMBTN_LEFT_DBL script-message chillhub double-click\n";
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(250);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MouseMessage {
+    LeftClick,
+    DoubleClick,
+}
+
+fn parse_mouse_message(message: &Value) -> Option<MouseMessage> {
+    if message["event"] != "client-message" {
+        return None;
+    }
+    let args = message["args"].as_array()?;
+    if args.len() != 2 || args[0].as_str()? != "chillhub" {
+        return None;
+    }
+    match args[1].as_str()? {
+        "left-click" => Some(MouseMessage::LeftClick),
+        "double-click" => Some(MouseMessage::DoubleClick),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct ClickCoalescer {
+    pending_single: Option<Instant>,
+    suppress_single_until: Option<Instant>,
+}
+
+impl ClickCoalescer {
+    fn push(&mut self, message: MouseMessage, now: Instant) -> Option<VideoAction> {
+        match message {
+            MouseMessage::LeftClick => {
+                if self.suppress_single_until.is_some_and(|until| now < until) {
+                    return None;
+                }
+                self.pending_single = Some(now + DOUBLE_CLICK_WINDOW);
+                None
+            }
+            MouseMessage::DoubleClick => {
+                self.pending_single = None;
+                self.suppress_single_until = Some(now + DOUBLE_CLICK_WINDOW);
+                Some(VideoAction::ToggleFullscreen)
+            }
+        }
+    }
+
+    fn take_expired(&mut self, now: Instant) -> Option<VideoAction> {
+        if self.pending_single.is_some_and(|deadline| now >= deadline) {
+            self.pending_single = None;
+            Some(VideoAction::TogglePause)
+        } else {
+            None
+        }
+    }
+}
+
+struct WorkerShared {
+    state: Arc<Mutex<VideoStatus>>,
+    actions: Arc<Mutex<VecDeque<VideoAction>>>,
+    stop: Arc<AtomicBool>,
+}
+
 fn run_worker(
     pipe_name: String,
     process: isize,
     commands: mpsc::Receiver<Value>,
-    state: Arc<Mutex<VideoStatus>>,
-    stop: Arc<AtomicBool>,
+    shared: WorkerShared,
     mut diagnostics: File,
     address: String,
 ) {
@@ -523,15 +673,17 @@ fn run_worker(
         &pipe_name,
         process,
         &commands,
-        &state,
-        &stop,
+        &shared,
         &mut diagnostics,
         &address,
     );
     if let Err(error) = result
-        && !stop.load(Ordering::Acquire)
+        && !shared.stop.load(Ordering::Acquire)
     {
-        let mut status = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut status = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         status.error = Some(error);
         status.ready = false;
         let _ = writeln!(
@@ -546,14 +698,13 @@ fn communicate(
     pipe_name: &str,
     process: isize,
     commands: &mpsc::Receiver<Value>,
-    state: &Arc<Mutex<VideoStatus>>,
-    stop: &AtomicBool,
+    shared: &WorkerShared,
     diagnostics: &mut File,
     address: &str,
 ) -> Result<(), String> {
     let start = Instant::now();
     let mut pipe = loop {
-        if stop.load(Ordering::Acquire) {
+        if shared.stop.load(Ordering::Acquire) {
             return Ok(());
         }
         if unsafe { WaitForSingleObject(process as *mut c_void, 0) } == 0 {
@@ -574,9 +725,10 @@ fn communicate(
         json!({"command": ["loadfile", address, "replace"]}),
     )?;
     let mut pending = Vec::new();
+    let mut clicks = ClickCoalescer::default();
     let mut last_poll = Instant::now() - Duration::from_secs(1);
     let mut last_log = Instant::now() - Duration::from_secs(1);
-    while !stop.load(Ordering::Acquire) {
+    while !shared.stop.load(Ordering::Acquire) {
         if unsafe { WaitForSingleObject(process as *mut c_void, 0) } == 0 {
             return Err("Видеоплеер завершился. Подробности в журнале mpv.".into());
         }
@@ -596,15 +748,37 @@ fn communicate(
         while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=newline).collect();
             if let Ok(value) = serde_json::from_slice::<Value>(&line) {
-                let mut status = state.lock().unwrap_or_else(|error| error.into_inner());
+                if let Some(message) = parse_mouse_message(&value)
+                    && let Some(action) = clicks.push(message, Instant::now())
+                {
+                    shared
+                        .actions
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push_back(action);
+                }
+                let mut status = shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
                 apply_message(&mut status, &value);
             }
+        }
+        if let Some(action) = clicks.take_expired(Instant::now()) {
+            shared
+                .actions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push_back(action);
         }
         if pending.len() > 1024 * 1024 {
             return Err("Слишком длинный ответ видеоплеера".into());
         }
         if last_log.elapsed() >= Duration::from_secs(1) {
-            let status = state.lock().unwrap_or_else(|error| error.into_inner());
+            let status = shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let _ = writeln!(
                 diagnostics,
                 "{}",
@@ -741,6 +915,102 @@ fn apply_message(status: &mut VideoStatus, message: &Value) {
 mod tests {
     use std::os::windows::io::FromRawHandle;
 
+    #[test]
+    fn mouse_input_accepts_only_exact_chillhub_messages() {
+        assert_eq!(
+            parse_mouse_message(&json!({
+                "event": "client-message",
+                "args": ["chillhub", "left-click"]
+            })),
+            Some(MouseMessage::LeftClick)
+        );
+        assert_eq!(
+            parse_mouse_message(&json!({
+                "event": "client-message",
+                "args": ["chillhub", "double-click"]
+            })),
+            Some(MouseMessage::DoubleClick)
+        );
+        for message in [
+            json!({"event":"property-change","args":["chillhub","left-click"]}),
+            json!({"event":"client-message","args":["other","left-click"]}),
+            json!({"event":"client-message","args":["chillhub","left-click","extra"]}),
+            json!({"event":"client-message","args":["chillhub","unknown"]}),
+            json!({"event":"client-message","args":["chillhub",1]}),
+        ] {
+            assert_eq!(parse_mouse_message(&message), None);
+        }
+    }
+
+    #[test]
+    fn single_click_waits_and_double_click_cancels_pause() {
+        let start = Instant::now();
+        let mut clicks = ClickCoalescer::default();
+        assert_eq!(clicks.push(MouseMessage::LeftClick, start), None);
+        assert_eq!(
+            clicks.take_expired(start + Duration::from_millis(249)),
+            None
+        );
+        assert_eq!(
+            clicks.take_expired(start + Duration::from_millis(250)),
+            Some(VideoAction::TogglePause)
+        );
+
+        assert_eq!(
+            clicks.push(MouseMessage::LeftClick, start + Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            clicks.push(
+                MouseMessage::DoubleClick,
+                start + Duration::from_millis(1100)
+            ),
+            Some(VideoAction::ToggleFullscreen)
+        );
+        assert_eq!(
+            clicks.push(MouseMessage::LeftClick, start + Duration::from_millis(1150)),
+            None
+        );
+        assert_eq!(
+            clicks.take_expired(start + Duration::from_millis(1400)),
+            None
+        );
+        assert_eq!(
+            clicks.push(MouseMessage::LeftClick, start + Duration::from_millis(1401)),
+            None
+        );
+        assert_eq!(
+            clicks.take_expired(start + Duration::from_millis(1651)),
+            Some(VideoAction::TogglePause)
+        );
+    }
+
+    #[test]
+    fn scoped_input_config_contains_only_the_two_video_actions() {
+        assert_eq!(
+            INPUT_CONF,
+            "MBTN_LEFT script-message chillhub left-click\nMBTN_LEFT_DBL script-message chillhub double-click\n"
+        );
+        assert!(!INPUT_CONF.contains("include"));
+    }
+
+    #[test]
+    fn take_actions_drains_the_ui_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Host::new();
+        let mut player = fixture(&host, dir.path());
+        player
+            .actions
+            .lock()
+            .unwrap()
+            .extend([VideoAction::TogglePause, VideoAction::ToggleFullscreen]);
+        assert_eq!(
+            player.take_actions(),
+            vec![VideoAction::TogglePause, VideoAction::ToggleFullscreen]
+        );
+        assert!(player.take_actions().is_empty());
+    }
+
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn CreateNamedPipeW(
@@ -785,8 +1055,10 @@ mod tests {
         assert_ne!(handle as isize, -1);
         let mut server = unsafe { File::from_raw_handle(handle) };
         let state = Arc::new(Mutex::new(VideoStatus::default()));
+        let actions = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_state = Arc::clone(&state);
+        let worker_actions = Arc::clone(&actions);
         let worker_stop = Arc::clone(&stop);
         let (sender, receiver) = mpsc::channel();
         let mut diagnostics = File::create(dir.path().join("video.jsonl")).unwrap();
@@ -796,8 +1068,11 @@ mod tests {
                 &name,
                 unsafe { GetCurrentProcess() } as isize,
                 &receiver,
-                &worker_state,
-                &worker_stop,
+                &WorkerShared {
+                    state: worker_state,
+                    actions: worker_actions,
+                    stop: worker_stop,
+                },
                 &mut diagnostics,
                 address,
             )
@@ -879,6 +1154,37 @@ mod tests {
         let executable = dir.join("invalid-mpv.exe");
         fs::write(&executable, b"not an executable").unwrap();
         VideoPlayer::new(host.0, executable, dir.join("logs")).unwrap()
+    }
+
+    #[test]
+    fn embedded_mpv_child_is_enabled_only_for_its_own_process() {
+        let host = Host::new();
+        let class: Vec<u16> = OsStr::new("STATIC").encode_wide().chain(Some(0)).collect();
+        let child = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0x4800_0004, // WS_CHILD | WS_DISABLED | SS_BLACKRECT
+                0,
+                0,
+                32,
+                32,
+                host.0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(child, 0);
+        assert_eq!(unsafe { IsWindowEnabled(child) }, 0);
+
+        enable_process_children(host.0, std::process::id().wrapping_add(1));
+        assert_eq!(unsafe { IsWindowEnabled(child) }, 0);
+
+        enable_process_children(host.0, std::process::id());
+        assert_ne!(unsafe { IsWindowEnabled(child) }, 0);
+        unsafe { DestroyWindow(child) };
     }
 
     #[test]
@@ -1086,6 +1392,15 @@ mod tests {
             assert!(player.worker.is_none());
             assert!(!player.reveal_if_ready());
         }
+        assert!(
+            !fs::read_dir(dir.path().join("logs"))
+                .unwrap()
+                .flatten()
+                .any(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("mpv-input-"))
+        );
         drop(player);
         assert_eq!(unsafe { IsWindow(child) }, 0);
         assert_ne!(unsafe { IsWindow(host.0) }, 0);

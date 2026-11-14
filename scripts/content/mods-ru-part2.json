@@ -111,7 +111,7 @@
   },
   "jill920-WedgeProtection-1.0.4": {
     "russianName": "Защита при застревании",
-    "description": "Не даёт игроку получать урон, когда он зажат между крутыми стенами.",
+    "description": "Не даёт игроку получать урон, если он застрял между крутыми склонами.",
     "category": "Исправления"
   },
   "JJplayz-HangingOn-2.1.0": {
@@ -150,8 +150,8 @@
     "category": "Косметика"
   },
   "Kalamies-MorePlayers-0.1.1": {
-    "russianName": "Рыбалка до 32 игроков",
-    "description": "Увеличивает размер компании в How to Fish с 8 до 32 игроков.",
+    "russianName": "Больше рыбаков",
+    "description": "Увеличивает максимальный размер лобби How to Fish.",
     "category": "Геймплей"
   },
   "kayky21-NecoArcHairCosmetic-1.0.0": {
@@ -261,12 +261,12 @@
   },
   "LengSword-BetterQuicksave-0.1.2": {
     "russianName": "Расширенное быстрое сохранение",
-    "description": "Расширяет функцию быстрого сохранения. Конкретные изменения в кратком описании автора не перечислены.",
+    "description": "Позволяет сохранять быстрое сохранение после загрузки и создавать резервные копии при сохранении.",
     "category": "Удобство"
   },
   "LengSword-BetterSnowball-0.1.3": {
     "russianName": "Дополнения для снежков",
-    "description": "Добавляет возможности, связанные со снежками; краткое описание автора не уточняет их список.",
+    "description": "Снимает ограничение на размер снежков и настраивает места их роста, увеличение размера и силу броска.",
     "category": "Геймплей"
   },
   "LengSword-ClimbInfoTracker-0.3.2": {
@@ -335,8 +335,8 @@
     "category": "Геймплей"
   },
   "loaforc-FacilityMeltdown-2.7.5": {
-    "russianName": "Опасное извлечение аппарата",
-    "description": "Автор предупреждает об опасности извлечения аппарата; конкретные последствия в кратком описании не раскрыты.",
+    "russianName": "Авария реактора после извлечения аппарата",
+    "description": "После извлечения аппарата запускает аварию реактора: нужно успеть эвакуироваться до взрыва.",
     "category": "Геймплей"
   },
   "loaforc-loaforcsSoundAPI_REPO-1.0.1": {
@@ -487,7 +487,7 @@
   },
   "MelanieMelicious-MelanieMelicious_2_sToRy_ShIp__works_w_Wider_Ship_Mod-2.2.14": {
     "russianName": "Двухэтажный корабль",
-    "description": "Делает корабль двухэтажным. Автор указывает совместимость с Wider Ship Mod, Celestial Tint и Ship Windows после сброса его настроек.",
+    "description": "Делает корабль двухэтажным. Совместим с Wider Ship Mod и Celestial Tint; для совместной работы с Ship Windows нужна дополнительная настройка.",
     "category": "Контент"
   },
   "MelanieMelicious-MelanieMelicious_Utility_Furniture_Pack-2.0.5": {
@@ -533,7 +533,7 @@
   },
   "mr_hat-BasedDecorPlacement-0.1.0": {
     "russianName": "Удобное размещение декора",
-    "description": "Перерабатывает управление режимом строительства и исправляет неудобства размещаемых предметов.",
+    "description": "Перерабатывает управление режимом строительства и исправляет проблемы с декором корабля.",
     "category": "Удобство"
   },
   "mr_hat-BasedItemSaving-0.1.4": {
@@ -704,8 +704,8 @@
     "source": "https://thunderstore.io/api/experimental/package/pacoito/itolib/0.9.3/readme/"
   },
   "Pahsiv-MyBananaDontHurtMe-0.1.7": {
-    "russianName": "Оптимизация изображения",
-    "description": "Автор заявляет улучшение частоты кадров, не уточняя применяемые изменения.",
+    "russianName": "Оптимизация производительности",
+    "description": "Клиентская оптимизация для лобби Normandy Beach: скрывает невидимые банановые кожуры и грибы и реже пересчитывает физику тел далёких игроков.",
     "category": "Исправления"
   },
   "Pahsiv-MyPrevision-0.1.3": {
@@ -785,7 +785,7 @@
   },
   "pierre-MoreCuteness-0.1.1": {
     "russianName": "Милые образы",
-    "description": "Добавляет косметические предметы, которые автор описывает как более милые.",
+    "description": "Добавляет наушники, анимированные шарики, причёски, кроличьи уши, юбки, топы, очки и капюшон.",
     "category": "Косметика"
   },
   "pooblives-Item_Multiplier_with_super_bean_mode-1.0.1": {

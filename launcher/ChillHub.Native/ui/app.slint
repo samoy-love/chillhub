@@ -46,11 +46,14 @@ component Icon inherits Image {
         root.name == "compass" ? @image-url("assets/compass.svg") :
         root.name == "external" ? @image-url("assets/external.svg") :
         root.name == "online-video" ? @image-url("assets/online-video.svg") :
+        root.name == "gallery" ? @image-url("assets/gallery.svg") :
         root.name == "tune" ? @image-url("assets/tune.svg") :
         root.name == "book" ? @image-url("assets/book.svg") :
         root.name == "check" ? @image-url("assets/check.svg") :
         root.name == "volume" ? @image-url("assets/volume.svg") :
+        root.name == "volume-muted" ? @image-url("assets/volume-muted.svg") :
         root.name == "expand" ? @image-url("assets/expand.svg") :
+        root.name == "shrink" ? @image-url("assets/shrink.svg") :
         root.name == "folder" ? @image-url("assets/folder.svg") :
         root.name == "shield" ? @image-url("assets/shield.svg") : @image-url("assets/info.svg");
 }
@@ -441,15 +444,26 @@ export component AppWindow inherits Window {
     in property <[string]> mod-categories;
     in property <string> mod-category: "Все";
     in property <image> gallery-image;
+    in property <float> gallery-image-aspect: 1.7778;
+    in property <string> gallery-image-state: "ready";
     in property <string> gallery-caption;
     in property <int> gallery-index;
     in property <bool> selected-media-is-video;
     in property <bool> video-playing;
+    in property <bool> video-muted: false;
     in property <float> video-position;
     in property <float> video-duration;
     in property <float> video-volume: 0.75;
     in property <string> video-time-label: "0:00 / 0:00";
     in property <bool> video-failed: false;
+    in-out property <bool> viewer-fullscreen: false;
+    in-out property <bool> viewer-quality-open: false;
+    in-out property <bool> viewer-filmstrip-open: true;
+    property <bool> viewer-filmstrip-restore: true;
+    in-out property <float> viewer-photo-zoom: 1.0;
+    in-out property <length> viewer-photo-pan-x: 0px;
+    in-out property <length> viewer-photo-pan-y: 0px;
+    in-out property <length> viewer-strip-offset: 0px;
     in property <[int]> video-qualities;
     in property <int> video-quality;
     callback video-quality-selected(int);
@@ -514,10 +528,10 @@ export component AppWindow inherits Window {
     in property <bool> task-paused;
     in property <string> task-status;
     out property <bool> show-video: root.gallery-open && root.selected-media-is-video;
-    out property <length> video-x: root.modal-x + 19px;
-    out property <length> video-y: root.modal-y + 85px;
-    out property <length> video-width: root.modal-width - 38px;
-    out property <length> video-height: root.media-stage-height;
+    out property <length> video-x: root.viewer-x + 18px;
+    out property <length> video-y: root.viewer-y + root.viewer-stage-y;
+    out property <length> video-width: root.viewer-width - 36px;
+    out property <length> video-height: root.viewer-stage-height;
 
     callback game-selected(int);
     callback search-edited(string);
@@ -527,11 +541,14 @@ export component AppWindow inherits Window {
     callback play-requested();
     callback panel-requested(string);
     callback media-selected(int);
+    callback media-retry();
     callback panel-closed();
     callback gallery-step(int);
     callback mod-search-edited(string);
     callback mod-category-selected(string);
     callback video-toggle();
+    callback video-mute-toggle();
+    callback viewer-fullscreen-changed(bool);
     callback video-seek(float);
     callback video-volume-changed(float);
     callback video-geometry-changed();
@@ -554,9 +571,24 @@ export component AppWindow inherits Window {
     property <float> spacious: max(0, min(1, (root.width - root.sidebar-width - root.page-padding * 2 - 680px) / 160px));
     property <length> hero-height: max(min(330px, max(280px, root.height * 0.342)), hero-description.y + hero-description.preferred-height + 24px);
     property <length> media-tile-height: root.media.length > 0 ? min(153px, (root.width - root.sidebar-width - root.page-padding * 2 - 36px) / 4 / 2.03) : 56px;
-    property <bool> gallery-open: root.panel-kind == "gallery" || root.panel-kind == "trailer";
-    property <length> modal-width: min(root.gallery-open ? 970px : 720px, root.width - 64px);
-    property <length> modal-height: root.gallery-open ? root.media-stage-height + 235px : min(650px, root.height - 64px, root.panel-kind == "confirm" ? max(280px, confirmation-measure.preferred-height + 212px) : root.panel-kind == "update" ? 460px : root.panel-kind == "security" ? 530px : root.panel-kind == "help" ? 500px : 650px);
+    out property <bool> gallery-open: root.panel-kind == "gallery" || root.panel-kind == "trailer";
+    property <length> viewer-x: root.viewer-fullscreen ? 0px : 20px;
+    property <length> viewer-y: root.viewer-fullscreen ? 0px : 20px;
+    property <length> viewer-width: root.viewer-fullscreen ? root.width : root.width - 40px;
+    property <length> viewer-height: root.viewer-fullscreen ? root.height : root.height - 40px;
+    property <length> viewer-stage-y: 64px;
+    property <length> viewer-footer-height: root.viewer-filmstrip-open ? 128px : 68px;
+    property <length> viewer-stage-height: max(100px, root.viewer-height - root.viewer-stage-y - root.viewer-footer-height - 18px);
+    property <length> viewer-image-width: min(root.viewer-width - 36px, root.viewer-stage-height * root.gallery-image-aspect);
+    property <length> viewer-image-height: min(root.viewer-stage-height, (root.viewer-width - 36px) / max(0.01, root.gallery-image-aspect));
+    function clamp-viewer-photo-pan() {
+        let max-x = max(0px, (root.viewer-image-width * root.viewer-photo-zoom - (root.viewer-width - 36px)) / 2);
+        let max-y = max(0px, (root.viewer-image-height * root.viewer-photo-zoom - root.viewer-stage-height) / 2);
+        root.viewer-photo-pan-x = clamp(root.viewer-photo-pan-x, -max-x, max-x);
+        root.viewer-photo-pan-y = clamp(root.viewer-photo-pan-y, -max-y, max-y);
+    }
+    property <length> modal-width: min(720px, root.width - 64px);
+    property <length> modal-height: min(650px, root.height - 64px, root.panel-kind == "confirm" ? max(280px, confirmation-measure.preferred-height + 212px) : root.panel-kind == "update" ? 460px : root.panel-kind == "security" ? 530px : root.panel-kind == "help" ? 500px : 650px);
     property <length> confirmation-content-width: root.modal-width - 88px;
     confirmation-measure := Text {
         visible: false; width: root.confirmation-content-width;
@@ -565,7 +597,6 @@ export component AppWindow inherits Window {
     }
     property <length> modal-x: (root.width - root.modal-width) / 2;
     property <length> modal-y: (root.height - root.modal-height) / 2;
-    property <length> media-stage-height: min((root.modal-width - 38px) * 9 / 16, root.height * 0.58, max(100px, root.height - 267px));
     property <float> hero-opacity: root.hero-progress;
     animate hero-opacity { duration: root.reduced-motion || root.hero-progress == 0 ? 0ms : 210ms; easing: ease-out; }
     property <float> panel-opacity: root.panel-kind == "" ? 0 : 1;
@@ -577,6 +608,16 @@ export component AppWindow inherits Window {
             if top + library-scroll.content-y < 0px { library-scroll.content-y = -top; }
             else if top + 48px + library-scroll.content-y > library-scroll.height { library-scroll.content-y = library-scroll.height - top - 48px; }
             library-scroll.content-y = clamp(library-scroll.content-y, min(0px, library-scroll.height - library-scroll.content-height), 0px);
+        }
+    }
+    function reveal-viewer-selection() {
+        if root.gallery-open && root.viewer-filmstrip-open && root.media.length > 0 {
+            let left = root.gallery-index * 106px;
+            let right = left + 98px;
+            let visible = root.viewer-width - 36px;
+            let content = root.media.length * 106px - 8px;
+            if left + root.viewer-strip-offset < 0px { root.viewer-strip-offset = clamp(-left, min(0px, visible - content), 0px); }
+            else if right + root.viewer-strip-offset > visible { root.viewer-strip-offset = clamp(visible - right, min(0px, visible - content), 0px); }
         }
     }
     changed selected-game => { root.reveal-selected-game(); }
@@ -593,21 +634,35 @@ export component AppWindow inherits Window {
     changed video-width => { root.video-geometry-changed(); }
     changed video-height => { root.video-geometry-changed(); }
     changed show-video => { root.video-geometry-changed(); }
-    changed panel-kind => { if root.panel-kind == "settings" { root.settings-section = 0; } root.feedback-exit-confirm = false; root.feedback-dirty = false; if root.panel-kind == "" { keyboard.focus(); } }
+    changed viewer-fullscreen => { if root.viewer-fullscreen { root.viewer-filmstrip-restore = root.viewer-filmstrip-open; root.viewer-filmstrip-open = false; } else { root.viewer-filmstrip-open = root.viewer-filmstrip-restore; } root.viewer-fullscreen-changed(root.viewer-fullscreen); }
+    changed gallery-index => { root.viewer-quality-open = false; root.viewer-photo-zoom = 1.0; root.viewer-photo-pan-x = 0px; root.viewer-photo-pan-y = 0px; keyboard.focus(); root.reveal-viewer-selection(); }
+    changed selected-media-is-video => { if !root.selected-media-is-video { root.viewer-quality-open = false; } }
+    changed media => { root.reveal-viewer-selection(); }
+    changed viewer-filmstrip-open => { root.reveal-viewer-selection(); }
+    changed viewer-photo-zoom => { root.clamp-viewer-photo-pan(); }
+    changed viewer-stage-height => { root.clamp-viewer-photo-pan(); }
+    changed viewer-width => { root.clamp-viewer-photo-pan(); }
+    changed panel-kind => { if root.panel-kind == "settings" { root.settings-section = 0; } if root.gallery-open { keyboard.focus(); root.reveal-viewer-selection(); } else { root.viewer-quality-open = false; root.viewer-photo-zoom = 1.0; if root.viewer-fullscreen { root.viewer-fullscreen = false; } } root.feedback-exit-confirm = false; root.feedback-dirty = false; if root.panel-kind == "" { keyboard.focus(); } }
 
     forward-focus: keyboard;
     keyboard := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
         focus-on-tab-navigation: false;
         capture-key-pressed(event) => {
+            if event.text == Key.Escape && root.gallery-open && root.viewer-quality-open { root.viewer-quality-open = false; return accept; }
+            if event.text == Key.Escape && root.gallery-open && root.viewer-fullscreen { root.viewer-fullscreen = false; return accept; }
             if event.text == Key.Escape && root.panel-kind != "" { if root.feedback-exit-confirm { root.feedback-exit-confirm = false; } else { root.request-close(); } return accept; }
             if event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && !event.modifiers.shift && (event.text == "k" || event.text == "K" || event.text == "л" || event.text == "Л") && root.panel-kind == "" { library-search.focus(); return accept; }
             if event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && !event.modifiers.shift && (event.text == "r" || event.text == "R" || event.text == "к" || event.text == "К") && root.panel-kind == "" && !root.operation-busy && !root.loading { root.action-requested("retry-catalog"); return accept; }
             reject
         }
         key-pressed(event) => {
-            if root.gallery-open && event.text == Key.LeftArrow { root.gallery-step(-1); return accept; }
-            if root.gallery-open && event.text == Key.RightArrow { root.gallery-step(1); return accept; }
+            if root.gallery-open && (event.text == "f" || event.text == "F" || event.text == "а" || event.text == "А" || event.text == Key.F11) { root.viewer-fullscreen = !root.viewer-fullscreen; return accept; }
+            if root.gallery-open && event.modifiers.shift && event.text == Key.LeftArrow { root.gallery-step(-1); return accept; }
+            if root.gallery-open && event.modifiers.shift && event.text == Key.RightArrow { root.gallery-step(1); return accept; }
+            if root.gallery-open && !event.modifiers.shift && event.text == Key.LeftArrow { if root.show-video { root.video-seek(max(0, root.video-position - 5)); } else { root.gallery-step(-1); } return accept; }
+            if root.gallery-open && !event.modifiers.shift && event.text == Key.RightArrow { if root.show-video { root.video-seek(min(root.video-duration, root.video-position + 5)); } else { root.gallery-step(1); } return accept; }
             if root.show-video && event.text == " " { root.video-toggle(); return accept; }
+            if root.show-video && (event.text == "m" || event.text == "M" || event.text == "ь" || event.text == "Ь") { root.video-mute-toggle(); return accept; }
             if root.panel-kind == "" && event.text == Key.PageDown {
                 main-scroll.content-y = max(min(0px, main-scroll.height - main-scroll.content-height), main-scroll.content-y - main-scroll.height * 0.85);
                 return accept;
@@ -823,22 +878,89 @@ export component AppWindow inherits Window {
         }
         if root.panel-kind != "": Rectangle {
             x: 0px; y: 0px; width: parent.width; height: parent.height;
-        modal := Rectangle {
+        if root.gallery-open: viewer := Rectangle {
+            x: root.viewer-x; y: root.viewer-y; width: root.viewer-width; height: root.viewer-height;
+            background: #08080b; border-radius: root.viewer-fullscreen ? 0px : 16px;
+            border-width: root.viewer-fullscreen ? 0px : 1px; border-color: #393641;
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; scroll-event(event) => { accept } }
+            Text { x: 18px; y: 6px; width: parent.width - 150px; height: 24px; text: root.game-title; color: Theme.ink; font-size: 18px; font-weight: 650; overflow: elide; vertical-alignment: center; }
+            Text { x: 18px; y: 30px; width: parent.width - 150px; height: 17px; text: root.gallery-caption + "  ·  " + (root.gallery-index + 1) + " / " + root.media.length; color: Theme.dim; font-size: 11px; overflow: elide; vertical-alignment: center; }
+            ActionButton { x: parent.width - 112px; y: 8px; width: 36px; height: 36px; compact: true; quiet: true; icon: root.viewer-fullscreen ? "shrink" : "expand"; accessible-name: root.viewer-fullscreen ? "Выйти из полноэкранного режима" : "На весь экран"; clicked => { root.viewer-fullscreen = !root.viewer-fullscreen; } }
+            ActionButton { x: parent.width - 66px; y: 8px; width: 36px; height: 36px; compact: true; quiet: true; icon: "close"; accessible-name: "Закрыть просмотр"; clicked => { root.request-close(); } }
+            Rectangle { x: 18px; y: root.viewer-stage-y; width: parent.width - 36px; height: root.viewer-stage-height; border-radius: 10px; background: #030304; clip: true;
+                if !root.show-video && root.gallery-image-state == "ready": TouchArea {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    property <length> pan-origin-x;
+                    property <length> pan-origin-y;
+                    pointer-event(event) => { if event.button == PointerEventButton.left && event.kind == PointerEventKind.down { self.pan-origin-x = root.viewer-photo-pan-x; self.pan-origin-y = root.viewer-photo-pan-y; } if event.button == PointerEventButton.left && event.kind == PointerEventKind.up { keyboard.focus(); } }
+                    moved => {
+                        if self.pressed && root.viewer-photo-zoom > 1.0 {
+                            let max-x = max(0px, (root.viewer-image-width * root.viewer-photo-zoom - parent.width) / 2);
+                            let max-y = max(0px, (root.viewer-image-height * root.viewer-photo-zoom - parent.height) / 2);
+                            root.viewer-photo-pan-x = clamp(self.pan-origin-x + self.mouse-x - self.pressed-x, -max-x, max-x);
+                            root.viewer-photo-pan-y = clamp(self.pan-origin-y + self.mouse-y - self.pressed-y, -max-y, max-y);
+                        }
+                    }
+                    double-clicked => { root.viewer-fullscreen = !root.viewer-fullscreen; keyboard.focus(); }
+                    scroll-event(event) => { if event.delta-y != 0 { root.viewer-photo-zoom = clamp(root.viewer-photo-zoom + (event.delta-y > 0 ? 0.5 : -0.5), 1.0, 3.0); } keyboard.focus(); accept }
+                }
+                if !root.show-video && root.gallery-image-state == "ready": Image {
+                    x: (parent.width - root.viewer-image-width * root.viewer-photo-zoom) / 2 + root.viewer-photo-pan-x;
+                    y: (parent.height - root.viewer-image-height * root.viewer-photo-zoom) / 2 + root.viewer-photo-pan-y;
+                    width: root.viewer-image-width * root.viewer-photo-zoom; height: root.viewer-image-height * root.viewer-photo-zoom;
+                    source: root.gallery-image; image-fit: fill;
+                }
+                if root.show-video: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; border-radius: 10px; background: root.video-failed ? #141318 : #030304;
+                    if root.video-failed: VerticalLayout { x: 20px; y: 0px; width: parent.width - 40px; height: parent.height; alignment: center; spacing: 10px;
+                        Text { text: "Не удалось загрузить видео"; color: Theme.ink; font-size: 17px; horizontal-alignment: center; }
+                        Text { text: "Выберите другое качество или откройте ролик ещё раз."; color: Theme.dim; font-size: 13px; horizontal-alignment: center; }
+                    ActionButton { text: "Повторить"; icon: "play"; compact: true; clicked => { root.media-retry(); } }
+                    }
+                    if !root.video-failed: Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: "Открываем видео…"; wrap: word-wrap; color: Theme.dim; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                if !root.show-video && root.gallery-image-state != "ready": VerticalLayout { x: 20px; y: 0px; width: parent.width - 40px; height: parent.height; alignment: center; spacing: 10px;
+                    Text { text: root.gallery-image-state == "loading" ? "Загружаем изображение…" : "Не удалось загрузить изображение"; color: Theme.ink; font-size: 16px; horizontal-alignment: center; }
+                    if root.gallery-image-state == "error": ActionButton { text: "Попробовать ещё раз"; icon: "download"; compact: true; clicked => { root.media-retry(); } }
+                }
+                if !root.show-video: ActionButton { x: 10px; y: (parent.height - 38px) / 2; width: 38px; height: 38px; compact: true; quiet: true; icon: "left"; accessible-name: "Предыдущий материал"; clicked => { root.gallery-step(-1); } }
+                if !root.show-video: ActionButton { x: parent.width - 48px; y: (parent.height - 38px) / 2; width: 38px; height: 38px; compact: true; quiet: true; icon: "right"; accessible-name: "Следующий материал"; clicked => { root.gallery-step(1); } }
+            }
+            if root.show-video: SeekBar { x: 18px; y: root.viewer-stage-y + root.viewer-stage-height + 7px; width: parent.width - 36px; height: 14px; maximum: max(1, root.video-duration); value: root.video-position; label: "Позиция видео"; seek(value) => { root.video-seek(value); } }
+            Rectangle { x: 18px; y: root.viewer-stage-y + root.viewer-stage-height + 25px; width: parent.width - 36px; height: 39px; background: #111015; border-radius: 9px;
+                if root.show-video: ActionButton { x: 4px; y: 2px; width: 35px; height: 35px; compact: true; quiet: true; icon: root.video-playing ? "pause" : "play"; accessible-name: root.video-playing ? "Приостановить видео" : "Воспроизвести видео"; clicked => { root.video-toggle(); } }
+                if root.show-video: Text { x: 45px; y: 0px; width: 95px; height: 39px; text: root.video-time-label; color: #d0cad9; font-size: 11px; vertical-alignment: center; }
+                if root.show-video: ActionButton { x: parent.width - 377px; y: 2px; width: 35px; height: 35px; compact: true; quiet: true; icon: root.video-muted ? "volume-muted" : "volume"; accessible-name: "Включить или выключить звук"; clicked => { root.video-mute-toggle(); } }
+                if root.show-video: SeekBar { x: parent.width - 336px; y: 6px; width: 78px; height: 27px; value: root.video-volume; label: "Громкость"; seek(value) => { root.video-volume-changed(value); } }
+                if !root.show-video: ActionButton { x: parent.width - 334px; y: 2px; width: 34px; height: 35px; compact: true; quiet: true; text: "−"; accessible-name: "Уменьшить изображение"; enabled: root.viewer-photo-zoom > 1.0; clicked => { root.viewer-photo-zoom = max(1.0, root.viewer-photo-zoom - 0.5); } }
+                if !root.show-video: ActionButton { x: parent.width - 296px; y: 2px; width: 72px; height: 35px; compact: true; quiet: true; text: root.viewer-photo-zoom == 1.0 ? "Вписать" : root.viewer-photo-zoom == 1.5 ? "150%" : root.viewer-photo-zoom == 2.0 ? "200%" : root.viewer-photo-zoom == 2.5 ? "250%" : "300%"; accessible-name: "Вписать изображение"; clicked => { root.viewer-photo-zoom = 1.0; } }
+                if !root.show-video: ActionButton { x: parent.width - 218px; y: 2px; width: 34px; height: 35px; compact: true; quiet: true; text: "+"; accessible-name: "Увеличить изображение"; enabled: root.viewer-photo-zoom < 3.0; clicked => { root.viewer-photo-zoom = min(3.0, root.viewer-photo-zoom + 0.5); } }
+                if root.show-video && root.video-qualities.length > 1: ActionButton { x: parent.width - 258px; y: 2px; width: 84px; height: 35px; compact: true; quiet: true; text: root.video-quality + "p  ▾"; accessible-name: "Выбрать качество видео"; clicked => { root.viewer-quality-open = !root.viewer-quality-open; } }
+                ActionButton { x: parent.width - 168px; y: 2px; width: 34px; height: 35px; compact: true; quiet: true; icon: "gallery"; accessible-name: root.viewer-filmstrip-open ? "Скрыть ленту материалов" : "Показать ленту материалов"; clicked => { root.viewer-filmstrip-open = !root.viewer-filmstrip-open; } }
+                ActionButton { x: parent.width - 124px; y: 2px; width: 34px; height: 35px; compact: true; quiet: true; icon: "left"; accessible-name: "Предыдущий материал"; clicked => { root.gallery-step(-1); } }
+                ActionButton { x: parent.width - 80px; y: 2px; width: 34px; height: 35px; compact: true; quiet: true; icon: "right"; accessible-name: "Следующий материал"; clicked => { root.gallery-step(1); } }
+            }
+            if root.viewer-filmstrip-open: ScrollView {
+                x: 18px; y: root.viewer-height - 60px; width: parent.width - 36px; height: 52px;
+                content-width: max(self.visible-width, root.media.length * 106px - 8px); content-height: self.height;
+                content-x <=> root.viewer-strip-offset;
+                viewer-thumbnails := HorizontalLayout { x: 0px; y: 0px; width: max(parent.width, root.media.length * 106px - 8px); height: 52px; spacing: 8px; alignment: center;
+                    for item[i] in root.media: Rectangle { width: 98px; height: 52px; clip: true; border-radius: 7px; background: #24222c; Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: item.poster; image-fit: cover; } if item.is-video: Rectangle { x: 4px; y: 4px; width: 19px; height: 19px; border-radius: 5px; background: #0c0b10dd; Icon { x: 2px; y: 2px; width: 15px; height: 15px; name: "play"; tint: white; } } Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; border-radius: 7px; border-width: root.gallery-index == i ? 2px : 1px; border-color: root.gallery-index == i ? Theme.accent : #ffffff28; } accessible-role: button; accessible-label: item.caption; accessible-action-default => { root.media-selected(i); } TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => { root.media-selected(i); } } }
+                }
+            }
+            if root.viewer-quality-open: Rectangle { x: parent.width - 264px; y: root.viewer-filmstrip-open ? root.viewer-height - 60px : root.viewer-stage-y + root.viewer-stage-height + 27px; width: 216px; height: 34px; border-radius: 8px; border-width: 1px; border-color: #403b49; background: #1a1820;
+                HorizontalLayout { x: 4px; y: 2px; width: parent.width - 8px; height: parent.height - 4px; spacing: 4px;
+                    for quality in root.video-qualities: ActionButton { text: quality + "p"; height: 28px; compact: true; selected: root.video-quality == quality; clicked => { root.viewer-quality-open = false; root.video-quality-selected(quality); } }
+                }
+            }
+        }
+        if !root.gallery-open: modal := Rectangle {
             opacity: root.gallery-open ? 1 : root.panel-opacity;
             x: root.modal-x; y: root.modal-y;
             width: root.modal-width; height: root.modal-height;
             border-radius: 17px; border-width: 1px; border-color: #403c49; background: #1b1a20;
             TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; scroll-event(event) => { accept } }
             Text { x: 28px; y: 23px; width: parent.width - 104px; height: 34px; text: root.panel-title; color: Theme.ink; font-size: 28px; font-weight: 600; overflow: elide; }
-            Text { x: 28px; y: 60px; width: parent.width - (root.show-video && root.video-qualities.length > 1 ? 325px : 90px); height: 18px; text: root.panel-subtitle; color: Theme.dim; font-size: 13px; overflow: elide; }
-            if root.show-video && root.video-qualities.length > 1: HorizontalLayout {
-                x: parent.width - 280px; y: 49px; width: 252px; height: 30px; spacing: 6px;
-                for quality in root.video-qualities: ActionButton {
-                    text: quality + "p"; accessible-name: "Качество видео " + quality + "p";
-                    height: 30px; compact: true; selected: root.video-quality == quality;
-                    clicked => { root.video-quality-selected(quality); }
-                }
-            }
+            Text { x: 28px; y: 60px; width: parent.width - 90px; height: 18px; text: root.panel-subtitle; color: Theme.dim; font-size: 13px; overflow: elide; }
             modal-close := ActionButton {
                 property <string> active-panel: root.panel-kind;
                 init => { if root.gallery-open { keyboard.focus(); } else { self.focus(); } }
@@ -846,45 +968,6 @@ export component AppWindow inherits Window {
                 // the previously focused action belongs to the removed content.
                 changed active-panel => { if root.gallery-open { keyboard.focus(); } else { self.focus(); } }
                 x: parent.width - 48px; y: 17px; width: 32px; compact: true; icon: "close"; accessible-name: "Закрыть"; enabled: !root.operation-busy && !root.feedback-exit-confirm; clicked => { root.request-close(); }
-            }
-
-            if root.gallery-open: Rectangle {
-                x: 19px; y: 85px; width: parent.width - 38px; height: parent.height - 95px;
-                Rectangle { x: 0px; y: 0px;
-                    width: parent.width; height: root.media-stage-height;
-                    border-radius: 10px; background: #100f14;
-                    Image { x: 0px; y: 0px;  width: parent.width; height: parent.height; source: root.gallery-image; image-fit: contain; }
-                    // Changing the full error surface also invalidates pixels exposed by the hidden native player.
-                    if root.show-video: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; border-radius: 10px; background: root.video-failed ? #19181f : #100f14;
-                        Text { x: 24px; y: 0px; width: parent.width - 48px; height: parent.height; text: root.video-failed ? "Не удалось загрузить видео\nВыберите другое качество или откройте ролик ещё раз." : "Открываем видео…"; wrap: word-wrap; color: Theme.dim; horizontal-alignment: center; vertical-alignment: center; }
-                    }
-                    CornerMask { radius: 10px; outside: #1b1a20; }
-                }
-                if root.show-video: Rectangle { x: 0px;
-                    y: root.media-stage-height + 8px; width: parent.width; height: 36px;
-                    ActionButton { y: 0px;  x: 0px; width: 36px; height: 36px; icon: root.video-playing ? "pause" : "play"; accessible-name: root.video-playing ? "Приостановить видео" : "Воспроизвести видео"; quiet: true; clicked => { root.video-toggle(); } }
-                    Text { x: 47px; y: 0px; width: 100px; height: 36px; text: root.video-time-label; color: #c7c1d2; font-size: 11px; vertical-alignment: center; }
-                    SeekBar { x: 153px; y: 6px; width: parent.width - 301px; maximum: root.video-duration; value: root.video-position; label: "Позиция видео"; seek(value) => { root.video-seek(value); } }
-                    Icon { x: parent.width - 132px; y: 9px; name: "volume"; tint: Theme.dim; }
-                    SeekBar { x: parent.width - 105px; y: 6px; width: 100px; value: root.video-volume; label: "Громкость"; seek(value) => { root.video-volume-changed(value); } }
-                }
-                Text { x: 0px; y: root.media-stage-height + (root.show-video ? 55px : 14px); width: parent.width - 130px; height: 24px; text: root.gallery-caption + "  ·  " + (root.gallery-index + 1) + " / " + root.media.length; color: Theme.ink; font-size: 13px; font-weight: 500; overflow: elide; vertical-alignment: center; }
-                ActionButton { x: parent.width - 77px; y: root.media-stage-height + (root.show-video ? 50px : 9px); width: 34px; compact: true; icon: "left"; accessible-name: "Предыдущий материал"; clicked => { root.gallery-step(-1); } }
-                ActionButton { x: parent.width - 34px; y: root.media-stage-height + (root.show-video ? 50px : 9px); width: 34px; compact: true; icon: "right"; accessible-name: "Следующий материал"; clicked => { root.gallery-step(1); } }
-                for item[i] in root.media: Rectangle {
-                    x: i * 89px; y: root.media-stage-height + (root.show-video ? 92px : 51px); width: 81px; height: 48px;
-                    clip: true; background: #24222c;
-                    Image { x: 0px; y: 0px;  width: parent.width; height: parent.height; source: item.poster; image-fit: cover; }
-                    CornerMask { radius: 7px; outside: #1b1a20; }
-                    Rectangle { x: 0px; y: 0px;  width: parent.width; height: parent.height; border-radius: 7px; border-width: root.gallery-index == i ? 2px : 1px; border-color: root.gallery-index == i ? Theme.accent : #ffffff28; }
-                    if item.is-video: Icon { x: 31px; y: 14px; name: "play"; tint: white; }
-                    accessible-role: button; accessible-label: item.caption;
-                    accessible-action-default => { root.media-selected(i); }
-                    thumb-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
-                        key-pressed(event) => { if event.text == " " || event.text == Key.Return { root.media-selected(i); return accept; } reject }
-                        TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height;  mouse-cursor: pointer; clicked => { thumb-key.focus(); root.media-selected(i); } }
-                    }
-                }
             }
 
             if root.panel-kind == "mods": Rectangle {

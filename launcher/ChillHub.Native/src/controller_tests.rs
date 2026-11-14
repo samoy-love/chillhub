@@ -244,6 +244,8 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         gallery_index: 0,
         video: None,
         native_hwnd: 0,
+        viewer_restore: None,
+        viewer_previous_volume: None,
         video_timer: Timer::default(),
         toast_timer: Timer::default(),
         report_notices: Default::default(),
