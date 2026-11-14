@@ -1759,6 +1759,7 @@
 
   const GAME_TABS = [
     { id: 'overview', title: 'Обзор' },
+    { id: 'presentation', title: 'Для игроков' },
     { id: 'versions', title: 'Версии' },
     { id: 'gallery', title: 'Галерея' },
     { id: 'danger', title: 'Публикация и удаление' },
@@ -1776,15 +1777,18 @@
   /** Поля правки — из того, что прочитано с сервера. */
   function gameFields(gameId) {
     const src = D.games.find((g) => g.gameId === gameId) || {};
+    const raw = D.raw.games.find((g) => g.gameId === gameId) || {};
     return {
       gameId: gameId,
       title: src.title || '',
       exeRelativePath: src.exe || '',
       steamAppId: src.steamId || '',
-      steamFolder: src.steamFolder || '',
+      steamFolder: (raw.mods && raw.mods.steamFolder) || src.steamFolder || '',
       iconUrl: src.iconUrl || '',
       unpublished: src.published === false,
       existing: Boolean(gameId),
+      mods: raw.mods,
+      presentation: raw.presentation === undefined ? undefined : JSON.parse(JSON.stringify(raw.presentation)),
     };
   }
 
@@ -1832,6 +1836,10 @@
   function gameTabBody() {
     if (gameEdit.tab === 'overview') {
       return V().gameForm(gameEdit.item, gameEdit.problems);
+    }
+
+    if (gameEdit.tab === 'presentation') {
+      return V().presentationForm(gameEdit.item.presentation, gameEdit.problems);
     }
 
     if (gameEdit.tab === 'versions') {
@@ -1907,7 +1915,7 @@
   }
 
   function gameTabFoot() {
-    if (gameEdit.tab === 'overview') {
+    if (gameEdit.tab === 'overview' || gameEdit.tab === 'presentation') {
       return '<span class="push"></span><button class="btn btn--accent" type="button" data-game-do="save">Сохранить</button>';
     }
     if (gameEdit.tab === 'versions') {
@@ -1969,6 +1977,8 @@
   function readGameForm() {
     const box = $('[data-game-detail]');
     if (!box || !gameEdit.item) return;
+    const presentation = box.querySelector('[data-presentation]');
+    if (presentation) gameEdit.item.presentation = window.CH2Presentation.read(presentation);
     const q = (n) => box.querySelector('[name="' + n + '"]');
     if (!q('title')) return;
     gameEdit.item = Object.assign({}, gameEdit.item, {
@@ -1999,6 +2009,8 @@
       iconUrl: item.iconUrl.trim(),
       unpublished: item.unpublished,
     });
+    if (item.presentation !== undefined) row.presentation = item.presentation;
+    if (row.mods) row.mods = Object.assign({}, row.mods, { steamAppId: item.steamAppId.trim(), steamFolder: item.steamFolder.trim() });
     if (at >= 0) rows[at] = row;
     else rows.push(row);
     return R.reorder(rows);
@@ -3025,6 +3037,14 @@
        которой мы в этот момент читаем поля. Правка при этом молча
        терялась: на сервер уезжало то, что было до неё. */
     box.addEventListener('click', async (e) => {
+      const presentationAction = e.target.closest('[data-p-action]');
+      if (presentationAction) {
+        readGameForm();
+        gameEdit.item.presentation = window.CH2Presentation.change(gameEdit.item.presentation,
+          presentationAction.dataset.pGroup, presentationAction.dataset.pAction, Number(presentationAction.dataset.pIndex));
+        drawGameDetail();
+        return;
+      }
       const pick = e.target.closest('[data-pick]');
       if (pick) {
         openGame(pick.dataset.pick, gameEdit.tab === 'versions' ? 'versions' : gameEdit.tab);
@@ -3170,6 +3190,7 @@
     readGameForm();
     const rows = mergedRegistry();
     const problems = R.problems(rows).filter((x) => x.gameId === gameEdit.item.gameId || !x.gameId);
+    problems.push(...window.CH2Presentation.problems(gameEdit.item.presentation));
     if (problems.length) {
       gameEdit.problems = problems;
       drawGameDetail();

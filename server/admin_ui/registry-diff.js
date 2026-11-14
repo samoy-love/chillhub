@@ -38,7 +38,7 @@
         return false;
       }
     }
-    return true;
+    return JSON.stringify(a.presentation || null) === JSON.stringify(b.presentation || null);
   }
 
   // countRegistryChanges сравнивает текущий список со снимком.

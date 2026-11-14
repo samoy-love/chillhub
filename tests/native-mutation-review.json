@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "scope": "Windows core mutation gate; every exception requires exact mutation name and normalized source hash",
+  "exceptions": [
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:75:13: replace || with && in validate_relative",
+      "sourceSha256": "c65c76931333e73079d1d81013b67abb2e3a6e3e8ece0693b544391b4f1b07a1",
+      "reason": "Эквивалентно: сегменты . и .. независимо отклоняются проверкой ends_with точки."
+    },
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:262:37: replace | with ^ in DirectoryGuard::acquire",
+      "sourceSha256": "c65c76931333e73079d1d81013b67abb2e3a6e3e8ece0693b544391b4f1b07a1",
+      "reason": "Эквивалентно: 0x1 и 0x2 не имеют общих битов; OR и XOR равны 0x3."
+    },
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:263:46: replace | with ^ in DirectoryGuard::acquire",
+      "sourceSha256": "c65c76931333e73079d1d81013b67abb2e3a6e3e8ece0693b544391b4f1b07a1",
+      "reason": "Эквивалентно: 0x00200000 и 0x02000000 не имеют общих битов; OR и XOR совпадают."
+    },
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:320:29: replace > with == in open_regular",
+      "sourceSha256": "c65c76931333e73079d1d81013b67abb2e3a6e3e8ece0693b544391b4f1b07a1",
+      "reason": "Этот блок находится под cfg(unix) и не компилируется в Windows-продукт. Windows hard-link guard проверяется отдельными тестами."
+    },
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:320:29: replace > with < in open_regular",
+      "sourceSha256": "c65c76931333e73079d1d81013b67abb2e3a6e3e8ece0693b544391b4f1b07a1",
+      "reason": "Этот блок находится под cfg(unix) и не компилируется в Windows-продукт. Windows hard-link guard проверяется отдельными тестами."
+    },
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:320:29: replace > with >= in open_regular",
+      "sourceSha256": "c65c76931333e73079d1d81013b67abb2e3a6e3e8ece0693b544391b4f1b07a1",
+      "reason": "Этот блок находится под cfg(unix) и не компилируется в Windows-продукт. Windows hard-link guard проверяется отдельными тестами."
+    },
+    {
+      "file": "src/paths.rs",
+      "name": "src/paths.rs:240:39: replace | with ^ in replace_file",
+      "sourceSha256": "c9dfedc26879c0704d13d90da2907354133439a3d20550cb37995893b84fa7af",
+      "reason": "Эквивалентно: MOVEFILE_REPLACE_EXISTING=1 и MOVEFILE_WRITE_THROUGH=8 не имеют общих битов."
+    },
+    {
+      "file": "src/paths.rs",
+      "name": "src/paths.rs:252:5: replace replace_file -> io::Result<()> with Ok(())",
+      "sourceSha256": "c9dfedc26879c0704d13d90da2907354133439a3d20550cb37995893b84fa7af",
+      "reason": "Функция находится под cfg(not(windows)) и не компилируется в Windows-продукт. Windows atomic replacement проверяется отдельно."
+    }
+  ]
+}

@@ -1,0 +1,1197 @@
+import { ScrollView, Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export struct GameRow { id: string, title: string, icon: image, has-mods: bool, status: string, status-kind: string }
+export struct MediaTile { poster: image, caption: string, is-video: bool }
+export struct ModRow { name: string, description: string, category: string, version: string }
+export struct ModBenefit { title: string, description: string, icon: string }
+export struct QueueRow { id: string, title: string, detail: string, progress: float, state: string, can-pause: bool, can-resume: bool, can-cancel: bool, can-confirm: bool, can-prioritize: bool, can-remove: bool, security-blocked: bool }
+export struct OrphanRow { id: string, title: string, path: string, selected: bool, result: string }
+export struct ReleaseRow { version: string, date: string, changes: [string], fresh: bool }
+
+// Preserve rounded image corners without a full-size offscreen clipping layer.
+component CornerMask inherits Rectangle {
+    in property <length> radius;
+    in property <color> outside: Theme.bg;
+    x: 0px; y: 0px; width: 100%; height: 100%;
+    accessible-role: none;
+    Path { x: 0px; y: 0px; width: root.radius; height: root.radius; viewbox-width: 1; viewbox-height: 1; fill: root.outside; commands: "M0 0 H1 A1 1 0 0 0 0 1 Z"; }
+    Path { x: parent.width - root.radius; y: 0px; width: root.radius; height: root.radius; viewbox-width: 1; viewbox-height: 1; fill: root.outside; commands: "M0 0 H1 V1 A1 1 0 0 0 0 0 Z"; }
+    Path { x: 0px; y: parent.height - root.radius; width: root.radius; height: root.radius; viewbox-width: 1; viewbox-height: 1; fill: root.outside; commands: "M0 0 V1 H1 A1 1 0 0 1 0 0 Z"; }
+    Path { x: parent.width - root.radius; y: parent.height - root.radius; width: root.radius; height: root.radius; viewbox-width: 1; viewbox-height: 1; fill: root.outside; commands: "M0 1 H1 V0 A1 1 0 0 1 0 1 Z"; }
+}
+
+component Icon inherits Image {
+    in property <string> name;
+    in property <color> tint: Theme.dim;
+    width: 18px;
+    height: 18px;
+    image-fit: contain;
+    colorize: root.tint;
+    source: root.name == "search" ? @image-url("assets/search.svg") :
+        root.name == "download" ? @image-url("assets/download.svg") :
+        root.name == "settings" ? @image-url("assets/settings.svg") :
+        root.name == "play" ? @image-url("assets/play.svg") :
+        root.name == "pause" ? @image-url("assets/pause.svg") :
+        root.name == "arrow" ? @image-url("assets/arrow.svg") :
+        root.name == "left" ? @image-url("assets/left.svg") :
+        root.name == "right" ? @image-url("assets/right.svg") :
+        root.name == "close" ? @image-url("assets/close.svg") :
+        root.name == "package" ? @image-url("assets/package.svg") :
+        root.name == "users" ? @image-url("assets/users.svg") :
+        root.name == "gamepad" ? @image-url("assets/gamepad.svg") :
+        root.name == "sparkles" ? @image-url("assets/sparkles.svg") :
+        root.name == "wrench" ? @image-url("assets/wrench.svg") :
+        root.name == "compass" ? @image-url("assets/compass.svg") :
+        root.name == "external" ? @image-url("assets/external.svg") :
+        root.name == "online-video" ? @image-url("assets/online-video.svg") :
+        root.name == "tune" ? @image-url("assets/tune.svg") :
+        root.name == "book" ? @image-url("assets/book.svg") :
+        root.name == "check" ? @image-url("assets/check.svg") :
+        root.name == "volume" ? @image-url("assets/volume.svg") :
+        root.name == "expand" ? @image-url("assets/expand.svg") :
+        root.name == "folder" ? @image-url("assets/folder.svg") :
+        root.name == "shield" ? @image-url("assets/shield.svg") : @image-url("assets/info.svg");
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <string> accessible-name: root.text;
+    in property <bool> primary: false;
+    in property <bool> quiet: false;
+    in property <bool> enabled: true;
+    in property <bool> compact: false;
+    in property <bool> selected: false;
+    in property <bool> motion: true;
+    callback clicked();
+    forward-focus: key;
+    height: root.compact ? 32px : 38px;
+    border-radius: 8px;
+    background: !root.enabled ? #2a283099 : root.primary ? (touch.pressed ? #b3a0ec : touch.has-hover ? #d7ccff : Theme.accent) : root.selected ? #37313f : touch.pressed ? #40394b : touch.has-hover ? #323039 : root.quiet ? transparent : #25242d;
+    border-width: root.quiet || root.primary ? 0px : 1px;
+    border-color: Theme.border;
+    animate background { duration: root.motion ? 130ms : 0ms; }
+    accessible-role: button;
+    accessible-label: root.accessible-name;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    HorizontalLayout { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        padding-left: root.text == "" ? 0px : 12px;
+        padding-right: root.text == "" ? 0px : 12px;
+        spacing: 8px;
+        alignment: center;
+        if root.icon != "": Icon {
+            name: root.icon;
+            tint: !root.enabled ? #9d98a4 : root.primary ? #211a30 : root.selected ? Theme.accent : Theme.ink;
+            y: (parent.height - self.height) / 2;
+        }
+        if root.text != "": Text {
+            text: root.text;
+            color: !root.enabled ? #9d98a4 : root.primary ? #211a30 : root.selected ? Theme.accent : Theme.ink;
+            font-size: root.compact ? 12px : 13px;
+            font-weight: root.primary ? 700 : 550;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+        touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height;
+            enabled: root.enabled;
+            mouse-cursor: pointer;
+            clicked => { key.focus(); root.clicked(); }
+        }
+    }
+}
+
+component SearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder: "Найти игру";
+    in property <bool> shortcut: false;
+    in property <bool> enabled: true;
+    callback edited(string);
+    forward-focus: input;
+    height: 36px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: #38383f;
+    background: #202025;
+    Icon { x: 10px; y: 10px; width: 16px; height: 16px; name: "search"; }
+    if root.text == "": Text {
+        x: 34px; y: 0px; width: parent.width - 46px; height: parent.height;
+        text: root.placeholder; color: #a09da9; font-size: 13px; vertical-alignment: center;
+    }
+    input := TextInput {
+        enabled: root.enabled;
+        x: 34px; y: 0px; width: parent.width - (root.shortcut ? 78px : 46px); height: parent.height;
+        text <=> root.text;
+        color: Theme.ink; font-size: 13px; vertical-alignment: center;
+        single-line: true;
+        selection-background-color: #655580;
+        selection-foreground-color: white;
+        accessible-label: root.placeholder;
+        accessible-enabled: root.enabled;
+        edited => { root.edited(self.text); }
+    }
+    if root.shortcut: Rectangle {
+        x: parent.width - 38px; y: 10px; width: 29px; height: 16px;
+        border-width: 1px; border-color: #46454c; border-radius: 4px;
+        Text { x: 0px; y: 0px; width: parent.width; height: parent.height;  text: "Ctrl K"; font-size: 8px; color: #b7b4bf; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}
+
+component FormField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback edited(string);
+    height: 40px; border-radius: 8px; background: #25242d;
+    border-width: 1px; border-color: #393741;
+    forward-focus: input;
+    input := TextInput { x: 12px; y: 0px; width: parent.width - 24px; height: parent.height; text <=> root.text; enabled: root.enabled; single-line: true; color: Theme.ink; font-size: 13px; vertical-alignment: center; selection-background-color: #655580; selection-foreground-color: white; accessible-label: root.label; accessible-enabled: root.enabled; edited => { root.edited(self.text); } }
+}
+
+component BenefitCard inherits Rectangle {
+    in property <ModBenefit> benefit;
+    preferred-height: max(78px, benefit-title.preferred-height + benefit-copy.preferred-height + 14px);
+    height: self.preferred-height;
+    Rectangle { x: 0px; y: 2px; width: 30px; height: 30px; border-radius: 8px; background: #332d3e;
+        Icon { x: 7px; y: 7px; width: 16px; height: 16px; name: root.benefit.icon; tint: Theme.accent; }
+    }
+    benefit-title := Text { x: 42px; y: 0px; width: parent.width - 42px; text: root.benefit.title; color: Theme.ink; font-size: 14px; font-weight: 600; wrap: word-wrap; }
+    benefit-copy := Text { x: 42px; y: benefit-title.preferred-height + 5px; width: parent.width - 42px; text: root.benefit.description; color: #bdb8c6; font-size: 12px; wrap: word-wrap; }
+}
+
+// These controls keep native TextInput editing/IME and keyboard interaction,
+// while their chrome stays unchanged when focus moves between fields.
+component SpinBox inherits Rectangle {
+    in property <int> minimum;
+    in property <int> maximum: 100;
+    in property <bool> enabled: true;
+    in property <string> label;
+    in-out property <int> value: minimum;
+    forward-focus: number;
+    border-radius: 8px; border-width: 1px; border-color: #393741; background: #25242d;
+    changed value => { number.text = root.value; }
+    function step(amount: int) { root.value = clamp(root.value + amount, root.minimum, root.maximum); number.text = root.value; }
+    ActionButton { x: 2px; y: 2px; width: 30px; height: parent.height - 4px; text: "−"; accessible-name: root.label + ": уменьшить"; compact: true; quiet: true; enabled: root.enabled && root.value > root.minimum; clicked => { root.step(-1); } }
+    number := TextInput { x: 34px; y: 0px; width: parent.width - 68px; height: parent.height; text: root.value;
+        color: Theme.ink; font-size: 13px; single-line: true; input-type: InputType.number; horizontal-alignment: center; vertical-alignment: center;
+        enabled: root.enabled; accessible-label: root.label; accessible-enabled: root.enabled;
+        selection-background-color: #655580; selection-foreground-color: white;
+        edited => { if self.text.is-float() && self.text.to-float() >= root.minimum && self.text.to-float() <= root.maximum { root.value = round(self.text.to-float()); } }
+        accepted => { self.text = root.value; }
+        changed has-focus => { if !self.has-focus { self.text = root.value; } }
+        key-pressed(event) => { if event.text == Key.UpArrow { root.step(1); return accept; } if event.text == Key.DownArrow { root.step(-1); return accept; } reject }
+    }
+    ActionButton { x: parent.width - 32px; y: 2px; width: 30px; height: parent.height - 4px; text: "+"; accessible-name: root.label + ": увеличить"; compact: true; quiet: true; enabled: root.enabled && root.value < root.maximum; clicked => { root.step(1); } }
+}
+
+component ComboBox inherits Rectangle {
+    in property <[string]> model;
+    in property <bool> enabled: true;
+    in property <string> label;
+    in-out property <int> current-index: 0;
+    in-out property <string> current-value: root.model[root.current-index];
+    property <bool> popup-open;
+    callback selected(string);
+    forward-focus: key;
+    border-radius: 8px; border-width: 1px; border-color: #393741; background: touch.has-hover && root.enabled ? #302d38 : #25242d;
+    accessible-role: combobox; accessible-label: root.label; accessible-value: root.current-value; accessible-enabled: root.enabled; accessible-expanded: root.popup-open;
+    accessible-action-default => { root.open(); }
+    for entry[index] in root.model: Rectangle {
+        x: 0px; y: 0px; width: 0px; height: 0px; visible: false;
+        property <bool> current: entry == root.current-value;
+        init => { if self.current { root.current-index = index; } }
+        changed current => { if self.current { root.current-index = index; } }
+    }
+    changed current-index => { root.current-value = root.model[root.current-index]; }
+    function choose(index: int) { if root.enabled && root.model.length > 0 { root.current-index = clamp(index, 0, root.model.length - 1); root.current-value = root.model[root.current-index]; root.selected(root.current-value); } }
+    function open() { if root.enabled && root.model.length > 0 { popup.show(); root.popup-open = true; } }
+    function close() { popup.close(); root.popup-open = false; key.focus(); }
+    Text { x: 12px; y: 0px; width: parent.width - 45px; height: parent.height; text: root.current-value; color: root.enabled ? Theme.ink : Theme.dim; font-size: 13px; vertical-alignment: center; overflow: elide; }
+    Path { x: parent.width - 25px; y: (parent.height - 6px) / 2; width: 11px; height: 6px; viewbox-width: 11; viewbox-height: 6; commands: "M1 1 L5.5 5 L10 1"; fill: transparent; stroke: Theme.dim; stroke-width: 1.5px; }
+    key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled;
+        changed has-focus => { if self.has-focus { root.popup-open = false; } }
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.open(); return accept; }
+            if event.text == Key.UpArrow { root.choose(root.current-index - 1); return accept; }
+            if event.text == Key.DownArrow { root.choose(root.current-index + 1); return accept; }
+            reject
+        }
+        touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: pointer; clicked => { key.focus(); root.open(); } }
+    }
+    popup := PopupWindow { x: 0px; y: root.height + 4px; width: root.width; height: min(256px, root.model.length * 36px + 12px); close-policy: close-on-click-outside; forward-focus: popup-key;
+        property <int> visible-choice: root.current-index;
+        changed visible-choice => { self.reveal-selection(); }
+        // Each popup instance reveals its selection at creation; changes while
+        // open are handled above. Reading is-open inside PopupWindow is invalid
+        // after Slint 1.18 lowers it into a separate component.
+        init => { self.reveal-selection(); }
+        function reveal-selection() {
+            let top = root.current-index * 36px;
+            if top + choice-scroll.content-y < 0px { choice-scroll.content-y = -top; }
+            else if top + 34px + choice-scroll.content-y > choice-scroll.height { choice-scroll.content-y = min(0px, choice-scroll.height - top - 34px); }
+        }
+        Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #25222b; border-width: 1px; border-color: #47404f; border-radius: 8px; }
+        popup-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
+            focus-changed-event => { root.popup-open = self.has-focus; }
+            capture-key-pressed(event) => {
+                if event.text == Key.Escape || event.text == Key.Return { root.close(); return accept; }
+                if event.text == Key.Tab { root.close(); return accept; }
+                if event.text == Key.UpArrow { root.choose(root.current-index - 1); return accept; }
+                if event.text == Key.DownArrow { root.choose(root.current-index + 1); return accept; }
+                reject
+            }
+            choice-scroll := ScrollView { x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px; content-width: self.width - 14px; content-height: root.model.length * 36px;
+                for value[i] in root.model: Rectangle { x: 0px; y: i * 36px; width: choice-scroll.content-width; height: 34px; border-radius: 5px; background: root.current-index == i ? #3f374c : item-touch.has-hover ? #34303b : transparent;
+                    Text { x: 10px; y: 0px; width: parent.width - 20px; height: parent.height; text: value; color: Theme.ink; font-size: 13px; vertical-alignment: center; overflow: elide; }
+                    accessible-role: button; accessible-label: value; accessible-enabled: root.enabled; accessible-action-default => { root.choose(i); root.close(); }
+                    item-touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => { root.choose(i); root.close(); } }
+                }
+            }
+        }
+    }
+}
+
+component TextEdit inherits Rectangle {
+    in-out property <string> text;
+    in property <bool> enabled: true;
+    in property <string> label;
+    in property <string> placeholder-text;
+    in property <length> font-size: 14px;
+    in property <string> font-family: "Segoe UI";
+    in property <TextWrap> wrap: word-wrap;
+    callback edited(string);
+    forward-focus: input;
+    border-radius: 8px; border-width: 1px; border-color: #393741; background: #25242d;
+    editor-scroll := ScrollView { x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 20px; enabled: root.enabled;
+        content-width: self.width - 14px; content-height: max(self.height, input.preferred-height);
+        input := TextInput { x: 0px; y: 0px; width: editor-scroll.content-width; height: editor-scroll.content-height; text <=> root.text; enabled: root.enabled; single-line: false; wrap: root.wrap;
+            font-size: root.font-size; font-family: root.font-family; color: Theme.ink; selection-background-color: #655580; selection-foreground-color: white;
+            page-height: editor-scroll.height; accessible-label: root.label; accessible-enabled: root.enabled;
+            edited => { root.edited(self.text); }
+            cursor-position-changed(pos) => {
+                if pos.y + editor-scroll.content-y < 0px { editor-scroll.content-y = -pos.y; }
+                else if pos.y + editor-scroll.content-y > editor-scroll.height - 22px { editor-scroll.content-y = min(0px, editor-scroll.height - pos.y - 22px); }
+            }
+        }
+    }
+    if root.text == "" && input.preedit-text == "": Text { x: 12px; y: 10px; width: parent.width - 38px; text: root.placeholder-text; color: Theme.dim; font-family: root.font-family; font-size: root.font-size; wrap: word-wrap; }
+}
+
+component Segment inherits Rectangle {
+    in property <string> first;
+    in property <string> second;
+    in property <bool> right;
+    in property <bool> motion: true;
+    in property <bool> enabled: true;
+    callback selected(bool);
+    height: 36px;
+    border-radius: 8px;
+    background: #161519;
+    border-width: 1px;
+    border-color: #ffffff10;
+    property <float> selection-progress: root.right ? 1 : 0;
+    animate selection-progress { duration: root.motion ? 180ms : 0ms; easing: ease-out; }
+    Rectangle {
+        x: 3px + (parent.width - 6px) / 2 * root.selection-progress; y: 3px;
+        width: (parent.width - 6px) / 2; height: 30px;
+        border-radius: 5px; background: #514957;
+    }
+    for segment-label[i] in [root.first, root.second]: Rectangle {
+        x: 3px + i * ((parent.width - 6px) / 2); y: 3px;
+        width: (parent.width - 6px) / 2; height: 30px;
+        border-radius: 5px;
+        accessible-role: button;
+        accessible-label: segment-label;
+        accessible-enabled: root.enabled;
+        accessible-action-default => { if root.enabled { root.selected(i == 1); } }
+        Text { x: 0px; y: 0px; width: parent.width; height: parent.height;  text: segment-label; color: root.right == (i == 1) ? white : #aaa6b1; font-weight: 500; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+        focus := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
+            enabled: root.enabled;
+            key-pressed(event) => {
+                if event.text == " " || event.text == Key.Return { root.selected(i == 1); return accept; }
+                reject
+            }
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height;  enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.selected(i == 1); } }
+        }
+    }
+}
+
+component Toggle inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback toggled(bool);
+    forward-focus: focus;
+    width: 40px; height: 24px; border-radius: 12px;
+    background: root.checked ? Theme.accent : #484451;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-label: root.label;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.toggled(!root.checked); } }
+    Rectangle { x: root.checked ? 21px : 3px; y: 4px; width: 16px; height: 16px; border-radius: 8px; background: root.checked ? #241c34 : #e4dfe9; }
+    focus := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled;
+        key-pressed(event) => { if event.text == " " { root.toggled(!root.checked); return accept; } reject }
+        TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.toggled(!root.checked); } }
+    }
+}
+
+component SettingsSwitchRow inherits Rectangle {
+    in property <string> label;
+    in property <string> description;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    height: max(60px, switch-label.preferred-height + switch-description.preferred-height + 22px);
+    switch-label := Text { x: 0px; y: 8px; width: parent.width - 64px; text: root.label; color: Theme.ink; font-size: 14px; wrap: word-wrap; }
+    switch-description := Text { x: 0px; y: switch-label.y + switch-label.preferred-height + 5px; width: parent.width - 64px; text: root.description; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+    Toggle { x: parent.width - 40px; y: (parent.height - self.height) / 2; label: root.label; checked: root.checked; enabled: root.enabled; toggled(value) => { root.toggled(value); } }
+}
+
+component SectionHeading inherits Text {
+    color: Theme.ink; font-size: 17px; font-weight: 600; wrap: word-wrap;
+}
+
+component SeekBar inherits Rectangle {
+    in property <float> value;
+    in property <float> maximum: 1;
+    in property <string> label;
+    callback seek(float);
+    forward-focus: focus;
+    height: 24px;
+    property <float> fraction: max(0, min(1, root.value / max(0.001, root.maximum)));
+    Rectangle { x: 5px; y: 10px; height: 4px; width: parent.width - 10px; border-radius: 2px; background: #49434f; }
+    Rectangle { x: 5px; y: 10px; height: 4px; width: (parent.width - 10px) * root.fraction; border-radius: 2px; background: Theme.accent; }
+    Rectangle { x: (parent.width - 10px) * root.fraction; y: 7px; width: 10px; height: 10px; border-radius: 5px; background: Theme.accent;  }
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: root.value;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: root.maximum;
+    accessible-action-set-value(value) => { root.seek(value.to-float()); }
+    focus := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        key-pressed(event) => {
+            if event.text == Key.LeftArrow { root.seek(max(0, root.value - root.maximum / 100)); return accept; }
+            if event.text == Key.RightArrow { root.seek(min(root.maximum, root.value + root.maximum / 100)); return accept; }
+            reject
+        }
+        touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height;
+            mouse-cursor: pointer;
+            clicked => { focus.focus(); root.seek(max(0, min(root.maximum, (self.mouse-x - 5px) / (self.width - 10px) * root.maximum))); }
+            moved => { if self.pressed { root.seek(max(0, min(root.maximum, (self.mouse-x - 5px) / (self.width - 10px) * root.maximum))); } }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Chill Hub";
+    icon: @image-url("assets/brand.png");
+    preferred-width: 1360px; preferred-height: 850px;
+    min-width: 900px; min-height: 500px;
+    background: Theme.bg;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = dark; }
+
+    in property <[GameRow]> games;
+    in property <int> selected-game;
+    in property <string> search;
+    in property <bool> only-mods;
+    in property <string> game-title;
+    in property <string> description;
+    in property <string> genre;
+    in property <string> source: "local";
+    in property <string> mode: "mods";
+    in property <string> status;
+    in property <string> play-label: "Играть";
+    in property <string> pack-name;
+    in property <string> pack-version;
+    in property <string> modpack-description;
+    in property <[ModBenefit]> mod-benefits;
+    in property <int> mod-count;
+    in property <image> hero;
+    in property <image> hero-previous;
+    in property <float> hero-progress: 1;
+    in property <bool> supports-steam: true;
+    in property <bool> supports-local: true;
+    in property <bool> has-mods: true;
+    in property <bool> busy;
+    in property <[string]> highlights;
+    in property <[MediaTile]> media;
+    in property <bool> has-gallery: true;
+    in property <string> panel-kind;
+    in property <string> panel-title;
+    in property <string> panel-subtitle;
+    in property <string> panel-body;
+    in property <string> metadata-note;
+    in property <[ModRow]> mods;
+    in property <[string]> mod-categories;
+    in property <string> mod-category: "Все";
+    in property <image> gallery-image;
+    in property <string> gallery-caption;
+    in property <int> gallery-index;
+    in property <bool> selected-media-is-video;
+    in property <bool> video-playing;
+    in property <float> video-position;
+    in property <float> video-duration;
+    in property <float> video-volume: 0.75;
+    in property <string> video-time-label: "0:00 / 0:00";
+    in property <bool> video-failed: false;
+    in property <[int]> video-qualities;
+    in property <int> video-quality;
+    callback video-quality-selected(int);
+    in-out property <string> settings-path;
+    in property <[QueueRow]> queue;
+    in property <string> queue-error;
+    in property <[OrphanRow]> orphans;
+    in property <int> orphan-selection-count;
+    in property <string> launcher-version;
+    in property <[ReleaseRow]> releases;
+    in-out property <int> settings-section: 0;
+    in property <bool> update-available;
+    in property <bool> update-checked;
+    in property <bool> update-error;
+    in property <string> update-target;
+    in property <string> install-hint;
+    in property <bool> loading;
+    in property <string> load-error;
+    in property <string> connection-note;
+    in property <string> maintenance-note;
+    in property <bool> can-play;
+    in property <string> installed-version;
+    in property <string> playtime-label;
+    in property <[string]> versions;
+    in property <string> selected-version;
+    in-out property <int> settings-threads: 4;
+    in-out property <int> settings-speed;
+    property <int> settings-last-speed: 100;
+    in-out property <string> settings-api;
+    in-out property <bool> settings-tray;
+    in property <string> settings-error;
+    in property <string> settings-save-status;
+    in property <string> manage-path;
+    in property <string> manage-details;
+    in property <bool> can-verify-game;
+    in property <bool> can-verify-mods;
+    in property <bool> has-game-files;
+    in property <bool> can-create-shortcut;
+    in property <bool> has-modpack-link;
+    in property <string> downloads-summary;
+    in property <float> downloads-progress;
+    in property <int> downloads-active;
+    in property <string> disk-label;
+    in property <bool> operation-busy;
+    in property <string> confirm-text;
+    in property <bool> reduced-motion;
+    in property <bool> karaoke-enabled;
+    in property <bool> karaoke-active;
+    in property <string> karaoke-text;
+    in property <string> karaoke-next;
+    in property <int> karaoke-delay: 45;
+    in property <bool> karaoke-fading;
+    property <bool> karaoke-visible: root.karaoke-enabled && root.width >= 1160px;
+    callback karaoke-tick();
+    Timer {
+        running: root.karaoke-visible && root.karaoke-active && !root.minimized && !root.reduced-motion && root.panel-kind == "";
+        interval: root.karaoke-delay * 1ms;
+        triggered => { root.karaoke-tick(); }
+    }
+    in property <string> toast;
+    in property <float> task-progress;
+    in property <bool> task-paused;
+    in property <string> task-status;
+    out property <bool> show-video: root.gallery-open && root.selected-media-is-video;
+    out property <length> video-x: root.modal-x + 19px;
+    out property <length> video-y: root.modal-y + 85px;
+    out property <length> video-width: root.modal-width - 38px;
+    out property <length> video-height: root.media-stage-height;
+
+    callback game-selected(int);
+    callback search-edited(string);
+    callback mods-filter-toggled(bool);
+    callback source-selected(string);
+    callback mode-selected(string);
+    callback play-requested();
+    callback panel-requested(string);
+    callback media-selected(int);
+    callback panel-closed();
+    callback gallery-step(int);
+    callback mod-search-edited(string);
+    callback mod-category-selected(string);
+    callback video-toggle();
+    callback video-seek(float);
+    callback video-volume-changed(float);
+    callback video-geometry-changed();
+    callback setting-changed(string, string);
+    callback action-requested(string);
+    callback queue-action(string, string);
+    callback orphan-action(string, string);
+    callback settings-save(string, int, int, string, bool, bool);
+    callback settings-leave(string);
+    callback settings-live-changed();
+    changed settings-threads => { if root.panel-kind == "settings" { root.settings-live-changed(); } }
+    changed settings-speed => { if root.settings-speed > 0 { root.settings-last-speed = root.settings-speed; } if root.panel-kind == "settings" { root.settings-live-changed(); } }
+    changed settings-last-speed => { if root.settings-speed > 0 { root.settings-speed = root.settings-last-speed; } }
+    changed settings-tray => { if root.panel-kind == "settings" { root.settings-live-changed(); } }
+    callback version-selected(string);
+    callback feedback-send(string, string, string, string, bool);
+
+    property <length> sidebar-width: min(244px, max(185px, root.width * 0.1615));
+    property <length> page-padding: min(42px, max(20px, root.width * 0.0245));
+    property <float> spacious: max(0, min(1, (root.width - root.sidebar-width - root.page-padding * 2 - 680px) / 160px));
+    property <length> hero-height: max(min(330px, max(280px, root.height * 0.342)), hero-description.y + hero-description.preferred-height + 24px);
+    property <length> media-tile-height: root.media.length > 0 ? min(153px, (root.width - root.sidebar-width - root.page-padding * 2 - 36px) / 4 / 2.03) : 56px;
+    property <bool> gallery-open: root.panel-kind == "gallery" || root.panel-kind == "trailer";
+    property <length> modal-width: min(root.gallery-open ? 970px : 720px, root.width - 64px);
+    property <length> modal-height: root.gallery-open ? root.media-stage-height + 235px : min(650px, root.height - 64px, root.panel-kind == "confirm" ? max(280px, confirmation-measure.preferred-height + 212px) : root.panel-kind == "update" ? 460px : root.panel-kind == "security" ? 530px : root.panel-kind == "help" ? 500px : 650px);
+    property <length> confirmation-content-width: root.modal-width - 88px;
+    confirmation-measure := Text {
+        visible: false; width: root.confirmation-content-width;
+        text: root.panel-kind == "confirm" ? root.panel-body : "";
+        font-size: 14px; wrap: word-wrap;
+    }
+    property <length> modal-x: (root.width - root.modal-width) / 2;
+    property <length> modal-y: (root.height - root.modal-height) / 2;
+    property <length> media-stage-height: min((root.modal-width - 38px) * 9 / 16, root.height * 0.58, max(100px, root.height - 267px));
+    property <float> hero-opacity: root.hero-progress;
+    animate hero-opacity { duration: root.reduced-motion || root.hero-progress == 0 ? 0ms : 210ms; easing: ease-out; }
+    property <float> panel-opacity: root.panel-kind == "" ? 0 : 1;
+    property <bool> feedback-dirty;
+    property <bool> feedback-exit-confirm;
+    function reveal-selected-game() {
+        if root.selected-game >= 0 && root.selected-game < root.games.length && library-scroll.height > 0px {
+            let top = root.selected-game * 48px;
+            if top + library-scroll.content-y < 0px { library-scroll.content-y = -top; }
+            else if top + 48px + library-scroll.content-y > library-scroll.height { library-scroll.content-y = library-scroll.height - top - 48px; }
+            library-scroll.content-y = clamp(library-scroll.content-y, min(0px, library-scroll.height - library-scroll.content-height), 0px);
+        }
+    }
+    changed selected-game => { root.reveal-selected-game(); }
+    function request-close() {
+        if !root.operation-busy {
+            if root.panel-kind == "feedback" && root.feedback-dirty { root.feedback-exit-confirm = true; }
+            else if root.panel-kind == "settings" { root.settings-leave(""); }
+            else { root.panel-closed(); }
+        }
+    }
+    animate panel-opacity { duration: root.reduced-motion ? 0ms : 150ms; easing: ease-out; }
+    changed video-x => { root.video-geometry-changed(); }
+    changed video-y => { root.video-geometry-changed(); }
+    changed video-width => { root.video-geometry-changed(); }
+    changed video-height => { root.video-geometry-changed(); }
+    changed show-video => { root.video-geometry-changed(); }
+    changed panel-kind => { if root.panel-kind == "settings" { root.settings-section = 0; } root.feedback-exit-confirm = false; root.feedback-dirty = false; if root.panel-kind == "" { keyboard.focus(); } }
+
+    forward-focus: keyboard;
+    keyboard := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        focus-on-tab-navigation: false;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape && root.panel-kind != "" { if root.feedback-exit-confirm { root.feedback-exit-confirm = false; } else { root.request-close(); } return accept; }
+            if event.modifiers.control && (event.text == "k" || event.text == "K") && root.panel-kind == "" { library-search.focus(); return accept; }
+            if event.modifiers.control && (event.text == "r" || event.text == "R") && root.panel-kind == "" && !root.operation-busy && !root.loading { root.action-requested("retry-catalog"); return accept; }
+            reject
+        }
+        key-pressed(event) => {
+            if root.gallery-open && event.text == Key.LeftArrow { root.gallery-step(-1); return accept; }
+            if root.gallery-open && event.text == Key.RightArrow { root.gallery-step(1); return accept; }
+            if root.show-video && event.text == " " { root.video-toggle(); return accept; }
+            if root.panel-kind == "" && event.text == Key.PageDown {
+                main-scroll.content-y = max(min(0px, main-scroll.height - main-scroll.content-height), main-scroll.content-y - main-scroll.height * 0.85);
+                return accept;
+            }
+            if root.panel-kind == "" && event.text == Key.PageUp {
+                main-scroll.content-y = min(0px, main-scroll.content-y + main-scroll.height * 0.85);
+                return accept;
+            }
+            reject
+        }
+
+        sidebar := Rectangle { x: 0px; y: 0px;
+            width: root.sidebar-width; height: parent.height;
+            background: #19191d;
+            Rectangle { y: 0px;  x: parent.width - 1px; width: 1px; height: parent.height; background: #29292e; }
+            Image { x: 26px; y: 28px; width: 35px; height: 35px; source: @image-url("assets/brand.png"); image-fit: contain; }
+            Text { x: 70px; y: 27px; height: 35px; text: "Chill Hub"; font-size: 25px; font-weight: 700; letter-spacing: -0.7px; color: Theme.ink; vertical-alignment: center; }
+            Text { x: 26px; y: 100px; text: "Библиотека"; font-size: 15px; font-weight: 600; color: Theme.ink; }
+            Rectangle { x: 118px; y: 100px; width: 20px; height: 20px; border-radius: 6px; background: #303036;
+                Text { x: 0px; y: 0px; width: parent.width; height: parent.height;  text: root.games.length; color: #afacb8; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            ActionButton { x: parent.width - 44px; y: 94px; width: 29px; compact: true; quiet: true; selected: root.only-mods; icon: "package"; accessible-name: "Только игры с модами"; enabled: root.panel-kind == ""; clicked => { root.mods-filter-toggled(!root.only-mods); } }
+            library-search := SearchField { x: 17px; y: 134px; width: parent.width - 34px; shortcut: root.sidebar-width > 200px; text: root.search; enabled: root.panel-kind == ""; edited(text) => { root.search-edited(text); } }
+            library-scroll := ScrollView {
+                changed height => { root.reveal-selected-game(); }
+                enabled: root.panel-kind == "";
+                x: 14px; y: 186px; width: parent.width - 18px; height: parent.height - 334px;
+                // The Fluent scrollbar is an overlay: reserve its own gutter.
+                content-width: self.width - 18px;
+                content-height: max(self.height, root.games.length * 48px);
+                Rectangle { x: 0px; y: 0px;
+                    width: library-scroll.content-width; height: root.games.length * 48px;
+                    if root.games.length > 0 && root.selected-game >= 0: Rectangle {
+                        x: 0px; y: root.selected-game * 48px + 1px; width: parent.width; height: 46px;
+                        border-radius: 9px; background: #37313f;
+                        animate y { duration: root.reduced-motion ? 0ms : 220ms; easing: ease-out; }
+                        Rectangle { x: 0px; y: 13px; width: 3px; height: 20px; border-radius: 2px; background: Theme.accent; }
+                    }
+                    for game[i] in root.games: Rectangle {
+                        x: 0px; y: i * 48px; width: parent.width; height: 48px;
+                        border-radius: 9px;
+                        background: row-touch.has-hover && root.selected-game != i ? #ffffff08 : transparent;
+                        accessible-role: button;
+                        accessible-label: game.title;
+                        accessible-value: game.status;
+                        accessible-enabled: root.panel-kind == "";
+                        accessible-action-default => { if root.panel-kind == "" { root.game-selected(i); } }
+                        if game.icon.width == 0: Rectangle { x: 10px; y: 8px; width: 32px; height: 32px; border-radius: 7px; background: #35313d; Icon { x: 8px; y: 8px; width: 16px; height: 16px; name: "package"; tint: #bbb0ce; } }
+                        Image { x: 10px; y: 8px; width: 32px; height: 32px; source: game.icon; image-fit: contain; }
+                        Text { y: game.status == "" ? 0px : 5px; x: 53px; width: parent.width - 61px; height: game.status == "" ? parent.height : 21px; text: game.title; color: root.selected-game == i ? #ece5ff : Theme.ink; font-size: 13px; font-weight: 500; vertical-alignment: center; overflow: elide; }
+                        if game.status != "": Text { x: 53px; y: 27px; width: parent.width - 61px; height: 15px; text: game.status; color: game.status-kind == "error" ? #e2a5a5 : game.status-kind == "update" ? #d8b27b : game.status-kind == "active" ? #c8b4ee : game.status-kind == "ready" ? #9fbdad : Theme.dim; font-size: 10px; overflow: elide; }
+                        row-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
+                            enabled: root.panel-kind == "";
+                            key-pressed(event) => {
+                                if event.text == Key.Return || event.text == " " { root.game-selected(i); return accept; }
+                                if event.text == Key.UpArrow { root.game-selected(max(0, root.selected-game - 1)); return accept; }
+                                if event.text == Key.DownArrow { root.game-selected(min(root.games.length - 1, root.selected-game + 1)); return accept; }
+                                reject
+                            }
+                            row-touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.panel-kind == ""; mouse-cursor: pointer;
+                                clicked => { row-key.focus(); root.game-selected(i); }
+                                double-clicked => { root.game-selected(i); root.panel-requested("manage"); }
+                                pointer-event(event) => { if event.button == PointerEventButton.right && event.kind == PointerEventKind.up { root.game-selected(i); root.panel-requested("manage"); } }
+                            }
+                        }
+                    }
+                    if root.games.length == 0: Text { x: 10px; y: 12px; width: parent.width - 20px; text: root.loading ? "Загружаем каталог…" : "Ничего не найдено"; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
+                }
+            }
+            Text { x: 24px; y: parent.height - 140px; width: parent.width - 48px; height: 18px; text: root.disk-label; color: Theme.dim; font-size: 10px; overflow: elide; }
+            Rectangle { x: 22px; y: parent.height - 116px; width: parent.width - 44px; height: 1px; background: Theme.border; }
+            ActionButton { x: 14px; y: parent.height - 101px; width: parent.width - 28px; height: 31px; text: root.downloads-active > 0 ? "Загрузки · " + root.downloads-active : "Загрузки"; icon: "download"; quiet: true; enabled: root.panel-kind == ""; clicked => { root.panel-requested("downloads"); } }
+            if root.downloads-summary != "": Text { x: 24px; y: parent.height - 73px; width: parent.width - 48px; height: 14px; text: root.downloads-summary; font-size: 10px; color: Theme.dim; overflow: elide; }
+            if root.downloads-active > 0: Rectangle { x: 24px; y: parent.height - 59px; width: parent.width - 48px; height: 2px; background: #39323f; Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.downloads-progress, 0, 1); height: parent.height; background: Theme.accent; } }
+            ActionButton { x: 14px; y: parent.height - 58px; width: parent.width - 28px; text: "Настройки"; icon: "settings"; quiet: true; enabled: root.panel-kind == ""; clicked => { root.panel-requested("settings"); } }
+        }
+
+        Text { x: root.sidebar-width + root.page-padding; y: 0px; width: root.width - root.sidebar-width - root.page-padding * 2 - (root.karaoke-visible ? 530px : 174px); height: 56px; text: "Библиотека" + (root.game-title != "" ? "   /   " + root.game-title : ""); color: Theme.dim; font-size: 12px; vertical-alignment: center; overflow: elide; }
+        if root.karaoke-visible: Rectangle {
+            x: root.width - root.page-padding - 510px; y: 15px; width: 330px; height: 34px;
+            opacity: root.karaoke-fading && !root.reduced-motion ? 0 : 1;
+            animate opacity { duration: root.reduced-motion ? 0ms : 150ms; }
+            Text { width: parent.width; height: 18px; text: root.reduced-motion ? "Баста — «Моя игра»" : root.karaoke-text; color: Theme.ink; font-size: 12px; overflow: elide; }
+            Text { y: 20px; width: parent.width; height: 14px; text: root.reduced-motion ? "Фирменная строка Chill Hub" : root.karaoke-next; color: Theme.dim; font-size: 10px; overflow: elide; }
+        }
+        Text { x: root.sidebar-width + root.page-padding; y: 45px; width: root.width - root.sidebar-width - root.page-padding * 2; height: 16px; text: root.connection-note; color: #c4b4dc; font-size: 10px; overflow: elide; }
+        ActionButton { x: root.width - root.page-padding - 158px; y: 18px; width: 158px; height: 28px; compact: true; text: "Помощь"; icon: "info"; quiet: true; enabled: root.panel-kind == ""; clicked => { root.panel-requested("help"); } }
+
+        main-scroll := ScrollView {
+            // Keep the static game page reusable while the optional header types.
+            // Slint invalidates the layer on page changes, scrolling and resizing.
+            cache-rendering-hint: root.karaoke-visible && root.karaoke-active && !root.reduced-motion && root.panel-kind == "";
+            visible: root.game-title != "";
+            enabled: root.panel-kind == "";
+            x: root.sidebar-width; y: 64px; width: root.width - root.sidebar-width; height: root.height - 64px;
+            content-width: self.width;
+            content-height: page.height + 32px;
+            page := Rectangle { y: 0px;
+                x: root.page-padding; width: parent.width - root.page-padding * 2;
+                height: details.y + details.height;
+                maintenance-banner := Rectangle { x: 0px; y: 0px; width: parent.width; height: root.maintenance-note == "" ? 0px : maintenance-text.preferred-height + 24px; background: #332d24; border-radius: 10px;
+                    maintenance-text := Text { x: 14px; y: 12px; width: parent.width - 28px; text: root.maintenance-note; color: #e5cca8; font-size: 12px; wrap: word-wrap; }
+                }
+                feature := Rectangle { x: 0px; y: maintenance-banner.height > 0px ? maintenance-banner.height + 12px : 0px;
+                    width: parent.width; height: root.hero-height + (root.install-hint == "" ? 98px : 138px);
+                    border-radius: 18px; background: #242328;
+                    Rectangle { x: 0px; y: 0px;
+                        width: parent.width; height: root.hero-height; clip: true;
+                        if root.hero-opacity < 1: Image { x: 0px; y: 0px; source: root.hero-previous; width: parent.width; height: parent.height; image-fit: cover; }
+                        Image { x: 0px; y: 0px;  source: root.hero; width: parent.width; height: parent.height; image-fit: cover; opacity: root.hero-opacity; }
+                        Rectangle { x: 0px; y: 0px;  width: parent.width; height: parent.height; background: @linear-gradient(90deg, #100e17d0, #100e1700); }
+                        Rectangle { x: 0px; y: 0px;  width: parent.width; height: parent.height; background: @linear-gradient(0deg, #19171ff0, #19171f00); }
+                        ActionButton { x: parent.width - 54px; y: 16px; width: 36px; icon: "tune"; accessible-name: "Управление игрой"; enabled: root.panel-kind == ""; clicked => { root.panel-requested("manage"); } }
+                        if !root.has-gallery: ActionButton { x: parent.width - 181px; y: 16px; width: 115px; compact: true; text: "Обложка"; icon: "expand"; enabled: root.panel-kind == ""; clicked => { root.media-selected(0); } }
+                        Text { x: 32px; y: 77px; width: parent.width - 64px; text: root.genre; color: #e5dfe9; font-size: 12px; font-weight: 600; }
+                        title-measure := Text { visible: false; text: root.game-title; font-size: 72px; font-weight: 700; }
+                        hero-title := Text { x: 30px; y: 99px; width: parent.width - 62px; height: self.preferred-height; text: root.game-title; color: white; font-size: min(72px, 72px * (self.width - 4px) / max(1px, title-measure.preferred-width)); font-weight: 700; }
+                        hero-description := Text { x: 32px; y: hero-title.y + max(88px, hero-title.preferred-height) + 10px; width: min(650px, parent.width - 64px); height: self.preferred-height; text: root.description; color: #f2eef6; font-size: 14px; wrap: word-wrap; }
+                    }
+                    Rectangle { x: 0px;
+                        y: root.hero-height; width: parent.width; height: parent.height - root.hero-height;
+                        background: @linear-gradient(113deg, #29262f, #232227 70%);
+                        Rectangle { x: 0px; y: 0px;  width: parent.width; height: 1px; background: #ffffff0c; }
+                        Text { x: 24px; y: 17px; text: "Копия игры"; color: Theme.dim; font-size: 11px; }
+                        if root.supports-steam && root.supports-local: Segment { x: 24px; y: 39px; width: 148px + 24px * root.spacious; first: "Steam"; second: "Пиратка"; right: root.source == "local"; motion: !root.reduced-motion; enabled: root.panel-kind == "" && !root.operation-busy; selected(right) => { root.source-selected(right ? "local" : "steam"); } }
+                        if !root.supports-steam || !root.supports-local: Text { x: 24px; y: 39px; height: 36px; text: root.supports-steam ? "Steam" : "Пиратка"; color: Theme.ink; font-weight: 600; font-size: 14px; vertical-alignment: center; }
+                        Text { x: 190px + 38px * root.spacious; y: 17px; text: "Режим запуска"; color: Theme.dim; font-size: 11px; }
+                        if root.has-mods: Segment { x: 190px + 38px * root.spacious; y: 39px; width: 168px + 16px * root.spacious; first: "С модами"; second: "Без модов"; right: root.mode == "plain"; motion: !root.reduced-motion; enabled: root.panel-kind == "" && !root.operation-busy; selected(right) => { root.mode-selected(right ? "plain" : "mods"); } }
+                        if !root.has-mods: Text { x: 190px + 38px * root.spacious; y: 39px; height: 36px; text: "Обычная игра"; color: Theme.ink; font-weight: 600; font-size: 14px; vertical-alignment: center; }
+                        Rectangle {
+                            x: parent.width - self.width - 24px; y: 10px;
+                            width: max(144px, min(320px, parent.width - (390px + 54px * root.spacious))); height: 27px;
+                            Rectangle { x: 0px; y: 9px; width: 6px; height: 6px; border-radius: 3px; background: root.can-play ? #a7daba : Theme.dim; }
+                            Text { x: 12px; width: parent.width - 12px; height: parent.height; text: root.status; color: #cbc6d2; font-size: 11px; wrap: word-wrap; vertical-alignment: center; }
+                        }
+                        action-label-measure := Text { visible: false; text: root.play-label; font-size: 13px; font-weight: 700; }
+                        ActionButton { x: parent.width - self.width - 24px; y: 39px; width: min(240px,max(132px + 38px * root.spacious,action-label-measure.preferred-width + 52px)); height: 40px; text: root.play-label; icon: "play"; primary: true; enabled: root.can-play && !root.busy && !root.operation-busy && root.panel-kind == ""; clicked => { root.play-requested(); } }
+                        Text { x: 24px; y: 83px; width: parent.width - 48px; height: 13px; text: root.installed-version + (root.playtime-label != "" ? "   ·   " + root.playtime-label : ""); color: #aaa3b2; font-size: 9px; overflow: elide; }
+                        Text { x: 24px; y: 104px; width: parent.width - 48px; text: root.install-hint; color: Theme.dim; font-size: 11px; wrap: word-wrap; }
+                    }
+                    CornerMask { radius: 18px; }
+                }
+                if root.has-gallery: Rectangle { x: 0px;
+                    y: feature.y + feature.height + 23px; width: parent.width; height: 35px + media-strip.height;
+                    Text { x: 0px; y: 0px;  text: "Медиа"; color: Theme.ink; font-size: 20px; font-weight: 600; }
+                    Rectangle { x: 76px; y: 2px; width: 22px; height: 20px; border-radius: 6px; background: #303036; Text { x: 0px; y: 0px; width: parent.width; height: parent.height;  text: root.media.length; color: #afacb8; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; } }
+                    ActionButton { x: parent.width - 124px; y: -5px; width: 124px; text: "Галерея"; icon: "arrow"; compact: true; quiet: true; enabled: root.panel-kind == ""; clicked => { root.media-selected(0); } }
+                    media-strip := Rectangle { x: 0px;
+                        y: 35px; width: parent.width; height: root.media-tile-height;
+                        for item[i] in root.media: Rectangle { y: 0px;
+                            property <int> visible-count: min(4, root.media.length);
+                            x: i * ((parent.width + 12px) / self.visible-count);
+                            width: (parent.width - (self.visible-count - 1) * 12px) / self.visible-count;
+                            height: parent.height; visible: i < 4; clip: true;
+                            background: #26242c;
+                            property <float> hover-progress: media-touch.has-hover && root.panel-kind == "" ? 1 : 0;
+                            animate hover-progress { duration: root.reduced-motion ? 0ms : 210ms; easing: ease-out; }
+                            Image {
+                                source: item.poster;
+                                x: parent.width * -0.02 * parent.hover-progress;
+                                y: parent.height * -0.02 * parent.hover-progress;
+                                width: parent.width * (1 + 0.04 * parent.hover-progress);
+                                height: parent.height * (1 + 0.04 * parent.hover-progress);
+                                image-fit: cover;
+                            }
+                            CornerMask { radius: 10px; }
+                            Rectangle { x: 0px; y: 0px;  width: parent.width; height: parent.height; background: @linear-gradient(0deg, #07080bc4, #07080b00 65%); border-radius: 10px; border-width: media-touch.has-hover ? 2px : 1px; border-color: #ffffff25; }
+                            if item.is-video: Rectangle { x: (parent.width - 34px) / 2; y: (parent.height - 34px) / 2; width: 34px; height: 34px; border-radius: 17px; background: #1a18258c; border-width: 1px; border-color: #ffffff85; Icon { x: 8px; y: 8px; width: 18px; height: 18px; name: "play"; tint: white; } }
+                            Text { x: 11px; y: parent.height - 26px; width: parent.width - 20px; height: 20px; text: item.caption; color: white; font-size: 11px; overflow: elide; }
+                            accessible-role: button;
+                            accessible-label: item.caption;
+                            accessible-enabled: root.panel-kind == "";
+                            accessible-action-default => { if root.panel-kind == "" { root.media-selected(i); } }
+                            media-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;  enabled: root.panel-kind == ""; key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.media-selected(i); return accept; } reject } media-touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.panel-kind == ""; mouse-cursor: pointer; clicked => { media-key.focus(); root.media-selected(i); } } }
+                        }
+                        if root.media.length == 0: Text { x: 0px; y: 0px; height: parent.height;  text: "Изображения появятся здесь"; color: Theme.dim; vertical-alignment: center; }
+                    }
+                }
+                details := Rectangle { x: 0px;
+                    y: feature.y + feature.height + 21px + (root.has-gallery ? root.media-tile-height + 58px : 0px); width: parent.width;
+                    height: root.has-mods ? benefits.preferred-height + 120px : about.preferred-height + 78px;
+                    border-radius: 13px; border-width: 1px; border-color: #303035; background: #1b1b20;
+                    Text { x: 24px; y: 21px; width: parent.width - 48px; text: root.has-mods ? "Что добавляет модпак" : "Об игре"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                    benefits := VerticalLayout { x: 24px; y: 65px; width: parent.width - 48px; spacing: 0px; alignment: start; visible: root.has-mods;
+                        for start in [0, 2, 4]: Rectangle {
+                            height: start < root.mod-benefits.length ? max(left-benefit.preferred-height, right-benefit.preferred-height) + 10px : 0px;
+                            left-benefit := BenefitCard { x: 0px; y: 0px; width: (parent.width - 28px) / 2; visible: start < root.mod-benefits.length; benefit: root.mod-benefits[start]; }
+                            right-benefit := BenefitCard { x: (parent.width + 28px) / 2; y: 0px; width: (parent.width - 28px) / 2; visible: start + 1 < root.mod-benefits.length; benefit: root.mod-benefits[start + 1]; }
+                        }
+                        if root.mod-benefits.length == 0: Text { text: root.pack-name; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
+                    }
+                    about := VerticalLayout { x: 24px; y: 59px; width: parent.width - 48px; spacing: 10px; alignment: start; visible: !root.has-mods;
+                        for line in root.highlights: Text { text: line; font-size: 13px; color: #c9c6d0; wrap: word-wrap; }
+                        if root.highlights.length == 0: Text { text: root.genre; font-size: 13px; color: #c9c6d0; wrap: word-wrap; }
+                    }
+                    if root.has-mods: Rectangle { x: 24px; y: parent.height - 51px; width: parent.width - 48px; height: 1px; background: #ffffff0c; }
+                    if root.has-mods: Text { x: 24px; y: parent.height - 39px; width: parent.width - 266px; height: 24px; text: root.pack-name + (root.pack-version == "" ? "" : " · " + root.pack-version); color: Theme.dim; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                    if root.has-mods: ActionButton { x: parent.width - 230px; y: parent.height - 43px; width: 216px; text: root.mod-count > 0 ? "Все моды · " + root.mod-count : "Состав модпака"; icon: "arrow"; compact: true; quiet: true; enabled: root.panel-kind == ""; clicked => { root.panel-requested("mods"); } }
+                }
+            }
+        }
+
+        if root.game-title == "": Rectangle {
+            x: root.sidebar-width + root.page-padding; y: 92px; width: root.width - root.sidebar-width - root.page-padding * 2; height: root.height - 124px;
+            empty-heading := Text { x: 24px; y: 52px; width: parent.width - 48px; text: root.loading ? "Загружаем библиотеку…" : root.load-error != "" ? "Не удалось загрузить библиотеку" : "Пока нет игр"; color: Theme.ink; font-size: 25px; font-weight: 600; wrap: word-wrap; }
+            empty-body := Text { x: 24px; y: empty-heading.y + empty-heading.preferred-height + 22px; width: parent.width - 48px; text: root.load-error != "" ? root.load-error : root.loading ? "Подождите, получаем список игр и доступных сборок." : "Попробуйте изменить поиск или обновить каталог."; color: Theme.dim; font-size: 14px; wrap: word-wrap; }
+            ActionButton { x: 24px; y: empty-body.y + empty-body.preferred-height + 30px; width: 202px; text: "Обновить каталог"; icon: "download"; primary: true; enabled: !root.loading && root.panel-kind == ""; clicked => { root.action-requested("retry-catalog"); } }
+        }
+
+        if root.panel-kind != "": Rectangle { x: 0px; y: 0px;
+            width: parent.width; height: parent.height; background: #09080bd0;
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; scroll-event(event) => { accept } clicked => { root.request-close(); } }
+        }
+        if root.panel-kind != "": Rectangle {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+        modal := Rectangle {
+            opacity: root.gallery-open ? 1 : root.panel-opacity;
+            x: root.modal-x; y: root.modal-y;
+            width: root.modal-width; height: root.modal-height;
+            border-radius: 17px; border-width: 1px; border-color: #403c49; background: #1b1a20;
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; scroll-event(event) => { accept } }
+            Text { x: 28px; y: 23px; width: parent.width - 104px; height: 34px; text: root.panel-title; color: Theme.ink; font-size: 28px; font-weight: 600; overflow: elide; }
+            Text { x: 28px; y: 60px; width: parent.width - (root.show-video && root.video-qualities.length > 1 ? 325px : 90px); height: 18px; text: root.panel-subtitle; color: Theme.dim; font-size: 13px; overflow: elide; }
+            if root.show-video && root.video-qualities.length > 1: HorizontalLayout {
+                x: parent.width - 280px; y: 49px; width: 252px; height: 30px; spacing: 6px;
+                for quality in root.video-qualities: ActionButton {
+                    text: quality + "p"; accessible-name: "Качество видео " + quality + "p";
+                    height: 30px; compact: true; selected: root.video-quality == quality;
+                    clicked => { root.video-quality-selected(quality); }
+                }
+            }
+            modal-close := ActionButton {
+                property <string> active-panel: root.panel-kind;
+                init => { if root.gallery-open { keyboard.focus(); } else { self.focus(); } }
+                // The modal survives help -> feedback/settings transitions, but
+                // the previously focused action belongs to the removed content.
+                changed active-panel => { if root.gallery-open { keyboard.focus(); } else { self.focus(); } }
+                x: parent.width - 48px; y: 17px; width: 32px; compact: true; icon: "close"; accessible-name: "Закрыть"; enabled: !root.operation-busy && !root.feedback-exit-confirm; clicked => { root.request-close(); }
+            }
+
+            if root.gallery-open: Rectangle {
+                x: 19px; y: 85px; width: parent.width - 38px; height: parent.height - 95px;
+                Rectangle { x: 0px; y: 0px;
+                    width: parent.width; height: root.media-stage-height;
+                    border-radius: 10px; background: #100f14;
+                    Image { x: 0px; y: 0px;  width: parent.width; height: parent.height; source: root.gallery-image; image-fit: contain; }
+                    // Changing the full error surface also invalidates pixels exposed by the hidden native player.
+                    if root.show-video: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; border-radius: 10px; background: root.video-failed ? #19181f : #100f14;
+                        Text { x: 24px; y: 0px; width: parent.width - 48px; height: parent.height; text: root.video-failed ? "Не удалось загрузить видео\nВыберите другое качество или откройте ролик ещё раз." : "Открываем видео…"; wrap: word-wrap; color: Theme.dim; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    CornerMask { radius: 10px; outside: #1b1a20; }
+                }
+                if root.show-video: Rectangle { x: 0px;
+                    y: root.media-stage-height + 8px; width: parent.width; height: 36px;
+                    ActionButton { y: 0px;  x: 0px; width: 36px; height: 36px; icon: root.video-playing ? "pause" : "play"; accessible-name: root.video-playing ? "Приостановить видео" : "Воспроизвести видео"; quiet: true; clicked => { root.video-toggle(); } }
+                    Text { x: 47px; y: 0px; width: 100px; height: 36px; text: root.video-time-label; color: #c7c1d2; font-size: 11px; vertical-alignment: center; }
+                    SeekBar { x: 153px; y: 6px; width: parent.width - 301px; maximum: root.video-duration; value: root.video-position; label: "Позиция видео"; seek(value) => { root.video-seek(value); } }
+                    Icon { x: parent.width - 132px; y: 9px; name: "volume"; tint: Theme.dim; }
+                    SeekBar { x: parent.width - 105px; y: 6px; width: 100px; value: root.video-volume; label: "Громкость"; seek(value) => { root.video-volume-changed(value); } }
+                }
+                Text { x: 0px; y: root.media-stage-height + (root.show-video ? 55px : 14px); width: parent.width - 130px; height: 24px; text: root.gallery-caption + "  ·  " + (root.gallery-index + 1) + " / " + root.media.length; color: Theme.ink; font-size: 13px; font-weight: 500; overflow: elide; vertical-alignment: center; }
+                ActionButton { x: parent.width - 77px; y: root.media-stage-height + (root.show-video ? 50px : 9px); width: 34px; compact: true; icon: "left"; accessible-name: "Предыдущий материал"; clicked => { root.gallery-step(-1); } }
+                ActionButton { x: parent.width - 34px; y: root.media-stage-height + (root.show-video ? 50px : 9px); width: 34px; compact: true; icon: "right"; accessible-name: "Следующий материал"; clicked => { root.gallery-step(1); } }
+                for item[i] in root.media: Rectangle {
+                    x: i * 89px; y: root.media-stage-height + (root.show-video ? 92px : 51px); width: 81px; height: 48px;
+                    clip: true; background: #24222c;
+                    Image { x: 0px; y: 0px;  width: parent.width; height: parent.height; source: item.poster; image-fit: cover; }
+                    CornerMask { radius: 7px; outside: #1b1a20; }
+                    Rectangle { x: 0px; y: 0px;  width: parent.width; height: parent.height; border-radius: 7px; border-width: root.gallery-index == i ? 2px : 1px; border-color: root.gallery-index == i ? Theme.accent : #ffffff28; }
+                    if item.is-video: Icon { x: 31px; y: 14px; name: "play"; tint: white; }
+                    accessible-role: button; accessible-label: item.caption;
+                    accessible-action-default => { root.media-selected(i); }
+                    thumb-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
+                        key-pressed(event) => { if event.text == " " || event.text == Key.Return { root.media-selected(i); return accept; } reject }
+                        TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height;  mouse-cursor: pointer; clicked => { thumb-key.focus(); root.media-selected(i); } }
+                    }
+                }
+            }
+
+            if root.panel-kind == "mods": Rectangle {
+                x: 28px; y: 96px; width: parent.width - 56px; height: parent.height - 120px;
+                mod-note := ScrollView { x: 0px; y: 0px; width: parent.width; height: clamp(mod-note-body.preferred-height, 32px, 112px);
+                    content-width: self.visible-width - 16px; content-height: max(self.height, mod-note-body.preferred-height);
+                    mod-note-body := Text { x: 0px; y: 0px; width: parent.width - 16px; text: root.modpack-description + (root.metadata-note != "" && root.metadata-note != root.modpack-description ? (root.modpack-description == "" ? "" : "\n\n") + root.metadata-note : ""); color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                }
+                SearchField { x: 0px; y: mod-note.height + 12px; width: parent.width - (root.has-modpack-link ? 190px : 0px); placeholder: "Найти мод по названию или описанию"; edited(value) => { root.mod-search-edited(value); } }
+                if root.has-modpack-link: ActionButton { x: parent.width - 178px; y: mod-note.height + 12px; width: 178px; height: 38px; text: "Страница сборки"; compact: true; quiet: true; icon: "arrow"; clicked => { root.action-requested("open-modpack-source"); } }
+                Text { x: 0px; y: mod-note.height + 60px; width: 78px; height: 36px; text: "Категория"; color: Theme.dim; font-size: 12px; vertical-alignment: center; }
+                ComboBox { x: 86px; y: mod-note.height + 60px; width: 220px; height: 36px; model: root.mod-categories; current-value: root.mod-category; label: "Категория модов"; selected(value) => { root.mod-category-selected(value); } }
+                Text { x: 322px; y: mod-note.height + 60px; width: parent.width - 322px; height: 36px; text: "Найдено: " + root.mods.length; color: Theme.dim; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
+                ScrollView { x: 0px;
+                    y: mod-note.height + 112px; width: parent.width; height: parent.height - self.y;
+                    content-width: self.visible-width - 16px; content-height: max(self.height, mod-rows.preferred-height);
+                    mod-rows := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 10px; alignment: start;
+                        for item in root.mods: Rectangle {
+                            height: max(95px, mod-name.preferred-height + mod-description.preferred-height + 56px);
+                            background: #24222b; border-radius: 10px; border-width: 1px; border-color: #37333e;
+                            mod-name := Text { x: 16px; y: 12px; width: parent.width - 32px; text: item.name; color: Theme.ink; font-size: 15px; font-weight: 600; wrap: word-wrap; }
+                            Text { x: 16px; y: mod-name.preferred-height + 20px; width: parent.width - 32px; height: 17px; text: item.category + (item.version == "" ? "" : "  ·  " + item.version); color: #bcaed6; font-size: 11px; overflow: elide; }
+                            mod-description := Text { x: 16px; y: mod-name.preferred-height + 42px; width: parent.width - 32px; text: item.description; color: #c9c4d1; font-size: 12px; wrap: word-wrap; }
+                        }
+                        if root.mods.length == 0: Text { text: "Ничего не найдено. Попробуйте другой запрос."; color: Theme.dim; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+                    }
+                }
+            }
+
+            if root.panel-kind == "settings": Rectangle {
+                x: 28px; y: 96px; width: parent.width - 56px; height: 40px;
+                HorizontalLayout { x: 0px; y: 0px; width: parent.width; height: parent.height; spacing: 8px;
+                    ActionButton { text: "Основное"; selected: root.settings-section == 0; quiet: true; motion: false; clicked => { root.settings-section = 0; } }
+                    ActionButton { text: "Загрузки"; accessible-name: "Настройки загрузок"; selected: root.settings-section == 1; quiet: true; motion: false; clicked => { root.settings-section = 1; } }
+                    ActionButton { text: "Обслуживание"; selected: root.settings-section == 2; quiet: true; motion: false; clicked => { root.settings-section = 2; } }
+                }
+            }
+            if root.panel-kind == "settings": settings-scroll := ScrollView {
+                x: 28px; y: 152px; width: parent.width - 56px; height: parent.height - 244px;
+                property <int> section: root.settings-section;
+                changed section => { self.content-y = 0px; }
+                content-width: self.visible-width - 16px; content-height: settings-form.preferred-height;
+                settings-form := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 16px; alignment: start;
+                    if root.settings-section == 0: SectionHeading { text: "Игры и файлы"; }
+                    if root.settings-section == 0: Rectangle { height: 102px;
+                        Text { x: 0px; y: 0px; text: "Папка с играми"; color: Theme.dim; font-size: 13px; }
+                        games-path := FormField { x: 0px; y: 27px; width: parent.width - 122px; text <=> root.settings-path; label: "Папка с играми"; enabled: !root.operation-busy; }
+                        ActionButton { x: parent.width - 110px; y: 27px; width: 110px; text: "Выбрать…"; icon: "folder"; enabled: !root.operation-busy; clicked => { root.action-requested("choose-games-folder"); } }
+                        Text { x: 0px; y: 76px; width: parent.width; text: "Установленные игры останутся в прежней папке."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                    }
+                    if root.settings-section == 0: SectionHeading { text: "Поведение окна"; }
+                    if root.settings-section == 0: SettingsSwitchRow { label: "Сворачивать в трей при закрытии"; description: "Лаунчер продолжит работать рядом с часами."; checked: root.settings-tray; enabled: !root.operation-busy; toggled(value) => { root.settings-tray = value; } }
+                    if root.settings-section == 0: SettingsSwitchRow { label: "Уменьшить движение"; description: "Меньше анимаций при переходах и выборе игры."; checked: root.reduced-motion; enabled: !root.operation-busy; toggled(value) => { root.setting-changed("reduced-motion", value ? "true" : "false"); } }
+                    if root.settings-section == 0: SettingsSwitchRow { label: "Строки песни в шапке"; description: "Показывать караоке над карточкой игры."; checked: root.karaoke-enabled; enabled: !root.operation-busy; toggled(value) => { root.setting-changed("karaoke", value ? "true" : "false"); } }
+                    if root.settings-section == 1: SectionHeading { text: "Скорость скачивания"; }
+                    if root.settings-section == 1: Rectangle { height: 70px;
+                        Text { x: 0px; y: 7px; width: parent.width - 174px; text: "Одновременные потоки"; color: Theme.ink; font-size: 14px; wrap: word-wrap; }
+                        threads := SpinBox { x: parent.width - 150px; y: 0px; width: 150px; height: 36px; minimum: 2; maximum: 16; value <=> root.settings-threads; enabled: !root.operation-busy; label: "Количество потоков скачивания"; }
+                        Text { x: 0px; y: 47px; width: parent.width; text: "Количество подключений для новых загрузок."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                    }
+                    if root.settings-section == 1: SettingsSwitchRow { label: "Ограничить скорость скачивания"; description: root.settings-speed > 0 ? "Оставить часть канала для игры и звонков." : "Скачивать с максимально доступной скоростью."; checked: root.settings-speed > 0; enabled: !root.operation-busy; toggled(value) => { root.settings-speed = value ? root.settings-last-speed : 0; } }
+                    if root.settings-section == 1: Rectangle { height: 52px;
+                        Text { x: 0px; y: 8px; width: parent.width - 174px; text: "Лимит, МБ/с"; color: Theme.ink; font-size: 14px; }
+                        speed := SpinBox { x: parent.width - 150px; y: 0px; width: 150px; height: 36px; minimum: 1; maximum: 1000; value <=> root.settings-last-speed; enabled: !root.operation-busy && root.settings-speed > 0; label: "Лимит скорости в мегабайтах в секунду"; }
+                    }
+                    if root.settings-section == 1: Text { text: "Скорость меняется сразу, даже во время загрузки."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                    if root.settings-section == 2: SectionHeading { text: "Chill Hub · " + root.launcher-version; }
+                    if root.settings-section == 2: HorizontalLayout { spacing: 12px;
+                        ActionButton { text: "Обновления"; icon: "download"; enabled: !root.operation-busy; clicked => { root.settings-leave("update"); } }
+                        ActionButton { text: "Что нового"; icon: "book"; enabled: !root.operation-busy; clicked => { root.settings-leave("changelog"); } }
+                    }
+                    if root.settings-section == 2: HorizontalLayout { spacing: 12px;
+                        ActionButton { text: "Антивирус"; icon: "shield"; enabled: !root.operation-busy; clicked => { root.settings-leave("security"); } }
+                        ActionButton { text: "Идея или ошибка"; icon: "info"; enabled: !root.operation-busy; clicked => { root.settings-leave("feedback"); } }
+                    }
+                    if root.settings-section == 2: HorizontalLayout { spacing: 12px;
+                        ActionButton { text: "Папка с логами"; icon: "folder"; quiet: true; enabled: !root.operation-busy; clicked => { root.action-requested("open-logs"); } }
+                        ActionButton { text: "Игры вне каталога"; icon: "folder"; quiet: true; enabled: !root.operation-busy; clicked => { root.settings-leave("orphans"); } }
+                    }
+                    if root.settings-section == 2: Rectangle { height: 1px; background: Theme.border; }
+                    if root.settings-section == 2: SectionHeading { text: "Подключение"; }
+                    if root.settings-section == 2: FormField { text <=> root.settings-api; label: "Адрес сервера Chill Hub"; enabled: !root.operation-busy; }
+                    if root.settings-section == 2: Text { text: "Адрес сервера меняют только по инструкции поддержки."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                    if root.settings-error != "": Text { text: root.settings-error; color: #f0aaa9; font-size: 13px; wrap: word-wrap; }
+                }
+            }
+            if root.panel-kind == "settings": Rectangle { x: 28px; y: parent.height - 76px; width: parent.width - 56px; height: 64px; background: #1b1a20;
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.border; }
+                settings-save-message := Text { x: 0px; y: 12px; width: parent.width - 195px; height: 42px; text: root.settings-error != "" ? root.settings-error : root.settings-save-status != "" ? root.settings-save-status : "Изменения сохраняются при выходе"; color: root.settings-error != "" ? #f0aaa9 : Theme.dim; font-size: 12px; wrap: no-wrap; overflow: elide; vertical-alignment: center; }
+                ActionButton { x: parent.width - 180px; y: 12px; width: 180px; text: root.operation-busy ? "Сохраняем…" : "Сохранить"; primary: true; enabled: !root.operation-busy; clicked => { root.settings-leave(""); } }
+            }
+
+            if root.panel-kind == "downloads": ScrollView {
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 132px;
+                content-width: self.visible-width - 16px; content-height: max(self.height, queue-list.preferred-height);
+                queue-list := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 12px; alignment: start;
+                    Text { text: root.panel-body; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
+                    if root.queue-error != "": Rectangle {
+                        height: queue-error-copy.preferred-height + 32px;
+                        background: #2b2630; border-radius: 10px; border-width: 1px; border-color: #554757;
+                        queue-error-copy := Text { x: 16px; y: 16px; width: parent.width - 32px; text: root.queue-error; color: #ddcddd; font-size: 13px; wrap: word-wrap; }
+                    }
+                    for item[i] in root.queue: Rectangle {
+                        property <bool> has-actions: item.can-confirm || item.can-pause || item.can-resume || item.can-cancel || item.can-prioritize || item.can-remove || item.security-blocked;
+                        height: max(self.has-actions ? 184px : 130px, queue-detail.preferred-height + (self.has-actions ? 150px : 94px));
+                        background: #25222d; border-radius: 12px; border-width: 1px; border-color: #3e3748;
+                        Text { x: 16px; y: 14px; width: parent.width - 32px; text: item.title; color: Theme.ink; font-size: 17px; font-weight: 600; overflow: elide; }
+                        Text { x: 16px; y: 42px; width: parent.width - 32px; height: 18px; text: item.state; color: Theme.accent; font-size: 12px; overflow: elide; }
+                        queue-detail := Text { x: 16px; y: 65px; width: parent.width - 32px; text: item.detail; color: Theme.dim; font-size: 12px; wrap: char-wrap; }
+                        Rectangle { x: 16px; y: parent.height - (parent.has-actions ? 72px : 22px); width: parent.width - 32px; height: 4px; border-radius: 2px; background: #49414f;
+                            Rectangle { x: 0px; y: 0px; width: parent.width * clamp(item.progress, 0, 1); height: parent.height; border-radius: 2px; background: Theme.accent; }
+                        }
+                        if item.can-confirm || item.can-pause || item.can-resume || item.can-cancel || item.can-prioritize || item.can-remove || item.security-blocked: HorizontalLayout { x: 16px; y: parent.height - 54px; width: parent.width - 32px; height: 38px; spacing: 10px;
+                            if item.can-confirm || item.can-pause || item.can-resume: ActionButton { compact: true; text: item.can-confirm ? "Подтвердить" : item.can-pause ? "Приостановить" : "Продолжить"; primary: item.can-confirm || item.can-resume; clicked => { root.queue-action(item.id, item.can-confirm ? "confirm" : item.can-pause ? "pause" : "resume"); } }
+                            if item.can-cancel: ActionButton { compact: true; text: "Отменить"; clicked => { root.queue-action(item.id, "cancel"); } }
+                            if item.security-blocked || item.can-prioritize: ActionButton { compact: true; quiet: true; text: item.security-blocked ? "Антивирус" : "В начало"; clicked => { root.queue-action(item.id, item.security-blocked ? "security" : "first"); } }
+                            if item.can-remove: ActionButton { compact: true; quiet: true; text: "Убрать из списка"; clicked => { root.queue-action(item.id, "remove"); } }
+                        }
+                    }
+                    if root.queue.length == 0 && root.queue-error == "": Rectangle { height: 170px;
+                        Icon { x: 0px; y: 22px; width: 32px; height: 32px; name: "download"; tint: Theme.accent; }
+                        Text { x: 48px; y: 22px; width: parent.width - 48px; text: "Очередь пуста"; color: Theme.ink; font-size: 20px; font-weight: 600; }
+                        Text { x: 48px; y: 61px; width: parent.width - 48px; text: "Выберите игру и нажмите «Установить» или «Обновить». Здесь появится ход загрузки."; color: Theme.dim; font-size: 14px; wrap: word-wrap; }
+                    }
+                }
+            }
+
+            if root.panel-kind == "update": ScrollView {
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 132px;
+                content-width: self.visible-width - 16px; content-height: update-content.preferred-height;
+                update-content := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 22px; alignment: start;
+                    Rectangle { height: 62px;
+                        Rectangle { x: 0px; y: 0px; width: 54px; height: 54px; border-radius: 14px; background: #332c40;
+                            Icon { x: 15px; y: 15px; width: 24px; height: 24px; name: root.update-error ? "info" : root.update-checked && !root.update-available ? "check" : "download"; tint: Theme.accent; }
+                        }
+                        Text { x: 72px; y: 1px; width: parent.width - 72px; height: 30px; text: root.operation-busy ? (root.update-available ? "Подготавливаем обновление…" : "Ищем обновления…") : root.update-error ? (root.update-available ? "Обновление не завершено" : "Не удалось проверить") : root.update-available ? "Доступна новая версия" : root.update-checked ? "Всё актуально" : "Проверить обновления"; color: Theme.ink; font-size: 21px; font-weight: 600; overflow: elide; }
+                        Text { x: 72px; y: 37px; width: parent.width - 72px; height: 20px; text: root.update-available ? root.launcher-version + "  →  " + root.update-target : "Chill Hub " + root.launcher-version; color: Theme.dim; font-size: 13px; }
+                    }
+                    Text { text: root.panel-body; color: root.update-error ? #f0aaa9 : #d4cdda; font-size: 14px; wrap: word-wrap; }
+                    if root.operation-busy || root.task-progress > 0: Rectangle { height: 6px; border-radius: 3px; background: #37323f;
+                        Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.task-progress, 0, 1); height: parent.height; border-radius: 3px; background: Theme.accent; }
+                    }
+                    if root.task-status != "": Text { text: root.task-status; color: Theme.dim; font-size: 12px; wrap: char-wrap; }
+                    HorizontalLayout { spacing: 12px;
+                        ActionButton { text: root.operation-busy ? "Подождите…" : root.update-available ? "Обновить и перезапустить" : root.update-error ? "Попробовать снова" : "Проверить обновления"; primary: true; icon: "download"; enabled: !root.operation-busy; clicked => { root.action-requested(root.update-available ? "update-install" : "update-check"); } }
+                        ActionButton { text: "Что нового"; icon: "book"; quiet: true; enabled: !root.operation-busy; clicked => { root.panel-requested("changelog"); } }
+                    }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    Text { text: "Игры и настройки сохранятся при обновлении."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                    if root.update-available: HorizontalLayout { spacing: 12px;
+                        ActionButton { text: "Проверить установку"; icon: "shield"; quiet: true; enabled: !root.operation-busy && root.update-available; clicked => { root.action-requested("update-verify"); } }
+                        ActionButton { text: "Проверить снова"; quiet: true; enabled: !root.operation-busy; clicked => { root.action-requested("update-check"); } }
+                    }
+                }
+            }
+            if root.panel-kind == "security": ScrollView {
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 132px;
+                content-width: self.visible-width - 16px; content-height: security-content.preferred-height;
+                security-content := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 20px; alignment: start;
+                    Rectangle { height: 54px;
+                        Rectangle { x: 0px; y: 0px; width: 54px; height: 54px; border-radius: 14px; background: #332c40; Icon { x: 15px; y: 15px; width: 24px; height: 24px; name: "shield"; tint: Theme.accent; } }
+                        Text { x: 72px; y: 2px; width: parent.width - 72px; height: 28px; text: "Если антивирус мешает игре"; color: Theme.ink; font-size: 21px; font-weight: 600; overflow: elide; }
+                        Text { x: 72px; y: 35px; width: parent.width - 72px; height: 19px; text: root.game-title; color: Theme.dim; font-size: 13px; overflow: elide; }
+                    }
+                    Text { text: root.game-title == "" ? "Сначала выберите игру в библиотеке. Проверка блокировок доступна и без выбранной игры." : "Помощник определит антивирус и предложит настройку для выбранной игры."; color: #d4cdda; font-size: 14px; wrap: word-wrap; }
+                    ActionButton { text: "Настроить антивирус"; icon: "shield"; primary: true; enabled: !root.operation-busy && root.game-title != ""; clicked => { root.action-requested("security-helper"); } }
+                    Text { text: "Папки будут показаны перед изменением. Защита остальных файлов продолжит работать."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    HorizontalLayout { spacing: 12px;
+                        ActionButton { text: root.operation-busy ? "Проверяем…" : "Проверить блокировки"; quiet: true; enabled: !root.operation-busy; clicked => { root.action-requested("security-diagnostics"); } }
+                        ActionButton { text: "Безопасность Windows"; icon: "external"; quiet: true; enabled: !root.operation-busy; clicked => { root.action-requested("windows-security"); } }
+                    }
+                    if root.panel-body != "": Text { text: root.panel-body; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
+                }
+            }
+
+            if root.panel-kind == "manage" || root.panel-kind == "help": management-scroll := ScrollView {
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 132px;
+                content-width: self.visible-width - 16px; content-height: max(self.height, panel-content.height);
+                panel-content := Rectangle { x: 0px; y: 0px; width: parent.width - 16px; height: panel-explanation.preferred-height + (root.panel-kind == "manage" ? 490px : 310px);
+                    Rectangle { x: 0px; y: 0px; width: 49px; height: 49px; border-radius: 13px; background: #3e344e; Icon { x: 13px; y: 13px; width: 23px; height: 23px; name: root.panel-kind == "security" ? "shield" : root.panel-kind == "manage" ? "tune" : "info"; tint: Theme.accent; } }
+                    Text { x: 65px; y: 0px; width: parent.width - 65px; height: 49px; text: root.panel-kind == "manage" ? root.game-title : root.panel-kind == "security" ? "Безопасность Windows" : "Chill Hub · " + root.launcher-version; color: Theme.ink; font-size: 20px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                    panel-explanation := Text { x: 0px; y: root.panel-kind == "manage" ? 446px : 75px; width: parent.width; text: root.panel-body + (root.panel-kind == "manage" ? "\n\n" + root.manage-details + (root.manage-path != "" ? "\n\nПапка игры\n" + root.manage-path : "") : ""); color: #c7c0d1; font-size: 14px; wrap: root.panel-kind == "manage" ? char-wrap : word-wrap; }
+                    if root.panel-kind == "manage": Rectangle { x: 0px; y: 66px; width: parent.width; height: 380px;
+                        Text { x: 0px; y: 0px; width: parent.width; text: (root.installed-version != "" ? root.installed-version : "Игра ещё не установлена") + (root.playtime-label != "" ? "   ·   " + root.playtime-label : ""); color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                        manage-verify-game := ActionButton { x: 0px; y: 35px; width: (parent.width - 12px) / 2; text: "Проверить игру"; icon: "check"; enabled: root.can-verify-game && !root.operation-busy; clicked => { root.action-requested("verify-game"); } }
+                        manage-verify-mods := ActionButton { x: (parent.width + 12px) / 2; y: 35px; width: (parent.width - 12px) / 2; text: "Проверить модпак"; icon: "package"; enabled: root.can-verify-mods && !root.operation-busy; clicked => { root.action-requested("verify-mods"); } }
+                        manage-folder := ActionButton { x: 0px; y: 88px; width: (parent.width - 12px) / 2; text: "Папка игры"; icon: "folder"; enabled: root.has-game-files && !root.operation-busy; clicked => { root.action-requested("open-game-folder"); } }
+                        manage-shortcut := ActionButton { x: (parent.width + 12px) / 2; y: 88px; width: (parent.width - 12px) / 2; text: "Создать ярлык"; icon: "arrow"; enabled: root.can-create-shortcut && !root.operation-busy; clicked => { root.action-requested("create-shortcut"); } }
+                        Text { x: 0px; y: 151px; text: "Версия игры"; color: Theme.ink; font-size: 14px; }
+                        ComboBox { x: 0px; y: 179px; width: parent.width - 226px; height: 38px; model: root.versions; current-value: root.selected-version; enabled: root.source == "local" && root.versions.length > 0 && !root.operation-busy; label: "Версия игры для установки"; selected(value) => { root.version-selected(value); } }
+                        ActionButton { x: parent.width - 212px; y: 178px; width: 212px; text: "Установить версию"; primary: true; enabled: root.source == "local" && root.versions.length > 0 && root.selected-version != "" && !root.operation-busy; clicked => { root.action-requested("version-install"); } }
+                        ActionButton { x: 0px; y: 245px; width: 236px; text: "Скопировать путь"; icon: "folder"; compact: true; enabled: root.manage-path != "" && !root.operation-busy; clicked => { root.action-requested("copy-game-path"); } }
+                        manage-delete := ActionButton { x: 0px; y: 300px; width: 236px; text: "Удалить локальные файлы"; compact: true; enabled: root.source == "local" && root.has-game-files && !root.operation-busy; clicked => { root.action-requested("delete-game"); } }
+                    }
+                    if root.panel-kind == "help": Rectangle { x: 0px; y: panel-explanation.preferred-height + 100px; width: parent.width; height: 210px;
+                        ActionButton { x: 0px; y: 0px; width: (parent.width - 12px) / 2; text: "Обновления"; icon: "download"; clicked => { root.panel-requested("update"); } }
+                        ActionButton { x: (parent.width + 12px) / 2; y: 0px; width: (parent.width - 12px) / 2; text: "Что нового"; icon: "book"; clicked => { root.panel-requested("changelog"); } }
+                        ActionButton { x: 0px; y: 53px; width: (parent.width - 12px) / 2; text: "Идея или ошибка"; icon: "info"; clicked => { root.panel-requested("feedback"); } }
+                        ActionButton { x: (parent.width + 12px) / 2; y: 53px; width: (parent.width - 12px) / 2; text: "Антивирус"; icon: "shield"; clicked => { root.panel-requested("security"); } }
+                        ActionButton { x: 0px; y: 106px; width: 235px; text: "Открыть папку с логами"; icon: "folder"; quiet: true; clicked => { root.action-requested("open-logs"); } }
+                        ActionButton { x: 247px; y: 106px; width: parent.width - 247px; text: "Игры вне каталога"; icon: "folder"; quiet: true; clicked => { root.panel-requested("orphans"); } }
+                        ActionButton { x: 0px; y: 159px; width: 270px; text: "Обновить библиотеку · Ctrl R"; icon: "download"; quiet: true; enabled: !root.operation-busy && !root.loading; clicked => { root.action-requested("retry-catalog"); } }
+                    }
+                }
+            }
+
+            if root.panel-kind == "orphans": ScrollView {
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 132px;
+                content-width: self.visible-width - 16px; content-height: max(self.height, orphan-list.preferred-height);
+                orphan-list := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 12px; alignment: start;
+                    Text { text: root.panel-body; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
+                    if root.orphans.length > 0: ActionButton { width: 280px; text: "Удалить выбранные · " + root.orphan-selection-count; primary: true; enabled: root.orphan-selection-count > 0 && !root.operation-busy; clicked => { root.action-requested("delete-selected-orphans"); } }
+                    for item in root.orphans: Rectangle {
+                        height: orphan-path.preferred-height + orphan-result.preferred-height + 122px; background: #25222d; border-radius: 12px; border-width: 1px; border-color: #3e3748;
+                        Toggle { x: 16px; y: 14px; checked: item.selected; label: "Выбрать " + item.title; enabled: !root.operation-busy && item.result == ""; toggled(value) => { root.orphan-action(item.id,"toggle"); } }
+                        Text { x: 68px; y: 14px; width: parent.width - 84px; height: 26px; text: item.title; color: Theme.ink; font-size: 17px; font-weight: 600; overflow: elide; }
+                        orphan-path := Text { x: 16px; y: 46px; width: parent.width - 32px; text: item.path; color: Theme.dim; font-size: 12px; wrap: char-wrap; }
+                        orphan-result := Text { x: 16px; y: orphan-path.y + orphan-path.preferred-height + 8px; width: parent.width - 32px; text: item.result; color: Theme.ink; font-size: 12px; wrap: word-wrap; }
+                        ActionButton { x: 16px; y: parent.height - 49px; width: 180px; text: "Открыть папку"; icon: "folder"; compact: true; enabled: !root.operation-busy && item.result != "Удалено"; clicked => { root.orphan-action(item.id, "open"); } }
+                        ActionButton { x: 208px; y: parent.height - 49px; width: 180px; text: "Удалить игру"; compact: true; enabled: !root.operation-busy && item.result == ""; clicked => { root.orphan-action(item.id, "delete"); } }
+                    }
+                }
+            }
+
+            if root.panel-kind == "feedback": Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height;
+              feedback-scroll := ScrollView {
+                enabled: !root.feedback-exit-confirm;
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 196px;
+                content-width: self.visible-width - 16px; content-height: feedback-form.height;
+                feedback-form := Rectangle { x: 0px; y: 0px; width: parent.width - 16px; height: 520px + feedback-status.preferred-height;
+                    property <bool> logs: true;
+                    Text { x: 0px; y: 0px; width: parent.width; text: "Расскажите, что произошло или чего вам не хватает. Имя и контакт можно не указывать."; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
+                    Text { x: 0px; y: 48px; text: "Сообщение"; color: Theme.ink; font-size: 13px; }
+                    feedback-message := TextEdit { x: 0px; y: 74px; width: parent.width; height: 150px; font-size: 14px; font-family: "Segoe UI"; wrap: word-wrap; placeholder-text: "Что произошло? Как это повторить?"; enabled: !root.operation-busy && !root.feedback-exit-confirm; label: "Текст сообщения"; edited(value) => { root.feedback-dirty = value != "" || feedback-name.text != "" || feedback-contact.text != ""; } }
+                    Text { x: 0px; y: 244px; text: "Тема"; color: Theme.ink; font-size: 13px; }
+                    feedback-kind := ComboBox { x: 0px; y: 270px; width: parent.width; height: 38px; model: ["Ошибка", "Предложение", "Вопрос", "Другое"]; current-index: 0; enabled: !root.operation-busy && !root.feedback-exit-confirm; label: "Тема сообщения"; }
+                    Text { x: 0px; y: 330px; text: "Имя · необязательно"; color: Theme.dim; font-size: 13px; }
+                    feedback-name := FormField { x: 0px; y: 356px; width: (parent.width - 12px) / 2; label: "Ваше имя, необязательно"; enabled: !root.operation-busy && !root.feedback-exit-confirm; edited(value) => { root.feedback-dirty = value != "" || feedback-contact.text != "" || feedback-message.text != ""; } }
+                    Text { x: (parent.width + 12px) / 2; y: 330px; text: "Контакт · необязательно"; color: Theme.dim; font-size: 13px; }
+                    feedback-contact := FormField { x: (parent.width + 12px) / 2; y: 356px; width: (parent.width - 12px) / 2; label: "Контакт для ответа, необязательно"; enabled: !root.operation-busy && !root.feedback-exit-confirm; edited(value) => { root.feedback-dirty = value != "" || feedback-name.text != "" || feedback-message.text != ""; } }
+                    Text { x: 0px; y: 428px; width: parent.width - 65px; text: "Приложить диагностику"; color: Theme.ink; font-size: 14px; }
+                    Toggle { x: parent.width - 40px; y: 423px; checked: feedback-form.logs; enabled: !root.operation-busy && !root.feedback-exit-confirm; label: "Приложить диагностику"; toggled(value) => { feedback-form.logs = value; } }
+                    Text { x: 0px; y: 453px; width: parent.width; text: "Журнал работы лаунчера и сведения о системе помогают разобраться с ошибкой."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                    feedback-status := Text { x: 0px; y: 508px; width: parent.width; text: root.panel-body; color: #c7bbd7; font-size: 12px; wrap: word-wrap; }
+                }
+            }
+              Rectangle { x: 28px; y: parent.height - 76px; width: parent.width - 56px; height: 64px;
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.border; }
+                ActionButton { x: parent.width - 183px; y: 12px; width: 183px; primary: true; text: root.operation-busy ? "Отправляем…" : "Отправить"; enabled: !root.operation-busy && !root.feedback-exit-confirm; clicked => { root.feedback-send(feedback-name.text, feedback-contact.text, feedback-kind.current-index == 0 ? "bug" : feedback-kind.current-index == 1 ? "idea" : feedback-kind.current-index == 2 ? "question" : "other", feedback-message.text, feedback-form.logs); } }
+                ActionButton { x: 0px; y: 12px; width: 160px; text: "Отмена"; quiet: true; enabled: !root.operation-busy && !root.feedback-exit-confirm; clicked => { root.request-close(); } }
+              }
+            }
+            if root.feedback-exit-confirm: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #0008; border-radius: 17px;
+              TouchArea { width: parent.width; height: parent.height; }
+              Rectangle { x: 20px; y: (parent.height - self.height) / 2; width: parent.width - 40px; height: 250px; background: #1b1a20; border-radius: 14px; border-width: 1px; border-color: Theme.border;
+                Text { x: 32px; y: 42px; width: parent.width - 64px; text: "Закрыть форму?"; color: Theme.ink; font-size: 25px; font-weight: 600; }
+                Text { x: 32px; y: 99px; width: parent.width - 64px; text: "Введённый текст будет потерян. Можно вернуться к сообщению и продолжить ввод."; color: Theme.dim; font-size: 14px; wrap: word-wrap; }
+                ActionButton { init => { self.focus(); } x: 32px; y: 183px; width: 216px; primary: true; text: "Продолжить ввод"; clicked => { root.feedback-exit-confirm = false; } }
+                ActionButton { x: 262px; y: 183px; width: 190px; text: "Удалить текст"; clicked => { root.feedback-dirty = false; root.feedback-exit-confirm = false; root.panel-closed(); } }
+              }
+            }
+
+            if root.panel-kind == "changelog": ScrollView {
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 196px;
+                content-width: self.visible-width - 16px; content-height: releases-list.preferred-height;
+                releases-list := VerticalLayout { x: 0px; y: 0px; width: parent.width - 16px; spacing: 20px; alignment: start;
+                    for release in root.releases: Rectangle {
+                        height: release-lines.preferred-height + 93px; background: release.version == root.launcher-version ? #26222e : transparent; border-radius: 12px;
+                        Text { x: 18px; y: 16px; width: 115px; height: 29px; text: release.version; color: Theme.ink; font-size: 22px; font-weight: 600; overflow: elide; }
+                        if release.fresh: Rectangle { x: 143px; y: 20px; width: 61px; height: 22px; background: #3c334d; border-radius: 6px;
+                            Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: "Новое"; color: Theme.accent; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Text { x: 216px; y: 20px; width: parent.width - 234px; height: 22px; text: release.date; color: Theme.dim; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+                        release-lines := VerticalLayout { x: 18px; y: 60px; width: parent.width - 36px; spacing: 9px; alignment: start;
+                            for change in release.changes: Rectangle { height: change-copy.preferred-height;
+                                Rectangle { x: 1px; y: 8px; width: 4px; height: 4px; border-radius: 2px; background: release.fresh ? Theme.accent : Theme.dim; }
+                                change-copy := Text { x: 17px; y: 0px; width: parent.width - 17px; text: change; color: #d4cdda; font-size: 14px; wrap: word-wrap; }
+                            }
+                        }
+                        Rectangle { x: 18px; y: parent.height - 1px; width: parent.width - 36px; height: 1px; background: Theme.border; }
+                    }
+                    if root.releases.length == 0: Text { text: "История изменений пока недоступна."; color: Theme.dim; font-size: 14px; wrap: word-wrap; }
+                }
+            }
+            if root.panel-kind == "changelog": Rectangle { x: 28px; y: parent.height - 76px; width: parent.width - 56px; height: 64px;
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.border; }
+                Text { x: 0px; y: 12px; width: parent.width - 195px; height: 42px; text: "Установлена версия " + root.launcher-version; color: Theme.dim; font-size: 12px; vertical-alignment: center; }
+                ActionButton { x: parent.width - 180px; y: 12px; width: 180px; text: "Понятно"; primary: true; clicked => { root.request-close(); } }
+            }
+            if root.panel-kind == "confirm": ScrollView {
+                x: 28px; y: 104px; width: parent.width - 56px; height: parent.height - 196px;
+                content-width: root.confirmation-content-width; content-height: max(self.height, confirmation.height);
+                confirmation := Rectangle { x: 0px; y: 0px; width: root.confirmation-content-width; height: confirmation-body.preferred-height;
+                    confirmation-body := Text { x: 0px; y: 0px; width: parent.width; text: root.panel-body; color: #d4cdda; font-size: 14px; wrap: word-wrap; }
+                }
+            }
+            if root.panel-kind == "confirm": Rectangle { x: 28px; y: parent.height - 76px; width: parent.width - 56px; height: 64px;
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.border; }
+                ActionButton { x: 0px; y: 12px; width: 180px; text: "Отмена"; enabled: !root.operation-busy; clicked => { root.action-requested("cancel-action"); } }
+                ActionButton { x: parent.width - 240px; y: 12px; width: 240px; text: root.confirm-text != "" ? root.confirm-text : "Подтвердить"; primary: true; enabled: !root.operation-busy; clicked => { root.action-requested("confirm-action"); } }
+            }
+        }
+        }
+        if root.toast != "": Rectangle {
+            x: (root.width - self.width) / 2; y: root.height - 66px; width: min(620px, root.width - 64px); height: 44px;
+            border-radius: 10px; border-width: 1px; border-color: #595061; background: #29252f;
+            Text { y: 0px;  x: 16px; width: parent.width - 32px; height: parent.height; text: root.toast; color: Theme.ink; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+        }
+    }
+}

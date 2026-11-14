@@ -4,6 +4,7 @@ package games
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,8 @@ type Entry struct {
 	// every edit, and a nil here must not start appending an empty object to
 	// three hundred entries that have nothing to do with mods.
 	Mods *ModsConfig `json:"mods,omitempty"`
+
+	Presentation *Presentation `json:"presentation,omitempty"`
 }
 
 // ModsConfig describes where a game's mods come from and where the game itself
@@ -237,6 +240,7 @@ func (h *Handlers) Get(w http.ResponseWriter, _ *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to read the registry", "games", err)
 		return
 	}
+	w.Header().Set("ETag", registryETag(b))
 	items, ok := decodeRegistryItems(b, false)
 	if !ok {
 		// The stored registry isn't recognizable {"items":[...]} JSON at all;
@@ -620,7 +624,16 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	// сливается из версии, прочитанной до неё.
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if !h.checkRegistryPrecondition(w, r) {
+		return
+	}
 	items = mergeWithStored(items, body, h.storedByID())
+	for _, it := range items {
+		if err := ValidatePresentation(it.Presentation); err != nil {
+			http.Error(w, fmt.Sprintf("%s: %v", it.GameID, err), http.StatusBadRequest)
+			return
+		}
+	}
 
 	sortEntries(items)
 	b, err := json.MarshalIndent(struct {
@@ -643,7 +656,28 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", registryETag(b))
 	_, _ = w.Write(b)
+}
+
+func registryETag(data []byte) string {
+	return fmt.Sprintf("\"%x\"", sha256.Sum256(data))
+}
+
+// A publishing client can bind its complete registry snapshot to one revision.
+// The caller holds h.mu, so a stale snapshot never overwrites another editor.
+func (h *Handlers) checkRegistryPrecondition(w http.ResponseWriter, r *http.Request) bool {
+	expected := r.Header.Get("If-Match")
+	if expected == "" {
+		return true
+	}
+	// #nosec G304 -- registryPath is the content root plus constant components.
+	current, err := os.ReadFile(h.registryPath())
+	if err != nil || expected != registryETag(current) {
+		http.Error(w, "registry changed; fetch a fresh snapshot before saving", http.StatusPreconditionFailed)
+		return false
+	}
+	return true
 }
 
 // storedByID reads the registry as it is on disk, keyed by game id.
@@ -670,11 +704,9 @@ func (h *Handlers) storedByID() map[string]Entry {
 // mergeWithStored fills in, for every incoming entry, the fields its sender did
 // not mention.
 //
-// Реализовано разбором ПОВЕРХ сохранённой записи, а не списком «полей, которые
-// надо сберечь». Список пришлось бы дополнять при каждом новом поле, и забытое
-// дополнение — это ровно та же тихая потеря данных, только в следующий раз.
-// json.Unmarshal поверх готовой структуры трогает только те ключи, что есть в
-// теле запроса, и потому сберегает всё остальное само.
+// Merge JSON object fields, replace arrays, then decode a fresh entry. Decoding into
+// an existing struct reuses nested pointers and slice elements: a screenshot
+// replacing a video could otherwise inherit its provider, role and qualities.
 func mergeWithStored(items []Entry, body []byte, stored map[string]Entry) []Entry {
 	if len(stored) == 0 {
 		return items
@@ -693,8 +725,21 @@ func mergeWithStored(items []Entry, body []byte, stored map[string]Entry) []Entr
 		if !ok {
 			continue
 		}
-		merged := old
-		if err := json.Unmarshal(raw.Items[i], &merged); err != nil {
+		encoded, err := json.Marshal(old)
+		if err != nil {
+			continue
+		}
+		var fields, incoming map[string]json.RawMessage
+		if json.Unmarshal(encoded, &fields) != nil || json.Unmarshal(raw.Items[i], &incoming) != nil {
+			continue
+		}
+		mergeRegistryJSON(fields, incoming)
+		encoded, err = json.Marshal(fields)
+		if err != nil {
+			continue
+		}
+		var merged Entry
+		if err := json.Unmarshal(encoded, &merged); err != nil {
 			continue
 		}
 		// Порядок и нормализация посчитаны при разборе выше (в том числе
@@ -704,6 +749,26 @@ func mergeWithStored(items []Entry, body []byte, stored map[string]Entry) []Entr
 		items[i] = merged
 	}
 	return items
+}
+
+func mergeRegistryJSON(stored, incoming map[string]json.RawMessage) {
+	for key, value := range incoming {
+		for existing, previous := range stored {
+			if !strings.EqualFold(existing, key) {
+				continue
+			}
+			var oldObject, newObject map[string]json.RawMessage
+			if json.Unmarshal(previous, &oldObject) == nil && oldObject != nil &&
+				json.Unmarshal(value, &newObject) == nil && newObject != nil {
+				mergeRegistryJSON(oldObject, newObject)
+				if merged, err := json.Marshal(oldObject); err == nil {
+					value = merged
+				}
+			}
+			delete(stored, existing)
+		}
+		stored[key] = value
+	}
 }
 
 // Scan returns the registry list derived from the manifests directory without

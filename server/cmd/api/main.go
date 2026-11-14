@@ -69,7 +69,8 @@ type GameInfo struct {
 	// none. The launcher gets everything it needs in this one response and
 	// never picks anything: there is exactly one active pack per game, and
 	// which one it is, is decided in the admin panel.
-	Mods *ModsInfo `json:"mods,omitempty"`
+	Mods         *ModsInfo           `json:"mods,omitempty"`
+	Presentation *games.Presentation `json:"presentation,omitempty"`
 }
 
 // ModsInfo is the active modpack of one game, as the launcher sees it.
@@ -477,7 +478,8 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 		out = append(out, GameInfo{
 			GameID: it.GameID, Title: it.Title,
 			ExeRelativePath: it.ExeRelativePath, IconURL: it.IconURL,
-			Mods: modsInfoFor(it),
+			Mods:         modsInfoFor(it),
+			Presentation: games.PublicPresentation(it.Presentation),
 		})
 	}
 	// An existing registry stays authoritative even when everything in it was

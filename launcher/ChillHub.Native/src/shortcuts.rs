@@ -1,0 +1,662 @@
+//! Game shortcuts are identified by their actual target and parsed arguments.
+//! Automatic actions are disabled for isolated/preview profiles.
+use crate::{
+    launch::ShortcutRequest, manifest::DirectoryGuard, model::GameRecord, paths::AppPaths,
+};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+
+const MAX_LINK_BYTES: u64 = 512 * 1024;
+
+#[cfg(windows)]
+mod native;
+
+#[derive(Debug)]
+struct Link {
+    path: PathBuf,
+    target: PathBuf,
+    arguments: String,
+}
+
+#[cfg(windows)]
+pub(crate) fn system_directory() -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+    let mut buffer = vec![0u16; 32768];
+    let count = unsafe {
+        windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+        )
+    } as usize;
+    if count == 0 || count >= buffer.len() {
+        return Err("Не найдена системная папка Windows".into());
+    }
+    Ok(std::ffi::OsString::from_wide(&buffer[..count]).into())
+}
+
+fn environment(paths: &AppPaths) -> Result<Option<(PathBuf, PathBuf)>, String> {
+    if paths.legacy_dir.is_none() || std::env::var_os("CHILLHUB_DATA_DIR").is_some() {
+        return Ok(None);
+    }
+    let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
+    if launcher
+        .file_name()
+        .is_none_or(|name| !name.eq_ignore_ascii_case("ChillHub.exe"))
+    {
+        return Ok(None);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::{
+            System::Com::CoTaskMemFree,
+            UI::Shell::{FOLDERID_Desktop, SHGetKnownFolderPath},
+        };
+        let mut value = std::ptr::null_mut();
+        if unsafe { SHGetKnownFolderPath(&FOLDERID_Desktop, 0, std::ptr::null_mut(), &mut value) }
+            < 0
+            || value.is_null()
+        {
+            return Err("Рабочий стол недоступен".into());
+        }
+        let desktop = unsafe {
+            let mut len = 0;
+            while len < 32768 && *value.add(len) != 0 {
+                len += 1;
+            }
+            let path = std::ffi::OsString::from_wide(std::slice::from_raw_parts(value, len));
+            CoTaskMemFree(value.cast());
+            PathBuf::from(path)
+        };
+        Ok(Some((desktop, launcher)))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+pub fn create_after_install(
+    paths: &AppPaths,
+    game: &GameRecord,
+) -> Result<Option<PathBuf>, String> {
+    let Some((desktop, launcher)) = environment(paths)? else {
+        return Ok(None);
+    };
+    let root = paths.game_root(&game.game_id)?;
+    let exe =
+        crate::manifest::safe_join(&root, &game.exe_relative_path).map_err(|e| e.to_string())?;
+    // A dependent modpack may already be running after the base finished.
+    // The shortcut opens the launcher, whose normal launch checks own readiness.
+    if !exe.is_file() {
+        return Ok(None);
+    }
+    let request = ShortcutRequest {
+        game_id: game.game_id.clone(),
+        title: if game.title.trim().is_empty() {
+            game.game_id.clone()
+        } else {
+            game.title.clone()
+        },
+        exe_path: Some(exe),
+        target: None,
+    };
+    create_at(&desktop, &launcher, &request).map(Some)
+}
+
+pub fn remove_for_game(paths: &AppPaths, game_id: &str) -> Result<usize, String> {
+    let Some((desktop, launcher)) = environment(paths)? else {
+        return Ok(0);
+    };
+    remove_at(&desktop, &launcher, game_id, &paths.game_root(game_id)?)
+}
+
+fn filename(title: &str) -> String {
+    let name: String = title
+        .chars()
+        .take(100)
+        .map(|c| {
+            if c.is_control() || "<>:\"/\\|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!(
+        "{} (Chill Hub).lnk",
+        name.trim().trim_end_matches([' ', '.'])
+    )
+}
+
+fn link_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let mut file =
+        crate::manifest::open_regular(path, false, false, false).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(MAX_LINK_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_LINK_BYTES {
+        return Err("Ярлык слишком большой".into());
+    }
+    Ok(bytes)
+}
+
+fn read_links(paths: &[PathBuf]) -> Result<Vec<Link>, String> {
+    #[cfg(windows)]
+    return native::read(paths);
+    #[cfg(not(windows))]
+    {
+        let _ = paths;
+        Err("Ярлыки доступны только в Windows".into())
+    }
+}
+
+#[cfg(windows)]
+fn known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::SHGetKnownFolderPath};
+    let mut value = std::ptr::null_mut();
+    let status = unsafe { SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut value) };
+    if value.is_null() {
+        return None;
+    }
+    unsafe {
+        let mut len = 0;
+        while len < 32768 && *value.add(len) != 0 {
+            len += 1;
+        }
+        let path = (status >= 0 && len > 0 && len < 32768).then(|| {
+            PathBuf::from(std::ffi::OsString::from_wide(std::slice::from_raw_parts(
+                value, len,
+            )))
+        });
+        CoTaskMemFree(value.cast());
+        path
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn launcher_shortcuts(exe: &Path) -> Vec<PathBuf> {
+    if std::env::var_os("CHILLHUB_DATA_DIR").is_some() {
+        return vec![];
+    }
+    use windows_sys::Win32::UI::Shell::*;
+    let mut folders = Vec::new();
+    for (id, recursive) in [
+        (FOLDERID_Desktop, false),
+        (FOLDERID_PublicDesktop, false),
+        (FOLDERID_Programs, true),
+        (FOLDERID_CommonPrograms, true),
+    ] {
+        if let Some(path) = known_folder(&id) {
+            folders.push((path, recursive));
+        }
+    }
+    if let Some(roaming) = known_folder(&FOLDERID_RoamingAppData) {
+        folders.push((
+            roaming.join("Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar"),
+            false,
+        ));
+    }
+    shortcuts_to_refresh(exe, &folders)
+}
+
+#[cfg(windows)]
+fn shortcuts_to_refresh(exe: &Path, folders: &[(PathBuf, bool)]) -> Vec<PathBuf> {
+    let Some(target) = path_key(exe) else {
+        return vec![];
+    };
+    let mut candidates = Vec::new();
+    let mut guards = Vec::new();
+    for (folder, recursive) in folders {
+        let Ok(guard) = DirectoryGuard::acquire(folder, false) else {
+            continue;
+        };
+        guards.push(guard);
+        for entry in walkdir::WalkDir::new(folder)
+            .follow_links(false)
+            .max_depth(if *recursive { 8 } else { 1 })
+            .into_iter()
+            .take(4096)
+            .filter_map(Result::ok)
+        {
+            if candidates.len() >= 512 {
+                break;
+            }
+            if entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
+                && link_bytes(entry.path()).is_ok()
+            {
+                candidates.push(entry.into_path());
+            }
+        }
+    }
+    let links = read_links(&candidates).unwrap_or_default();
+    links
+        .into_iter()
+        .filter(|link| path_key(&link.target).as_ref() == Some(&target))
+        .map(|link| link.path)
+        .collect()
+}
+
+fn create_at(
+    desktop: &Path,
+    launcher: &Path,
+    request: &ShortcutRequest,
+) -> Result<PathBuf, String> {
+    crate::paths::validate_game_id(&request.game_id)?;
+    let _directory = DirectoryGuard::acquire(desktop, false).map_err(|e| e.to_string())?;
+    let exe = request.exe_path.as_ref().ok_or("Не указан файл игры")?;
+    crate::manifest::check_no_links(exe).map_err(|e| e.to_string())?;
+    crate::manifest::check_no_links(launcher).map_err(|e| e.to_string())?;
+    if !exe.is_file() || !launcher.is_file() {
+        return Err("Файл игры или лаунчера не найден".into());
+    }
+    let name = filename(&request.title);
+    let output = desktop.join(&name);
+    // Existing user links are never overwritten, even if their name matches.
+    if output.exists() {
+        link_bytes(&output)?;
+        let links = read_links(std::slice::from_ref(&output))?;
+        if links.iter().any(|link| {
+            link.path == output
+                && path_key(&link.target)
+                    .zip(path_key(launcher))
+                    .is_some_and(|(a, b)| a == b)
+                && arguments(&link.arguments)
+                    .and_then(|args| ShortcutRequest::parse_args(&args).ok().flatten())
+                    .is_some_and(|stored| {
+                        stored.game_id == request.game_id
+                            && stored
+                                .exe_path
+                                .as_ref()
+                                .and_then(|p| path_key(p))
+                                .zip(path_key(exe))
+                                .is_some_and(|(a, b)| a == b)
+                    })
+        }) {
+            return Ok(output);
+        }
+        return Err("Одноимённый ярлык уже существует; он сохранён без изменений".into());
+    }
+    let temporary = desktop.join(format!(".chillhub-{}.lnk", uuid::Uuid::new_v4()));
+    let args = request
+        .arguments()
+        .iter()
+        .map(|v| crate::launch::quote_windows_argument(v))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let result = (|| {
+        #[cfg(windows)]
+        native::write(
+            &temporary,
+            launcher,
+            &args,
+            launcher.parent().ok_or("Не найдена папка лаунчера")?,
+            &request.title,
+            exe,
+        )?;
+        #[cfg(not(windows))]
+        return Err("Ярлыки доступны только в Windows".into());
+        let bytes = link_bytes(&temporary)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(1);
+        }
+        let mut file = options.open(&output).map_err(|e| e.to_string())?;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(output.clone())
+    })();
+    let _ = fs::remove_file(&temporary);
+    result
+}
+
+fn path_key(path: &Path) -> Option<String> {
+    crate::paths::path_identity(path)
+}
+fn inside_exe(path: &Path, root: &Path) -> bool {
+    path.extension()
+        .is_some_and(|s| s.eq_ignore_ascii_case("exe"))
+        && path_key(path)
+            .zip(path_key(root))
+            .is_some_and(|(p, r)| p.starts_with(&(r + "\\")))
+}
+#[cfg(windows)]
+fn arguments(value: &str) -> Option<Vec<String>> {
+    use windows_sys::Win32::{Foundation::LocalFree, UI::Shell::CommandLineToArgvW};
+    let text: Vec<u16> = format!("launcher.exe {value}")
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    let mut count = 0;
+    let raw = unsafe { CommandLineToArgvW(text.as_ptr(), &mut count) };
+    if raw.is_null() {
+        return None;
+    }
+    let result = unsafe {
+        std::slice::from_raw_parts(raw, count as usize)
+            .iter()
+            .skip(1)
+            .map(|&p| {
+                let mut n = 0;
+                while *p.add(n) != 0 {
+                    n += 1;
+                }
+                String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+            })
+            .collect()
+    };
+    unsafe {
+        LocalFree(raw.cast());
+    }
+    Some(result)
+}
+#[cfg(not(windows))]
+fn arguments(_: &str) -> Option<Vec<String>> {
+    None
+}
+fn owned(link: &Link, launcher: &Path, game_id: &str, root: &Path) -> bool {
+    if inside_exe(&link.target, root) {
+        return true;
+    }
+    if path_key(&link.target)
+        .zip(path_key(launcher))
+        .is_none_or(|(a, b)| a != b)
+    {
+        return false;
+    }
+    let Some(args) = arguments(&link.arguments) else {
+        return false;
+    };
+    let Ok(Some(request)) = ShortcutRequest::parse_args(&args) else {
+        return false;
+    };
+    request.game_id.eq_ignore_ascii_case(game_id)
+        && request.target.is_none_or(|t| !t.via_steam())
+        && request
+            .exe_path
+            .as_ref()
+            .is_none_or(|exe| inside_exe(exe, root))
+}
+fn remove_at(desktop: &Path, launcher: &Path, game_id: &str, root: &Path) -> Result<usize, String> {
+    crate::paths::validate_game_id(game_id)?;
+    if !desktop.is_dir() {
+        return Ok(0);
+    }
+    let _directory = DirectoryGuard::acquire(desktop, false).map_err(|e| e.to_string())?;
+    let mut snapshots = std::collections::HashMap::new();
+    let mut remaining = 8 * 1024 * 1024;
+    for entry in fs::read_dir(desktop)
+        .map_err(|e| e.to_string())?
+        .take(512)
+        .filter_map(Result::ok)
+    {
+        let p = entry.path();
+        if p.extension().is_some_and(|s| s.eq_ignore_ascii_case("lnk"))
+            && let Ok(bytes) = link_bytes(&p)
+        {
+            if bytes.len() > remaining {
+                continue;
+            }
+            remaining -= bytes.len();
+            snapshots.insert(p, bytes);
+        }
+    }
+    if snapshots.is_empty() {
+        return Ok(0);
+    }
+    let links = read_links(&snapshots.keys().cloned().collect::<Vec<_>>())?;
+    let mut removed = 0;
+    for link in links {
+        let Some(before) = snapshots.get(&link.path) else {
+            continue;
+        };
+        if owned(&link, launcher, game_id, root)
+            && link_bytes(&link.path).is_ok_and(|now| &now == before)
+            && fs::remove_file(&link.path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn refresh_discovers_only_launcher_links_without_changing_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let desktop = temp.path().join("Рабочий стол");
+        let programs = temp.path().join("Programs");
+        let pinned = temp.path().join("Pinned");
+        let launcher = temp.path().join("Лаунчер.exe");
+        let foreign = temp.path().join("Other.exe");
+        fs::write(&launcher, b"fixture").unwrap();
+        fs::write(&foreign, b"fixture").unwrap();
+        let wanted = [
+            desktop.join("Переименованный.lnk"),
+            programs.join("Chill Hub/Launcher.lnk"),
+            pinned.join("Game.lnk"),
+        ];
+        let ignored = [
+            desktop.join("Other.lnk"),
+            desktop.join("Nested/Launcher.lnk"),
+        ];
+        for path in wanted.iter().chain(ignored.iter()) {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let target = if path == &ignored[0] {
+                &foreign
+            } else {
+                &launcher
+            };
+            native::write(path, target, "", temp.path(), "Fixture", target).unwrap();
+        }
+        let snapshots: Vec<_> = wanted
+            .iter()
+            .chain(ignored.iter())
+            .map(|path| (path, fs::read(path).unwrap()))
+            .collect();
+        let actual = shortcuts_to_refresh(
+            &launcher,
+            &[(desktop, false), (programs, true), (pinned, false)],
+        );
+        assert_eq!(actual.len(), wanted.len());
+        for path in &wanted {
+            assert!(actual.contains(path));
+        }
+        for (path, bytes) in snapshots {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn isolated_profile_never_touches_desktop() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = AppPaths::isolated(t.path());
+        assert!(
+            create_after_install(&paths, &GameRecord::default())
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(remove_for_game(&paths, "peak").unwrap(), 0);
+    }
+    #[test]
+    fn ownership_requires_target_and_matching_local_arguments() {
+        let temp = tempfile::tempdir().unwrap();
+        let launcher = temp.path().join("Apps/ChillHub.exe");
+        let root = temp.path().join("Games/peak");
+        let game_args = format!(
+            "--game peak --exe {}",
+            crate::launch::quote_windows_argument(&root.join("Game.exe").to_string_lossy())
+        );
+        let link = |target: &str, args: &str| Link {
+            path: "ignored.lnk".into(),
+            target: target.into(),
+            arguments: args.into(),
+        };
+        assert!(owned(
+            &link(
+                &root.join("bin/Game.exe").to_string_lossy().to_uppercase(),
+                ""
+            ),
+            &launcher,
+            "peak",
+            &root
+        ));
+        assert!(!owned(
+            &link(
+                &temp.path().join("Games/peak-2/Game.exe").to_string_lossy(),
+                ""
+            ),
+            &launcher,
+            "peak",
+            &root
+        ));
+        assert!(!owned(
+            &link(&temp.path().join("Other.exe").to_string_lossy(), &game_args),
+            &launcher,
+            "peak",
+            &root
+        ));
+        assert!(owned(
+            &link(&launcher.to_string_lossy(), &game_args),
+            &launcher,
+            "peak",
+            &root
+        ));
+        assert!(!owned(
+            &link(
+                &launcher.to_string_lossy(),
+                "--game peak --target SteamVanilla"
+            ),
+            &launcher,
+            "peak",
+            &root
+        ));
+    }
+    #[test]
+    fn temp_shell_shortcuts_roundtrip_and_remove_only_owned() {
+        let t = tempfile::tempdir().unwrap();
+        let desktop = t.path().join("desktop");
+        fs::create_dir(&desktop).unwrap();
+        let root = t.path().join("games/peak");
+        fs::create_dir_all(&root).unwrap();
+        let launcher = t.path().join("ChillHub.exe");
+        let exe = root.join("Game.exe");
+        fs::write(&launcher, b"fixture").unwrap();
+        fs::write(&exe, b"fixture").unwrap();
+        let request = ShortcutRequest {
+            game_id: "peak".into(),
+            title: "Игра: тест".into(),
+            exe_path: Some(exe),
+            target: None,
+        };
+        let link = create_at(&desktop, &launcher, &request).unwrap();
+        assert_eq!(link.file_name().unwrap(), "Игра_ тест (Chill Hub).lnk");
+        let original = fs::read(&link).unwrap();
+        fs::write(desktop.join("note.txt"), b"keep").unwrap();
+        let repeat = create_at(&desktop, &launcher, &request).unwrap_or_else(|error| {
+            let readback = native::details(&link);
+            let links = read_links(std::slice::from_ref(&link));
+            panic!(
+                "{error}; expected link={link:?}, launcher={launcher:?}, launcher identity={:?}, exe={:?}, exe identity={:?}; parsed={links:?}; COM={readback:?}",
+                path_key(&launcher),
+                request.exe_path,
+                request.exe_path.as_ref().and_then(|path| path_key(path)),
+            );
+        });
+        assert_eq!(repeat, link);
+        let short_launcher = crate::paths::short_test_path(&launcher);
+        let short_exe = crate::paths::short_test_path(request.exe_path.as_ref().unwrap());
+        let alias_request = ShortcutRequest {
+            exe_path: Some(short_exe),
+            ..request.clone()
+        };
+        assert_eq!(
+            create_at(&desktop, &short_launcher, &alias_request).unwrap(),
+            link
+        );
+        assert_eq!(fs::read(&link).unwrap(), original);
+        assert_eq!(
+            remove_at(&desktop, &launcher, "different", &root).unwrap(),
+            0
+        );
+        assert_eq!(remove_at(&desktop, &launcher, "peak", &root).unwrap(), 1);
+        assert!(desktop.join("note.txt").exists());
+    }
+
+    #[test]
+    fn unicode_shell_links_preserve_all_fields_and_foreign_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let desktop = temp.path().join("桌面 🎮");
+        let launcher_dir = temp.path().join("启动 🎲");
+        let root = temp.path().join("游戏 🌄/peak");
+        for path in [&desktop, &launcher_dir, &root] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let launcher = launcher_dir.join("启动器 🎮.exe");
+        let exe = root.join("游戏 🎮.exe");
+        fs::write(&launcher, b"fixture").unwrap();
+        fs::write(&exe, b"fixture").unwrap();
+        let request = ShortcutRequest {
+            game_id: "peak".into(),
+            title: "Игра 中文 🎮".into(),
+            exe_path: Some(exe.clone()),
+            target: None,
+        };
+        let path = create_at(&desktop, &launcher, &request).unwrap();
+        assert_eq!(path.file_name().unwrap(), "Игра 中文 🎮 (Chill Hub).lnk");
+        let bytes = fs::read(&path).unwrap();
+        let links = read_links(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].path, path);
+        assert_eq!(path_key(&links[0].target), path_key(&launcher));
+        let parsed = ShortcutRequest::parse_args(&arguments(&links[0].arguments).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.title, request.title);
+        assert_eq!(path_key(parsed.exe_path.as_ref().unwrap()), path_key(&exe));
+        let (working, icon, index) = native::details(&path).unwrap();
+        assert_eq!(path_key(&working), path_key(&launcher_dir));
+        assert_eq!(path_key(&icon), path_key(&exe));
+        assert_eq!(index, 0);
+        assert_eq!(create_at(&desktop, &launcher, &request).unwrap(), path);
+        let wrong_game = ShortcutRequest {
+            game_id: "other".into(),
+            ..request.clone()
+        };
+        assert!(create_at(&desktop, &launcher, &wrong_game).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        let foreign = desktop.join("Другой 中文 🎮.lnk");
+        let other_launcher = temp.path().join("other.exe");
+        fs::write(&other_launcher, b"fixture").unwrap();
+        native::write(
+            &foreign,
+            &other_launcher,
+            &links[0].arguments,
+            temp.path(),
+            "Чужой 中文 🎮",
+            &exe,
+        )
+        .unwrap();
+        let foreign_bytes = fs::read(&foreign).unwrap();
+        assert_eq!(remove_at(&desktop, &launcher, "peak", &root).unwrap(), 1);
+        assert!(!path.exists());
+        assert_eq!(fs::read(&foreign).unwrap(), foreign_bytes);
+    }
+}

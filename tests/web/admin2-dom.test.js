@@ -18,6 +18,29 @@ const { JSDOM } = require('jsdom');
 
 const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui');
 
+test('редактор карточки сохраняет описание, преимущества и трейлер вместе с настройками Steam', async (t) => {
+  const game = { gameId: 'peak', title: 'PEAK', exeRelativePath: '', mods: { enabled: true, steamAppId: '3527290', steamFolder: 'Outer/Inner', exeNames: ['PEAK.exe'] }, presentation: { description: 'Было', highlights: ['Старый пункт'] } };
+  const { window, calls } = await boot({ games: { items: [game] } });
+  t.after(() => window.close());
+  window.location.hash = '#games';
+  await until(() => window.document.querySelector('[data-tab="presentation"]'));
+  window.document.querySelector('[data-tab="presentation"]').click();
+  window.document.querySelector('[data-p-field="description"]').value = 'Стало';
+  window.document.querySelector('[data-p-field="highlights"]').value = 'Совместная игра\nИсследование острова';
+  window.document.querySelector('[data-p-action="add"][data-p-group="media"]').click();
+  window.document.querySelector('[data-p-key="kind"]').value = 'video';
+  window.document.querySelector('[data-p-key="url"]').value = 'https://launcher.samoy.love/assets/trailer.mp4';
+  window.document.querySelector('[data-game-do="save"]').click();
+  assert.ok(await until(() => calls.some((c) => c.method === 'POST' && c.url.endsWith('games/save'))));
+  const sent = calls.find((c) => c.method === 'POST' && c.url.endsWith('games/save')).body.items[0];
+  assert.equal(sent.presentation.description, 'Стало');
+  assert.deepStrictEqual(sent.presentation.highlights, ['Совместная игра', 'Исследование острова']);
+  assert.equal(sent.presentation.media[0].kind, 'video');
+  assert.equal(sent.presentation.media[0].url, 'https://launcher.samoy.love/assets/trailer.mp4');
+  assert.equal(sent.mods.steamFolder, 'Outer/Inner');
+  assert.equal(sent.exeRelativePath, '');
+});
+
 /** Ответы, которыми притворяется сервер. Форма — как у настоящего API. */
 function serverFixtures() {
   return {

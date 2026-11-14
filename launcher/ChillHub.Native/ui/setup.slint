@@ -1,0 +1,86 @@
+import { ScrollView, Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AuxiliaryButton } from "auxiliary.slint";
+
+component SetupField inherits Rectangle {
+    in-out property <string> value;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback browse();
+    height: 80px;
+    Text { x: 0px; y: 0px; width: parent.width; text: root.label; color: Theme.dim; font-size: 13px; height: 22px; }
+    Rectangle { x: 0px; y: 29px; width: parent.width - 100px; height: 42px; background: #25242d; border-radius: 10px; border-width: 1px; border-color: Theme.border;
+        TextInput { x: 12px; y: 0px; width: parent.width - 24px; height: parent.height; text <=> root.value; enabled: root.enabled; color: Theme.ink; font-size: 14px; vertical-alignment: center; single-line: true; accessible-label: root.label; selection-background-color: Theme.accent; selection-foreground-color: Theme.bg; }
+    }
+    AuxiliaryButton { x: parent.width - 90px; y: 29px; width: 90px; text: "Обзор"; enabled: root.enabled; clicked => { root.browse(); } }
+}
+
+component SetupToggle inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    in property <bool> enabled: true;
+    height: 42px;
+    accessible-role: checkbox; accessible-label: text; accessible-checked: checked; accessible-enabled: enabled;
+    accessible-action-default => { if enabled { checked = !checked; } }
+    Rectangle { x: 0px; y: 10px; width: 34px; height: 20px; border-radius: 10px; background: root.checked ? Theme.accent : #45414d;
+        Rectangle { x: root.checked ? 16px : 3px; y: 3px; width: 14px; height: 14px; border-radius: 7px; background: root.checked ? #292332 : Theme.ink; animate x { duration: 100ms; } }
+    }
+    Text { x: 46px; width: parent.width - 46px; height: parent.height; text: root.text; color: Theme.ink; font-size: 13px; vertical-alignment: center; wrap: word-wrap; }
+    FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled;
+        key-pressed(event) => { if event.text == " " || event.text == Key.Return { root.checked = !root.checked; return accept; } reject }
+        TouchArea { width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: pointer; clicked => { root.checked = !root.checked; } }
+    }
+}
+
+export component SetupWindow inherits Window {
+    init => { Palette.color-scheme = dark; window-keys.focus(); }
+    forward-focus: window-keys;
+    title: root.removing ? "Удаление · Chill Hub" : "Установка · Chill Hub";
+    icon: @image-url("assets/brand.png");
+    preferred-width: 740px; preferred-height: 690px; min-width: 560px; min-height: 480px;
+    background: Theme.bg; default-font-family: "Segoe UI"; default-font-size: 14px;
+    in property <bool> removing;
+    in property <string> version;
+    in-out property <string> install-path;
+    in-out property <string> games-path;
+    in-out property <bool> desktop-shortcut: true;
+    in-out property <bool> delete-games: false;
+    in property <string> downgrade-from;
+    in-out property <bool> allow-downgrade: false;
+    in property <bool> busy;
+    in property <bool> picking;
+    in property <bool> done;
+    in property <string> message;
+    in property <bool> error;
+    callback submit();
+    callback cancel();
+    callback browse(bool);
+    callback security();
+    window-keys := FocusScope { width: parent.width; height: parent.height;
+        key-pressed(event) => { if event.text == Key.Escape && !root.busy { root.cancel(); return accept; } reject }
+        Image { x: 28px; y: 24px; width: 44px; height: 44px; source: @image-url("assets/brand.png"); image-fit: contain; }
+        Text { x: 84px; y: 24px; height: 28px; text: "Chill Hub"; font-size: 23px; font-weight: 700; color: Theme.ink; }
+        Text { x: 85px; y: 53px; height: 18px; text: "Версия " + root.version; font-size: 12px; color: Theme.dim; }
+        Rectangle { x: 28px; y: 90px; width: parent.width - 56px; height: parent.height - 180px - (root.message == "" ? 0px : status-copy.height + 12px); background: Theme.surface; border-radius: 16px; border-width: 1px; border-color: Theme.border;
+            ScrollView { x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px; content-width: self.visible-width - 16px; content-height: body.preferred-height;
+                body := VerticalLayout { width: parent.width - 16px; spacing: 12px;
+                    Text { text: root.done ? (root.removing ? "Chill Hub удалён" : "Всё готово к игре") : root.busy && !root.picking ? (root.removing ? "Удаляем Chill Hub" : "Устанавливаем Chill Hub") : (root.removing ? "Удаление лаунчера" : "Ваша библиотека начинается здесь"); color: Theme.ink; font-size: 25px; font-weight: 600; wrap: word-wrap; }
+                    Text { text: root.done ? (root.removing ? "Можно закрыть это окно." : "Откройте Chill Hub и выберите игру в библиотеке.") : root.busy && !root.picking ? (root.removing ? "Дождитесь окончания удаления." : "Копируем файлы и подготавливаем библиотеку.") : root.removing ? "Настройки лаунчера будут удалены. Игры сохранятся, если вы не выберете их удаление." : root.downgrade-from != "" ? "Установлена более новая версия " + root.downgrade-from + ". Чтобы продолжить, подтвердите её замену ниже." : "Игры, модпаки и совместные вечера — в одной библиотеке. Установка доступна без прав администратора."; color: Theme.dim; font-size: 13px; wrap: word-wrap; }
+                    if !root.removing && !root.done && (!root.busy || root.picking): SetupField { label: "Папка лаунчера"; value <=> root.install-path; enabled: !root.busy; browse => { root.browse(false); } }
+                    if !root.removing && !root.done && (!root.busy || root.picking): SetupField { label: "Папка для игр"; value <=> root.games-path; enabled: !root.busy; browse => { root.browse(true); } }
+                    if root.removing && !root.done && !root.busy: Text { text: "Лаунчер\n" + root.install-path + "\n\nИгры\n" + root.games-path; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                    if !root.removing && !root.done && !root.busy: SetupToggle { text: "Создать ярлык на рабочем столе"; checked <=> root.desktop-shortcut; enabled: !root.busy; }
+                    if !root.removing && !root.done && !root.busy && root.downgrade-from != "": SetupToggle { text: "Заменить более новую версию " + root.downgrade-from + " на " + root.version; checked <=> root.allow-downgrade; enabled: !root.busy; }
+                    if root.removing && !root.done && !root.busy: SetupToggle { text: "Также удалить игры без возможности восстановления"; checked <=> root.delete-games; enabled: !root.busy; }
+                    if root.removing && !root.done && !root.busy: AuxiliaryButton { text: "Управление исключениями антивируса"; enabled: !root.busy; clicked => { root.security(); } }
+                    if root.busy && !root.picking: setup-progress := Rectangle { height: 4px; background: #343039; border-radius: 2px; clip: true;
+                        Rectangle { width: parent.width / 3; height: parent.height; background: Theme.accent; x: (animation-tick() / 1600ms - floor(animation-tick() / 1600ms)) * (parent.width + self.width) - self.width; }
+                    }
+                }
+            }
+        }
+        status-copy := Text { x: 28px; y: parent.height - 86px - self.height; width: parent.width - 56px; height: root.message == "" ? 0px : min(108px, self.preferred-height); text: root.message; color: root.error ? #f0aaa9 : Theme.dim; font-size: 13px; wrap: word-wrap; overflow: elide; accessible-label: root.message; }
+        if !root.done || !root.removing: AuxiliaryButton { x: 28px; y: parent.height - 66px; width: 144px; text: root.done ? "Закрыть" : "Отмена"; enabled: !root.busy; clicked => { root.cancel(); } }
+        AuxiliaryButton { x: parent.width - 248px; y: parent.height - 66px; width: 220px; text: root.done ? (root.removing ? "Закрыть" : "Открыть Chill Hub") : root.busy ? "Подождите…" : root.removing ? "Удалить" : "Установить"; primary: true; enabled: !root.busy && (root.done || root.removing || root.downgrade-from == "" || root.allow-downgrade); clicked => { root.submit(); } }
+    }
+}

@@ -152,7 +152,14 @@ Var DesktopShortcut_State
 
 ; Output installer
 Name "${APP_TITLE}"
-OutFile "generated_downloads\ChillHub-Setup.exe"
+!ifdef NATIVE_CLIENT
+  !ifndef NATIVE_OUTPUT
+    !error "NATIVE_OUTPUT is required for the explicit native build entrypoint"
+  !endif
+  OutFile "${NATIVE_OUTPUT}"
+!else
+  OutFile "generated_downloads\ChillHub-Setup.exe"
+!endif
 
 ; Per-user installation (no admin)
 RequestExecutionLevel user
@@ -189,16 +196,41 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 !endif
 SetDatablockOptimize on
+!ifdef NATIVE_CLIENT
+; Start the small Slint frontend without decompressing the entire game player.
+ReserveFile "${PAYLOAD_DIR}\ChillHub.Updater.exe"
+!endif
 
 ; MUI options (simple modern touches)
 !define MUI_ABORTWARNING
+!ifdef NATIVE_CLIENT
+; Match ui/theme.slint. Runtime helpers keep the Slint theme; NSIS keeps its
+; native accessible controls while using the same type, brand and surfaces.
+SetFont "Segoe UI" 9
+ManifestDPIAware true
+ManifestDPIAwareness PerMonitorV2,PerMonitor
+BrandingText "Chill Hub"
+!define MUI_BGCOLOR "121215"
+!define MUI_TEXTCOLOR "F6F4F7"
+!define MUI_INSTFILESPAGE_COLORS "C9BBFA 1C1C21"
+!define MUI_CUSTOMFUNCTION_GUIINIT NativeTheme
+!define MUI_CUSTOMFUNCTION_UNGUIINIT un.NativeTheme
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${NATIVE_SIDEBAR}"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "${NATIVE_SIDEBAR}"
+!define MUI_WELCOMEPAGE_TITLE "Добро пожаловать в Chill Hub"
+!define MUI_WELCOMEPAGE_TEXT "Игры, модпаки и совместные вечера — в одной библиотеке.$\r$\n$\r$\nВыберите папку для лаунчера и игр. Существующие игры сохранятся при переустановке."
+!define MUI_FINISHPAGE_TITLE "Chill Hub готов"
+!else
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_RIGHT
+!endif
 
 ; Finish page settings: show prerequisites first, then run app
+!ifndef NATIVE_CLIENT
 !define MUI_FINISHPAGE_SHOWREADME
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "Доустановить WebView2 (нужен для показа новостей)"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION InstallPrereqs
+!endif
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Запустить ${APP_TITLE}"
 !define MUI_FINISHPAGE_RUN_FUNCTION RunAppAfterInstall
@@ -210,8 +242,14 @@ SetDatablockOptimize on
 ; MUI применяет MUI_PAGE_CUSTOMFUNCTION_* к БЛИЖАЙШЕЙ следующей странице и тут
 ; же их снимает.
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryLeave
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW NativeTheme
+!endif
 !insertmacro MUI_PAGE_DIRECTORY
 Page Custom SelectGamesDir_Create SelectGamesDir_Leave
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW NativeTheme
+!endif
 !insertmacro MUI_PAGE_INSTFILES
 Page Custom SecurityPage_Create
 ; Показ финальной страницы — момент, когда галочку WebView2 можно спрятать
@@ -220,9 +258,18 @@ Page Custom SecurityPage_Create
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstall pages
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.NativeTheme
+!endif
 !insertmacro MUI_UNPAGE_CONFIRM
 UninstPage Custom un.SelectDeleteGames_Create un.SelectDeleteGames_Leave
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.NativeTheme
+!endif
 !insertmacro MUI_UNPAGE_INSTFILES
+!ifdef NATIVE_CLIENT
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.NativeTheme
+!endif
 !insertmacro MUI_UNPAGE_FINISH
 
 ; ЯЗЫК ОДИН — РУССКИЙ.
@@ -474,7 +521,14 @@ Section "Install" SecInstall
   ;                      перезаписывает, что даёт вечный цикл обновления.
   ; Список исключений обязан совпадать с ChillHub.Update.PreserveMatcher.DefaultRules
   ; и со staging-фильтром в scripts/build-installer.ps1 (New-LauncherPayload).
+  ClearErrors
   File /r /x "config.json" /x "launcher.version" /x "launcher.update-status" /x "Uninstall.exe" /x "*.pdb" /x "linux-*" /x "osx-*" "${PAYLOAD_DIR}\*.*"
+!ifdef NATIVE_CLIENT
+  ${If} ${Errors}
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+!endif
 
   ; Write uninstaller
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -649,11 +703,10 @@ Section "Install" SecInstall
   FileWrite $4 "${APP_VERSION}"
   FileClose $4
 
-  ; Prepare prerequisite installers in $PLUGINSDIR for optional install on Finish
+!ifndef NATIVE_CLIENT
   SetOutPath "$PLUGINSDIR\Redist"
-  ; Use non-fatal includes so build continues if prereqs are not present
-  ; NSIS will emit a warning if the file is missing and continue
   File /nonfatal "Redist\${PREREQ_WEBVIEW2}"
+!endif
 
 SectionEnd
 
@@ -922,6 +975,29 @@ Function .onInit
   ; галочкой никто не увидит, а менять поведение тихой установки этой правкой
   ; не хотелось.
   StrCpy $DesktopShortcut_State 1
+!ifdef NATIVE_CLIENT
+  ClearErrors
+  ${GetOptions} $R0 "/NODESKTOP" $R1
+  ${IfNot} ${Errors}
+    StrCpy $DesktopShortcut_State 0
+  ${EndIf}
+  ; Only the graphical entrypoint starts Slint. The child /S process executes
+  ; these same installation sections and never recursively opens another UI.
+  IfSilent native_setup_worker
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=ChillHub.Setup.exe "${PAYLOAD_DIR}\ChillHub.Updater.exe"
+  ClearErrors
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui install "$EXEPATH" "$INSTDIR" "$GAMES_DIR" "${APP_VERSION}"' $R3
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "Не удалось открыть установщик. Скачайте Chill Hub заново."
+    SetErrorLevel 1
+  ${Else}
+    SetErrorLevel $R3
+  ${EndIf}
+  Quit
+native_setup_worker:
+!endif
 
   ; УСТАНОВКА СТАРОЙ ВЕРСИИ ПОВЕРХ НОВОЙ — С ПОДТВЕРЖДЕНИЕМ.
   ;
@@ -937,6 +1013,13 @@ Function .onInit
     ; 0 — равны, 1 — установленная новее, 2 — устанавливаемая новее.
     ${VersionCompare} "$0" "${APP_VERSION}" $1
     ${If} $1 == 1
+!ifdef NATIVE_CLIENT
+      ${GetParameters} $R0
+      ClearErrors
+      ${GetOptions} $R0 "/ALLOWDOWNGRADE" $R1
+      IfErrors +2
+      Goto continue
+!endif
       MessageBox MB_YESNO|MB_ICONEXCLAMATION \
         "Установлена версия $0, а этот установщик ставит ${APP_VERSION} — более старую.$\r$\n$\r$\nПродолжить и откатить ${APP_TITLE} до ${APP_VERSION}?" \
         /SD IDNO IDYES continue
@@ -950,7 +1033,9 @@ continue:
   ; уже ПОСЛЕ клика. Пользователю Windows 11, где рантайм предустановлен,
   ; предлагали доустановить то, что у него есть, — и он либо тратил время, либо
   ; снимал галочку, гадая, не сломает ли этим новости.
+!ifndef NATIVE_CLIENT
   Call DetectWebView2
+!endif
 FunctionEnd
 
 ; ============================================================================
@@ -1109,6 +1194,13 @@ Function SelectGamesDir_Create
     ${NSD_Check} $DesktopShortcut_Check
   ${EndIf}
 
+!ifdef NATIVE_CLIENT
+  SetCtlColors $0 F6F4F7 121215
+  SetCtlColors $GamesDir_Label F6F4F7 121215
+  SetCtlColors $GamesDir_Edit F6F4F7 1C1C21
+  SetCtlColors $DesktopShortcut_Check F6F4F7 121215
+!endif
+
   nsDialogs::Show
 FunctionEnd
 
@@ -1168,11 +1260,52 @@ security_page_skip:
 FunctionEnd
 
 Function FinishPageShow
+!ifdef NATIVE_CLIENT
+  Call NativeTheme
+!endif
+!ifndef NATIVE_CLIENT
   ${If} $WebView2Present == 1
     SendMessage $mui.FinishPage.ShowReadme ${BM_SETCHECK} ${BST_UNCHECKED} 0
     ShowWindow $mui.FinishPage.ShowReadme ${SW_HIDE}
   ${EndIf}
+!endif
 FunctionEnd
+
+!ifdef NATIVE_CLIENT
+; Standard controls remain keyboard accessible; all pages share the palette.
+!macro NativeThemeFunctions PREFIX
+Function ${PREFIX}NativeTheme
+  Push $HWNDPARENT
+  Call ${PREFIX}NativeThemeControl
+  System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 20, *i 1, i 4)'
+FunctionEnd
+Function ${PREFIX}NativeThemeControl
+  Exch $0
+  Push $1
+  Push $2
+  System::Call 'user32::GetClassNameW(p r0, w .r2, i 1024)'
+  ${If} $2 == "Button"
+    System::Call 'uxtheme::SetWindowTheme(p r0, w "", w "")'
+  ${EndIf}
+  ${If} $2 == "Edit"
+    SetCtlColors $0 F6F4F7 1C1C21
+  ${Else}
+    SetCtlColors $0 F6F4F7 121215
+  ${EndIf}
+  System::Call 'user32::GetWindow(p r0, i 5) p.r1'
+  ${DoWhile} $1 != 0
+    Push $1
+    Call ${PREFIX}NativeThemeControl
+    System::Call 'user32::GetWindow(p r1, i 2) p.r1'
+  ${Loop}
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+!macroend
+!insertmacro NativeThemeFunctions ""
+!insertmacro NativeThemeFunctions "un."
+!endif
 
 Function RunAppAfterInstall
   ; If user ticked "Запустить Chill Hub", set a flag; actual launch may be deferred
@@ -1185,12 +1318,17 @@ FunctionEnd
 ; Смотрим оба улья: рантайм ставится либо на машину (HKLM, обычный случай —
 ; приехал с Edge), либо в профиль пользователя (HKCU). Непустая версия в
 ; значении "pv" и означает установленный рантайм.
+!ifndef NATIVE_CLIENT
 Function DetectWebView2
   StrCpy $WebView2Present 0
   ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
-  StrCmp $0 "" 0 found
+  StrCmp $0 "" machine_native 0
+  StrCmp $0 "0.0.0.0" machine_native found
+machine_native:
   ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
-  StrCmp $0 "" 0 found
+  StrCmp $0 "" current_user 0
+  StrCmp $0 "0.0.0.0" current_user found
+current_user:
   ReadRegStr $0 HKCU "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
   StrCmp $0 "" done found
 found:
@@ -1201,20 +1339,29 @@ done:
 FunctionEnd
 
 Function InstallPrereqs
-  ; Единственная оставшаяся зависимость — WebView2 Runtime. Инсталлятор .NET
-  ; больше не нужен: сборка self-contained несёт рантайм внутри себя.
+  ; Only the explicit Finish-page checkbox calls this function. The ordinary
+  ; user process requests a per-user runtime; no runas/elevation is performed.
   StrCpy $PrereqsRan 1
   Call DetectWebView2
   StrCmp $WebView2Present 1 skip 0
   StrCpy $1 "$PLUGINSDIR\Redist\${PREREQ_WEBVIEW2}"
-  IfFileExists "$1" 0 skip
-    ; Bootstrapper сам решает, что качать; //silent /install проходит без окон.
-    ExecWait '"$1" /silent /install'
+  IfFileExists "$1" 0 prereq_failed
+    ClearErrors
+    ExecWait '"$1" /silent /install' $2
+    IfErrors prereq_failed
+    DetailPrint "WebView2 bootstrapper exit code: $2"
+    Call DetectWebView2
+    StrCmp $WebView2Present 1 skip prereq_failed
+prereq_failed:
+  DetailPrint "WebView2 Runtime is not available after optional setup."
+  MessageBox MB_OK|MB_ICONEXCLAMATION "Не удалось установить компонент для новостей. Игры будут работать. Подключитесь к интернету и повторите установку Chill Hub, чтобы добавить компонент." /SD IDOK
 skip:
   ; If user asked to run app, do it now after prereqs
   StrCmp $LaunchAfterFlag 1 0 +2
     ExecShell "open" "$INSTDIR\${APP_EXE}"
 FunctionEnd
+
+!endif
 
 Function .onInstSuccess
   ; If only "Run app" was selected (without prereqs), launch now
@@ -1235,6 +1382,29 @@ Function un.onInit
     IfFileExists "D:\*.*" 0 +2
       StrCpy $Un_GamesDir "D:\Games\ChillHub"
   ${EndIf}
+
+!ifdef NATIVE_CLIENT
+  IfSilent native_uninstall_worker
+  InitPluginsDir
+  ; Both UI and engine run outside the installation, so no executable holds
+  ; the directory being removed. _?= prevents a second asynchronous copy.
+  ClearErrors
+  CopyFiles /SILENT "$INSTDIR\ChillHub.Updater.exe" "$PLUGINSDIR\ChillHub.Setup.exe"
+  CopyFiles /SILENT "$EXEPATH" "$PLUGINSDIR\UninstallWorker.exe"
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "Не удалось открыть удаление. Переустановите Chill Hub и попробуйте снова."
+    SetErrorLevel 1
+    Quit
+  ${EndIf}
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui uninstall "$PLUGINSDIR\UninstallWorker.exe" "$INSTDIR" "$Un_GamesDir" "${APP_VERSION}"' $R3
+  ${If} ${Errors}
+    SetErrorLevel 1
+  ${Else}
+    SetErrorLevel $R3
+  ${EndIf}
+  Quit
+native_uninstall_worker:
+!endif
 
   ; ГАЛОЧКИ УДАЛЕНИЯ ДОСТУПНЫ И В ТИХОМ РЕЖИМЕ.
   ;
@@ -1282,6 +1452,12 @@ Function un.SelectDeleteGames_Create
   ${NSD_CreateLabel} 0 70 100% 28 "Настройки лаунчера (тема, лимиты, папки) будут удалены вместе с ним."
   Pop $2
 
+!ifdef NATIVE_CLIENT
+  SetCtlColors $0 F6F4F7 121215
+  SetCtlColors $1 F6F4F7 121215
+  SetCtlColors $2 A6A3AF 121215
+  SetCtlColors $DeleteGames_Check F6F4F7 121215
+!endif
   nsDialogs::Show
 FunctionEnd
 

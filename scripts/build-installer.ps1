@@ -408,7 +408,7 @@ function Publish-UpdaterAot {
 
     $aotOut = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-updater-aot-" + [Guid]::NewGuid().ToString('N'))
     try {
-        & dotnet publish $UpdaterCsproj -c $Configuration -r $Runtime -p:PublishAot=true -o $aotOut
+        & $script:BuildDotnet publish $UpdaterCsproj -c $Configuration -r $Runtime -p:PublishAot=true -o $aotOut
         Assert-NativeSuccess "dotnet publish (updater, Native AOT)" $LASTEXITCODE
 
         $aotExe = Join-Path $aotOut "ChillHub.Updater.exe"
@@ -465,12 +465,9 @@ try {
     [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($true)
 } catch {}
 
-# Preflight: dotnet SDK and csproj path
-try {
-    $dc = Get-Command dotnet -ErrorAction Stop
-    $dv = (& dotnet --version)
-    if ($dv) { Write-Host "dotnet: $dv ($($dc.Path))" -ForegroundColor DarkCyan }
-} catch { throw "dotnet SDK not found. Please install .NET 8 SDK and ensure 'dotnet' is in PATH." }
+# Use the same patched portable SDK in CI and deployment, never a stale runner default.
+$script:BuildDotnet = & (Join-Path $PSScriptRoot 'ci/ensure-dotnet8.ps1')
+Write-Host "dotnet: $script:BuildDotnet" -ForegroundColor DarkCyan
 
 if (-not (Test-Path -LiteralPath $Csproj)) {
     throw "CSProj not found at '$Csproj'. Adjust -Csproj argument."
@@ -535,7 +532,7 @@ function Find-Makensis {
 }
 
 Write-Host "[1/3] Restoring .NET packages..." -ForegroundColor Cyan
-& dotnet restore $Csproj
+& $script:BuildDotnet restore $Csproj
 Assert-NativeSuccess "dotnet restore" $LASTEXITCODE
 
 # Б8, вторая половина. Версия доезжала до установщика (/DAPP_VERSION), но НЕ до
@@ -608,7 +605,7 @@ if ($Publish) {
     $ProjectDir = Split-Path -Parent $Csproj
     $PublishDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows/$Runtime/publish"
     Clear-GeneratedPublishDirectory -Path $PublishDir -AllowedRoot (Join-Path $ProjectDir 'bin')
-    & dotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc @versionStamp
+    & $script:BuildDotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc @versionStamp
     Assert-NativeSuccess "dotnet publish" $LASTEXITCODE
     # Compute publish output path (informational)
     $ProjectDir = Split-Path -Parent $Csproj
@@ -617,7 +614,7 @@ if ($Publish) {
     $BuildOutputDir = $PublishDir
 } else {
     Write-Host "[2/3] Building ($Configuration)..." -ForegroundColor Cyan
-    & dotnet build $Csproj -c $Configuration @versionStamp
+    & $script:BuildDotnet build $Csproj -c $Configuration @versionStamp
     Assert-NativeSuccess "dotnet build" $LASTEXITCODE
     $ProjectDir = Split-Path -Parent $Csproj
     $BuildOutputDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows"
@@ -630,7 +627,7 @@ if ($Publish) {
     $securityHelperProject = Join-Path $ProjectDir '..\ChillHub.SecurityHelper\ChillHub.SecurityHelper.csproj'
     $securityHelperOutput = Join-Path $ProjectDir "obj/security-helper-publish/$Configuration/$Runtime/$sc"
     Clear-GeneratedPublishDirectory -Path $securityHelperOutput -AllowedRoot (Join-Path $ProjectDir 'obj/security-helper-publish')
-    & dotnet publish $securityHelperProject -c $Configuration -r $Runtime --self-contained $sc -o $securityHelperOutput @versionStamp
+    & $script:BuildDotnet publish $securityHelperProject -c $Configuration -r $Runtime --self-contained $sc -o $securityHelperOutput @versionStamp
     Assert-NativeSuccess 'dotnet publish SecurityHelper' $LASTEXITCODE
     $securityHelperRoot = [IO.Path]::GetFullPath($securityHelperOutput)
     foreach ($helperFile in Get-ChildItem -LiteralPath $securityHelperRoot -File -Recurse) {
@@ -695,76 +692,8 @@ if ($SkipInstaller) {
     return
 }
 
-# WebView2 Evergreen Bootstrapper.
-#
-# scripts/Redist/ лежит в .gitignore, и CI его ничем не наполнял: из-за
-# `File /nonfatal` в installer.nsi сборка молча проходила БЕЗ зависимостей, и
-# установщик, который выкладывается на сайт, не содержал ни .NET, ни WebView2.
-# Пользователь получал лаунчер, который не запускается, без единой подсказки.
-#
-# Bootstrapper весит ~2 МБ (офлайн-пакет — 183 МБ), поэтому его дешевле забирать
-# на каждой сборке, чем держать в репозитории. Если сети нет — не валимся:
-# установщик соберётся без него, ровно как раньше, но об этом будет сказано вслух.
-function Ensure-WebView2Bootstrapper {
-    param(
-        [Parameter(Mandatory = $true)][string]$RedistDir,
-        # ОТСУТСТВИЕ ЗАВИСИМОСТИ В РЕЛИЗЕ — ОШИБКА, А НЕ ПРЕДУПРЕЖДЕНИЕ.
-        #
-        # Здесь был только Write-Warning, а в installer.nsi — `File /nonfatal`.
-        # Вдвоём это ровно та комбинация, из-за которой однажды уже выложили
-        # установщик без зависимостей вообще: сеть моргнула на раннере, сборка
-        # прошла зелёной, файл уехал на сайт, и у тех, у кого WebView2 нет,
-        # молча не открываются новости. Предупреждение в логе УСПЕШНОЙ сборки
-        # не читает никто — на то оно и успешная.
-        #
-        # Для нерелизных сборок (0.0.0-ci, локальная проверка «собирается ли»)
-        # остаётся предупреждение: там артефакт никуда не публикуется, и ронять
-        # проверку из-за сети незачем.
-        [switch]$Required
-    )
-
-    $target = Join-Path $RedistDir 'MicrosoftEdgeWebview2Setup.exe'
-    if (Test-Path -LiteralPath $target) {
-        $mb = [math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
-        Write-Host "WebView2 bootstrapper: уже на месте ($mb МБ)" -ForegroundColor Cyan
-        return
-    }
-
-    New-Item -ItemType Directory -Force -Path $RedistDir | Out-Null
-    # Официальный вечный редирект Microsoft на актуальный bootstrapper.
-    $url = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
-    try {
-        Write-Host "WebView2 bootstrapper: качаю..." -ForegroundColor Cyan
-        $tmp = "$target.tmp"
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 120
-        # Проверяем, что приехал исполняемый файл, а не страница-заглушка:
-        # HTML вместо .exe молча превратился бы в неработающую зависимость.
-        $head = [System.IO.File]::ReadAllBytes($tmp)[0..1]
-        if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
-            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-            throw "по ссылке пришёл не исполняемый файл (нет сигнатуры MZ)"
-        }
-        Move-Item -LiteralPath $tmp -Destination $target -Force
-        $mb = [math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
-        Write-Host "WebView2 bootstrapper: готов ($mb МБ)" -ForegroundColor Green
-    }
-    catch {
-        if ($Required) {
-            throw @"
-WebView2 bootstrapper не скачан: $($_.Exception.Message)
-
-Это РЕЛИЗНАЯ сборка, а без bootstrapper'а установщик выложится без
-зависимости: у всех, у кого нет WebView2 Runtime (в основном Windows 10 без
-свежего Edge), в лаунчере молча не откроются новости.
-
-Как чинить: повторить сборку, когда сеть доступна, либо положить файл руками в
-$RedistDir (официальная ссылка: https://go.microsoft.com/fwlink/p/?LinkId=2124703).
-"@
-        }
-        Write-Warning "WebView2 bootstrapper не скачан: $($_.Exception.Message)"
-        Write-Warning "Сборка нерелизная — продолжаю без него. На машине без WebView2 не откроются новости."
-    }
-}
+# Both installers use the same official bootstrapper and validate Microsoft Authenticode.
+. (Join-Path $PSScriptRoot 'ensure-webview2-bootstrapper.ps1')
 
 # Резолвим версию ДО поиска makensis и до подготовки зависимостей: если версии
 # нет, падать надо сразу, а не после того, как найден компилятор и созданы
@@ -773,7 +702,7 @@ $RedistDir (официальная ссылка: https://go.microsoft.com/fwlink
 $resolvedVersion = Resolve-AppVersion -Explicit $AppVersion -BuildOutputDir $BuildOutputDir
 $isReleaseBuild = -not ($resolvedVersion -like '0.0.0*')
 
-Ensure-WebView2Bootstrapper -RedistDir (Join-Path (Split-Path $Installer -Parent) 'Redist') -Required:$isReleaseBuild
+$null = Ensure-WebView2Bootstrapper -RedistDir (Join-Path (Split-Path $Installer -Parent) 'Redist') -Required:$isReleaseBuild
 
 $makensis = Find-Makensis -ExplicitPath $MakensisPath
 # Resolve to full path and ensure string type

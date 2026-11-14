@@ -1,0 +1,29 @@
+name: Prepare Native toolchain
+description: Pinned Rust MSVC toolchain and isolated dependency cache
+inputs:
+  cache-scope:
+    description: Separate cache for release, coverage, and mutation builds
+    default: release
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: ./scripts/ci/ensure-native-rust.ps1
+    - id: paths
+      shell: pwsh
+      env:
+        CACHE_SCOPE: ${{ inputs.cache-scope }}
+      run: |
+        $target = Join-Path $env:LOCALAPPDATA "chillhub-tools/build-cache/native-$env:CACHE_SCOPE"
+        "CARGO_TARGET_DIR=$target" >> $env:GITHUB_ENV
+        "target=$target" >> $env:GITHUB_OUTPUT
+        "registry=$(Join-Path $env:CARGO_HOME 'registry')" >> $env:GITHUB_OUTPUT
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ steps.paths.outputs.target }}
+          ${{ steps.paths.outputs.registry }}
+        key: native-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ inputs.cache-scope }}-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-${{ hashFiles('launcher/ChillHub.Native/src/**', 'launcher/ChillHub.Native/ui/**', 'launcher/ChillHub.Native/tests/**', 'launcher/ChillHub.Native/vendor/**', 'launcher/ChillHub.Native/build.rs', 'launcher/ChillHub.Native/Cargo.toml') }}
+        restore-keys: |
+          native-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ inputs.cache-scope }}-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-
+          native-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ inputs.cache-scope }}-

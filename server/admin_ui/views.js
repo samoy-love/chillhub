@@ -758,6 +758,62 @@
 
   /* ---------- Порядок игр ---------- */
 
+  function presentationForm(value, problems) {
+    const p = value || {};
+    const field = (key, label, val, max, multiline, row) => {
+      const id = 'p-' + (row || '') + key;
+      const attr = row ? ' data-p-key="' + key + '"' : ' data-p-field="' + key + '"';
+      return '<div class="field"><label for="' + id + '">' + esc(label) + '</label>' +
+        (multiline ? '<textarea id="' + id + '"' + attr + ' rows="' + multiline + '" maxlength="' + max + '">' + esc(val || '') + '</textarea>'
+          : '<input id="' + id + '"' + attr + ' type="text" maxlength="' + max + '" value="' + esc(val || '') + '">') + '</div>';
+    };
+    const controls = (group, index, length) => '<div class="btn-row">' +
+      '<button class="btn btn--text" type="button" data-p-action="up" data-p-group="' + group + '" data-p-index="' + index + '"' + (index ? '' : ' disabled') + '>Выше</button>' +
+      '<button class="btn btn--text" type="button" data-p-action="down" data-p-group="' + group + '" data-p-index="' + index + '"' + (index + 1 < length ? '' : ' disabled') + '>Ниже</button>' +
+      '<span class="push"></span><button class="btn btn--text" type="button" data-p-action="remove" data-p-group="' + group + '" data-p-index="' + index + '">Убрать</button></div>';
+    const media = Array.isArray(p.media) ? p.media : [];
+    const mods = Array.isArray(p.mods) ? p.mods : [];
+    const benefits = Array.isArray(p.modBenefits) ? p.modBenefits : [];
+    const select = (key, label, val, values, row) => '<div class="field"><label for="p-' + row + key + '">' + esc(label) + '</label><select id="p-' + row + key + '" data-p-key="' + key + '">' + values.map(([v, title]) => '<option value="' + v + '"' + ((val || '') === v ? ' selected' : '') + '>' + esc(title) + '</option>').join('') + '</select></div>';
+    const issues = (problems || []).filter((e) => e.field.startsWith('presentation.'));
+    return '<div class="stack" data-presentation>' +
+      '<p class="note">Эту информацию игрок увидит в карточке игры. Изменения появятся после сохранения.</p>' +
+      (issues.length ? '<div role="alert" class="note note--warn">' + issues.map((e) => '<p>' + esc(e.message) + '</p>').join('') + '</div>' : '') +
+      field('description', 'Об игре', p.description, 12000, 5) +
+      field('modpackDescription', 'Что добавляет модпак', p.modpackDescription, 2000, 3) +
+      '<section class="stack"><h3>Главное о модпаке</h3><p class="help">До пяти коротких преимуществ; первые три видны сразу. Пишите о том, что меняется для игрока.</p>' +
+      benefits.map((b, i) => '<fieldset class="presentation-row" data-p-row="modBenefits"><legend>Преимущество ' + (i + 1) + '</legend>' + field('title', 'Заголовок', b.title, 80, 0, 'benefit-' + i + '-') + field('description', 'Короткое описание', b.description, 240, 2, 'benefit-' + i + '-') + select('icon', 'Значок', b.icon || 'package', [['package', 'Новые возможности'], ['users', 'Команда'], ['gamepad', 'Игровой процесс'], ['sparkles', 'Косметика'], ['wrench', 'Удобство'], ['compass', 'Исследование']], 'benefit-' + i + '-') + controls('modBenefits', i, benefits.length) + '</fieldset>').join('') +
+      '<button class="btn" type="button" data-p-action="add" data-p-group="modBenefits"' + (benefits.length >= 5 ? ' disabled' : '') + '>Добавить преимущество</button></section>' +
+      '<div class="cols cols--2">' + field('modpackVersion', 'Сборка, для которой описан состав', p.modpackVersion, 200) + field('modpackRevision', 'Ревизия состава', p.modpackRevision, 32) + '</div>' +
+      '<p class="muted">Укажите полный идентификатор опубликованной сборки модов и её ревизию из 32 символов. При смене сборки обновите описание и состав: несовпавший список лаунчер скроет.</p>' +
+      '<div class="cols cols--2">' + field('genre', 'Жанр', p.genre, 120) + field('heroUrl', 'Обложка — ссылка', p.heroUrl, 2048) + '</div>' +
+      '<span class="help">Используйте HTTPS-ссылку или адрес файла из галереи, например /assets/…</span>' +
+      field('highlights', 'Главное об игре — по одному пункту в строке', (p.highlights || []).join('\n'), 5800, 3) +
+      '<section class="stack"><h3>Скриншоты и трейлеры</h3>' +
+      media.map((m, i) => '<fieldset class="presentation-row" data-p-row="media"><legend>Файл ' + (i + 1) + '</legend>' +
+        '<div class="field"><label for="p-media-' + i + '-kind">Тип</label><select id="p-media-' + i + '-kind" data-p-key="kind"><option value="image"' + (m.kind === 'video' ? '' : ' selected') + '>Скриншот</option><option value="video"' + (m.kind === 'video' ? ' selected' : '') + '>Видео</option></select></div>' +
+        '<div class="cols cols--2">' + select('provider', 'Воспроизведение', m.provider, [['', 'Файл на сервере Chill Hub'], ['file', 'Файл на сервере Chill Hub']], 'media-' + i + '-') + select('role', 'Назначение', m.role, [['', 'Скриншот / не указано'], ['trailer', 'Официальный трейлер'], ['gameplay', 'Как играют другие']], 'media-' + i + '-') + '</div>' +
+        field('url', 'Ссылка на файл', m.url, 2048, 0, 'media-' + i + '-') +
+        '<details class="presentation-qualities"><summary>Качество видео · 1080p / 720p / 480p</summary><p class="muted">Для файлов на сервере. Пустые варианты не показываются игрокам. Размер и разрешение указаны в отчёте подготовки видео.</p>' +
+        [480, 720, 1080].map(h => { const v = (m.variants || []).find(v => v.height === h) || {}; return '<fieldset class="presentation-quality"><legend>' + h + 'p</legend>' +
+          field('quality' + h + 'url', 'Ссылка на MP4', v.url, 2048, 0, 'media-' + i + '-') +
+          '<div class="cols cols--2">' + field('quality' + h + 'width', 'Ширина в пикселях', v.width, 4, 0, 'media-' + i + '-') + field('quality' + h + 'bytes', 'Размер в байтах', v.bytes, 11, 0, 'media-' + i + '-') + '</div></fieldset>'; }).join('') + '</details>' +
+        field('posterUrl', 'Заставка трейлера — ссылка, необязательно', m.posterUrl, 2048, 0, 'media-' + i + '-') +
+        field('caption', 'Подпись', m.caption, 240, 0, 'media-' + i + '-') +
+        field('sourceUrl', 'Первоисточник — ссылка', m.sourceUrl, 2048, 0, 'media-' + i + '-') +
+        '<div class="cols cols--2">' + field('author', 'Автор', m.author, 160, 0, 'media-' + i + '-') + field('publishedAt', 'Дата публикации — ГГГГ-ММ-ДД', m.publishedAt, 10, 0, 'media-' + i + '-') + '</div>' +
+        '<div class="cols cols--2">' + field('width', 'Ширина в пикселях (0 — неизвестна)', m.width, 5, 0, 'media-' + i + '-') + field('height', 'Высота в пикселях (0 — неизвестна)', m.height, 5, 0, 'media-' + i + '-') + '</div>' + controls('media', i, media.length) + '</fieldset>').join('') +
+      '<button class="btn" type="button" data-p-action="add" data-p-group="media"' + (media.length >= 24 ? ' disabled' : '') + '>Добавить скриншот или трейлер</button></section>' +
+      '<details class="presentation-mods"><summary>Полный состав модпака · ' + mods.length + '</summary><section class="stack"><p class="help">Здесь — понятные игроку названия и описания. Состав устанавливаемых файлов настраивается в разделе модов.</p>' +
+      mods.map((m, i) => '<fieldset class="presentation-row" data-p-row="mods"><legend>Мод ' + (i + 1) + '</legend>' +
+        '<div class="cols cols--2">' + field('id', 'Идентификатор', m.id, 160, 0, 'mod-' + i + '-') + field('name', 'Название автора', m.name, 160, 0, 'mod-' + i + '-') + '</div>' +
+        field('russianName', 'Название по-русски', m.russianName, 160, 0, 'mod-' + i + '-') +
+        field('description', 'Что меняет в игре', m.description, 2000, 3, 'mod-' + i + '-') +
+        '<div class="cols cols--2">' + field('category', 'Категория', m.category, 80, 0, 'mod-' + i + '-') + field('version', 'Версия', m.version, 80, 0, 'mod-' + i + '-') + '</div>' +
+        field('url', 'Страница мода — ссылка, необязательно', m.url, 2048, 0, 'mod-' + i + '-') + controls('mods', i, mods.length) + '</fieldset>').join('') +
+      '<button class="btn" type="button" data-p-action="add" data-p-group="mods"' + (mods.length >= 256 ? ' disabled' : '') + '>Добавить описание мода</button></section></details></div>';
+  }
+
   /**
    * Список игр с перестановкой.
    *
@@ -1831,6 +1887,7 @@
     logsView,
     ecosystemPicker,
     gameForm,
+    presentationForm,
     newsFilter,
     pickList,
     newsCover,

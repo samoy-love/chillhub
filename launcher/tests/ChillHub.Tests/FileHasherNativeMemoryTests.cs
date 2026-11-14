@@ -6,6 +6,11 @@
 namespace ChillHub.Tests {
     using System;
     using System.Diagnostics;
+    using System.IO;
+    using System.Text;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using System.Xml.Linq;
 
     using ChillHub.Core.Sync;
 
@@ -44,7 +49,53 @@ namespace ChillHub.Tests {
         /// </para>
         /// </summary>
         [Fact]
-        public void ХешированиеСборкиНеОставляетПамятьЗаСобой() {
+        public async Task ХешированиеСборкиНеОставляетПамятьЗаСобой() {
+            // Private bytes принадлежат всему процессу. Даже последовательный
+            // прогон оставляет фоновые задачи WPF, JIT и сборщика покрытия от
+            // предыдущих тестов. Измеряем тот же тест в отдельном testhost;
+            // порог и обе партии остаются прежними, повторов до успеха нет.
+            const string probeVariable = "CHILLHUB_HASHER_MEMORY_PROBE";
+            if (Environment.GetEnvironmentVariable(probeVariable) != "1") {
+                using var results = new TempDir();
+                var startInfo = new ProcessStartInfo {
+                    FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                };
+                startInfo.ArgumentList.Add("vstest");
+                startInfo.ArgumentList.Add(typeof(FileHasherNativeMemoryTests).Assembly.Location);
+                startInfo.ArgumentList.Add("/TestCaseFilter:FullyQualifiedName=ChillHub.Tests.FileHasherNativeMemoryTests.ХешированиеСборкиНеОставляетПамятьЗаСобой");
+                startInfo.ArgumentList.Add("/Logger:console;verbosity=normal");
+                startInfo.ArgumentList.Add("/Logger:trx;LogFileName=probe.trx");
+                startInfo.ArgumentList.Add("/ResultsDirectory:" + results.Root);
+                startInfo.Environment[probeVariable] = "1";
+                using var child = Process.Start(startInfo);
+                Assert.NotNull(child);
+                var output = child.StandardOutput.ReadToEndAsync();
+                var errors = child.StandardError.ReadToEndAsync();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                try {
+                    await child.WaitForExitAsync(timeout.Token);
+                }
+                catch (OperationCanceledException) {
+                    child.Kill(entireProcessTree: true);
+                    await child.WaitForExitAsync();
+                    Assert.Fail("Изолированная проверка памяти превысила две минуты");
+                }
+
+                var details = (await output) + (await errors);
+                Assert.True(child.ExitCode == 0, details);
+                var result = Assert.Single(XDocument.Load(Path.Combine(results.Root, "probe.trx"))
+                    .Descendants(), element => element.Name.LocalName == "UnitTestResult");
+                Assert.Equal("Passed", (string?)result.Attribute("outcome"));
+                Assert.EndsWith(nameof(ХешированиеСборкиНеОставляетПамятьЗаСобой), (string?)result.Attribute("testName"));
+                return;
+            }
+
             if (!FileHasher.Blake3Available) {
                 // Без Blake3 считается один SHA-256, и проверять тут нечего.
                 return;

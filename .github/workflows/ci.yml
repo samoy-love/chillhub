@@ -21,6 +21,7 @@ name: CI
 #   golangci-lint            v2.15.0
 #   govulncheck              v1.9.0
 #   Go toolchain             taken from server/go.mod (single source of truth)
+#   Rust toolchain           1.99.1 (Native, Windows MSVC)
 # ---------------------------------------------------------------------------
 
 # И16: минимальные права для GITHUB_TOKEN.
@@ -57,62 +58,32 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # ЧТО ЗАДЕТО — ЧТОБЫ НЕ БУДИТЬ WINDOWS-МАШИНУ РАДИ ПРАВКИ В JS.
-  #
-  # Задания `C# (launcher)` и `Installer (NSIS)` идут на единственном
-  # собственном Windows-раннере: параллелить их не на чем, они выстраиваются в
-  # очередь, и их суммарное время — это и есть время всего прогона. При этом
-  # четыре из последних десяти PR не трогали ни строчки .NET: правки админки,
-  # лендинга и веб-тестов ждали сборку установщика, которая не могла измениться
-  # ни при каких обстоятельствах.
-  #
-  # Отбор стоит около двадцати секунд на ubuntu и отдаёт их обратно сотнями.
-  #
-  # СПИСОК ОБЯЗАН ПОКРЫВАТЬ ВСЁ, ЧТО ЧИТАЮТ ОБА ЗАДАНИЯ, и с запасом: цена
-  # лишнего прогона — минуты, цена пропущенного — регрессия, уехавшая в релиз.
-  # Поэтому `launcher/` и `scripts/` взяты целиком, а не разобраны по файлам
-  # (в отличие от гейта версии ниже, где точность решает, требовать ли релиз).
-  # Сюда же .editorconfig и Directory.Build.props: они меняют набор
-  # анализаторов, а сборка идёт с TreatWarningsAsErrors.
-  #
-  # Отсутствие базы для сравнения — не «ничего не задето», а «сравнивать не с
-  # чем»: отвечаем «задето всё». Пропустить проверку молча дороже, чем
-  # прогнать её зря.
   changes:
     name: Что затронул PR
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      dotnet: ${{ steps.f.outputs.dotnet }}
+      native: ${{ steps.f.outputs.native }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Полная история: база PR бывает старше пары коммитов, и при мелкой
-          # глубине её объекта в клоне просто нет.
           fetch-depth: 0
       - id: f
         shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
-
-          BASE="${{ github.event.pull_request.base.sha }}"
-          HEAD="${{ github.sha }}"
           if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            echo "базы для сравнения нет (ручной запуск?) — считаем, что задето всё"
-            echo "dotnet=true" >> "$GITHUB_OUTPUT"
+            echo "native=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           FILES="$(git diff --name-only "$BASE" "$HEAD")"
-          echo "изменённые файлы:"
-          echo "$FILES" | sed 's/^/  /'
-
-          if echo "$FILES" | grep -qE '^(launcher/|updater/|scripts/|Directory\.Build\.props$|\.editorconfig$|\.gitattributes$|\.github/workflows/ci\.yml$)'; then
-            echo "dotnet=true" >> "$GITHUB_OUTPUT"
-            echo "→ клиент задет: сборка и установщик прогоняются"
+          if echo "$FILES" | grep -qE '^(launcher/ChillHub[.]Native/|scripts/|tests/|[.]github/|[.]deploy-kit/|codecov[.]yml$|[.]gitattributes$|[.]editorconfig$)'; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
           else
-            echo "dotnet=false" >> "$GITHUB_OUTPUT"
-            echo "→ клиент не задет: сборка и установщик пропускаются"
+            echo "native=false" >> "$GITHUB_OUTPUT"
           fi
 
   # Соглашение из CLAUDE.md, проверяемое машиной.
@@ -396,6 +367,20 @@ jobs:
           --reporter=text --reporter=lcov
           node --test tests/web/*.test.js
 
+      - name: Проверить подготовку и публикацию медиа
+        run: node --test --test-concurrency=1 scripts/content/*.test.mjs
+
+      - name: Set up Python for bundled media tests
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Test bundled media layout
+        run: |
+          python -m venv "$RUNNER_TEMP/chillhub-content-tests"
+          "$RUNNER_TEMP/chillhub-content-tests/bin/python" -m pip install --disable-pip-version-check --no-input Pillow==11.3.0 blake3==1.0.8
+          "$RUNNER_TEMP/chillhub-content-tests/bin/python" scripts/content/prepare_bundled_media_test.py
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Отчёт уезжает артефактом, а отправляет его coverage-web на ubuntu.
         # Со своего раннера отправка не работала вовсе: cli.codecov.io отдавал
@@ -566,332 +551,128 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '8.0.x'
-
-      # NuGet-пакеты сверяются со списком известных уязвимостей. Флаг
-      # --include-transitive обязателен: прямых зависимостей у лаунчера пять,
-      # а тянут они за собой десятки.
-      #
-      # EnableWindowsTargeting нужен потому, что клиент целится в net8.0-windows
-      # (WPF), а раннер здесь линуксовый: без флага восстановление падает с
-      # NETSDK1100 ещё до того, как дойдёт до проверки. Собирать проект при этом
-      # не требуется — списку пакетов хватает восстановления.
-      - name: Уязвимые NuGet-пакеты
-        shell: bash
-        # Через ПЕРЕМЕННУЮ ОКРУЖЕНИЯ, а не через -p: у `dotnet restore`.
-        # MSBuild читает переменные окружения как глобальные свойства, и это
-        # единственный способ донести флаг до `dotnet list package` — он
-        # переоценивает проект заново и своих -p: не принимает, поэтому флага
-        # на restore не хватало.
-        env:
-          EnableWindowsTargeting: 'true'
-        run: |
-          set -o pipefail
-          for proj in launcher/ChillHub/ChillHub.csproj launcher/tests/ChillHub.Tests/ChillHub.Tests.csproj; do
-            echo "== $proj"
-            dotnet restore "$proj" >/dev/null
-            out=$(dotnet list "$proj" package --vulnerable --include-transitive 2>&1 | tee /dev/stderr)
-            if echo "$out" | grep -qiE "has the following vulnerable"; then
-              echo "::error::найдены уязвимые NuGet-пакеты в $proj"
-              exit 1
-            fi
-          done
-
-  dotnet-lint:
-    name: C# (launcher)
+  native-windows:
+    name: Rust build, tests and installer
     needs: changes
-    # Пропуск засчитывается защите ветки как успех, поэтому обязательной
-    # проверкой задание быть не перестаёт — оно просто не запускается там,
-    # где проверять нечего.
-    if: needs.changes.outputs.dotnet == 'true'
-    # GITHUB-РАННЕР — РАДИ ПАРАЛЛЕЛЬНОСТИ, А НЕ РАДИ СКОРОСТИ.
-    #
-    # На своём раннере каждый шаг вдвое быстрее — это измерено: 364 секунды
-    # против 184 по медианам всех вычислительных шагов. Но машина одна, и
-    # два Windows-задания на ней выстраиваются в очередь: 125 с установщика
-    # плюс 75 с сборки и тестов дают 200 секунд последовательно.
-    #
-    # Разведённые по разным машинам, они идут одновременно. Это задание
-    # на GitHub-раннере занимает около 145 секунд — больше, чем дома, но
-    # прогон всё равно короче, потому что ждёт он теперь самого долгого из
-    # двух, а не суммы. Установщик остаётся дома: он длиннее, и выигрыш
-    # от быстрой машины у него больше.
+    if: needs.changes.outputs.native == 'true'
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # SETUP-DOTNET ЗДЕСЬ ВЕРНУЛСЯ ВМЕСТЕ С ПЕРЕЕЗДОМ НА GITHUB-РАННЕР.
-      #
-      # На своей машине он был убытком: SDK стоит в образе, а САМО действие
-      # приходилось качать по узкому каналу — от 26 секунд до 200 с
-      # таймаутом и повтором. На GitHub-раннере всё наоборот: машина каждый
-      # раз новая, а загрузка действия занимает секунду. По той же причине
-      # вернулся и кэш NuGet — на чистом диске он окупается.
-      - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '8.0.x'
-          cache: true
-          cache-dependency-path: '**/*.csproj'
-      - name: Restore
-        working-directory: launcher/ChillHub
-        run: dotnet restore
-      - name: Build (Debug)
-        working-directory: launcher/ChillHub
-        run: dotnet build --no-restore -c Debug
-      # СБОРКИ RELEASE ЗДЕСЬ БОЛЬШЕ НЕТ — ЕЁ ДЕЛАЕТ ЗАДАНИЕ УСТАНОВЩИКА.
-      #
-      # Шаг стоял тут, чтобы поймать поломку, свойственную именно Release, до того
-      # как её увидит релиз. Но `Installer (NSIS)` собирает Release и так,
-      # причём полнее: self-contained публикацию под win-x64, а следом ставит
-      # получившийся setup.exe и сверяет состав. Отдельная framework-dependent
-      # сборка тем же компилятором ничего сверх этого не проверяла.
-      #
-      # Шестнадцать секунд на критическом пути прогона: с тех пор как эти два
-      # задания разъехались по разным машинам и пошли параллельно, длиннее
-      # оказалось именно это.
-      - name: Tests (launcher)
-        # Тесты плана обновления, разбора манифеста, хешей и структурной проверки
-        # путей. Без этого шага регрессия уезжала бы в релиз незамеченной: тесты
-        # в репозитории были, но не запускались ни в одном прогоне CI.
-        working-directory: launcher/tests/ChillHub.Tests
-        # --collect берёт coverlet.collector, который и так лежал в
-        # зависимостях тестового проекта, но не использовался: покрытие
-        # клиента не считалось вовсе. Бейдж codecov при этом стоял в README и
-        # показывал ТОЛЬКО серверную часть на Go — то есть отвечал не на тот
-        # вопрос, который читатель ему задаёт.
-        run: dotnet test --nologo --collect:"XPlat Code Coverage"
-
-      - name: Найти отчёт о покрытии
-        # coverlet кладёт отчёт в каталог со случайным GUID, а `files:` у
-        # codecov-action шаблоны НЕ разворачивает. GUID разбирается здесь.
+      - uses: ./.github/actions/setup-native
+      - name: Формат, Clippy, сценарии, все экраны и три Release-приложения
         shell: pwsh
-        run: |
-          $report = Get-ChildItem -Recurse -Filter coverage.cobertura.xml `
-            -Path launcher/tests/ChillHub.Tests/TestResults | Select-Object -First 1
-          if (-not $report) { throw "coverlet не оставил coverage.cobertura.xml" }
-          Copy-Item $report.FullName launcher.cobertura.xml
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        # Отчёт уезжает артефактом, а отправляет его джоба coverage-launcher на
-        # ubuntu. CLI Codecov собран PyInstaller-ом и на windows-раннере падает
-        # ДО отправки: UnicodeDecodeError на cp1252. PYTHONUTF8 не спасает.
-        # Пока шаг стоял здесь с fail_ci_if_error: false, падение не видел
-        # никто, и флаг launcher не приезжал ни разу.
-        with:
-          name: coverage-launcher
-          path: launcher.cobertura.xml
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Self-update loop guard (A11)
-        # Ловит регрессию «бесконечный цикл самообновления»: файл, попавший
-        # ОДНОВРЕМЕННО в манифест лаунчера и под preserve-правила апдейтера,
-        # делает расхождение хешей неустранимым — лаунчер обновляется вечно.
-        # В репозитории манифестов нет (content/** в .gitignore), поэтому здесь
-        # отрабатывает самопроверка детектора: она падает, если сам детектор
-        # сломан. Против реальных манифестов запускать так:
-        #   ManifestPreserveCheck.exe <путь-к-content/manifests/launcher>
-        run: dotnet run --project updater/tests/ManifestPreserveCheck -c Release
-
-  # Четыре проверки стиля — по одной на проект: launcher/ChillHub,
-  # launcher/tests/ChillHub.Tests, updater, updater/tests/ManifestPreserveCheck.
-  # Ни одна не зависит от результата другой и от build/test в dotnet-lint тоже
-  # не зависит: dotnet format сам restore'ит, что ему нужно. Матрица гоняет их
-  # параллельно, и красный один раз в матрице отмечает конкретный проект, а не
-  # общий шаг в длинном логе.
-  format:
-    name: dotnet format (${{ matrix.project }})
-    # LINUX, А НЕ WINDOWS — И ЭТО НЕ УСТУПКА.
-    #
-    # Проверка стиля читает исходники, а не собирает WPF. net8.0-windows
-    # восстанавливается на Linux штатным ключом EnableWindowsTargeting, и
-    # dotnet format видит ровно тот же код и те же анализаторы.
-    #
-    # Пока матрица стояла на собственном Windows-раннере, она стоила дороже
-    # всего остального вместе взятого — не работой, а входом. Машина одна,
-    # поэтому четыре задания выстраивались в очередь друг за другом, и каждое
-    # платило за подготовку больше, чем за саму проверку: 9 секунд
-    # dotnet format против минуты подготовки. По шестнадцати прогонам это
-    # 296 секунд из 619 — почти половина всего времени CI уходила на проверку
-    # стиля, которой Windows не нужен вовсе.
-    #
-    # На ubuntu-latest раннеров столько, сколько нужно: матрица идёт
-    # параллельно и целиком укладывается в тень остальных задач.
-    #
-    # Переносимость держится на .gitattributes: `*.cs`/`*.xaml` прибиты к
-    # `eol=crlf`, поэтому и на Linux в рабочем дереве оказывается CRLF,
-    # которого требует .editorconfig. Без этого шаг увидел бы тысячи
-    # фантомных ENDOFLINE-диффов.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        project:
-          - launcher/ChillHub
-          - launcher/tests/ChillHub.Tests
-          - updater
-          - updater/tests/ManifestPreserveCheck
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '8.0.x'
-          # Кэша NuGet здесь нет намеренно.
-          #
-          # Он и раньше задавался попроектно (у updater и его теста ноль
-          # PackageReference, и post-шаг падал на несуществующей папке), а
-          # выигрыш давал только на двух проектах из четырёх. Восстанавливать
-          # тут нечего: два маленьких проекта на канале GitHub-раннера
-          # restore'ятся быстрее, чем распаковывается архив кэша.
-      - name: Code style check (dotnet format)
-        working-directory: ${{ matrix.project }}
-        env:
-          # Без этого ключа restore net8.0-windows на Linux падает с
-          # NETSDK1100 «to build a project targeting Windows on this
-          # operating system». MSBuild читает его из переменной окружения.
-          # Для updater (net8.0) ключ безвреден.
-          EnableWindowsTargeting: 'true'
-        # Blocking as of the launcher/** formatting cleanup: the tree is fully
-        # formatted and both Debug and Release build warning-free, so anything
-        # this step reports now is a real regression and should red-line the PR
-        # that introduced it. Reproduce locally by running `dotnet format`
-        # (write mode) in this directory and committing the result.
-        run: dotnet format --verify-no-changes --verbosity minimal
-      # Новые компоненты входят в существующую обязательную проверку лаунчера:
-      # список защищающих main задач остаётся прежним, охват растёт.
-      - name: Security components code style
-        if: matrix.project == 'launcher/ChillHub'
-        env:
-          EnableWindowsTargeting: 'true'
-        run: |
-          dotnet format launcher/ChillHub.Security --verify-no-changes --verbosity minimal
-          dotnet format launcher/ChillHub.SecurityHelper --verify-no-changes --verbosity minimal
-
-  installer-windows:
-    name: Installer (NSIS)
-    needs: changes
-    if: needs.changes.outputs.dotnet == 'true'
-    # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
-    # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
-    # чужой код до неё физически не доедет даже при ошибочном одобрении:
-    # для форка выражение вычисляется в windows-latest.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # setup-dotnet нет по той же причине, что и в dotnet-lint выше:
-      # SDK приезжает с образом раннера, а скачивание действия стоило дороже
-      # самой проверки. Подробности — в комментарии там.
-      - name: Проверить .NET 8 SDK на раннере
-        shell: pwsh
-        run: |
-          $sdks = dotnet --list-sdks
-          $sdks
-          if (-not ($sdks | Select-String -Pattern '^8\.0\.')) {
-            throw ".NET 8 SDK на раннере нет: он должен приезжать с образом машины, а не ставиться прогоном"
-          }
-      # Кэша NSIS здесь больше нет.
-      #
-      # Он существовал ради одного: каталог .tools/ лежал ВНУТРИ рабочей
-      # копии, а actions/checkout сносит там всё неотслеживаемое — даже на
-      # постоянной машине, где рабочая копия живёт между заданиями.
-      # Теперь ensure-nsis.ps1 кладёт компилятор рядом с профилем, где его
-      # никто не чистит, и возить его по сети больше не нужно.
-      #
-      # Выигрыш не в самом шаге (он занимал 2-3 секунды), а в том, что
-      # раннер больше не скачивает само действие actions/cache: в «Set up job»
-      # одна такая загрузка на этой машине стоит от 26 до 300 секунд.
-      - name: Ensure NSIS is available
+        run: ./scripts/native-ci.ps1 -ValidationOnly
+      - name: Подготовить NSIS
         shell: pwsh
         run: ./scripts/ci/ensure-nsis.ps1
-      - name: Build installer
+      - name: Установка, переустановка и удаление
         shell: pwsh
-        # No secrets required: scripts/installer.nsi does not sign the output and
-        # pulls the optional .NET/WebView2 redistributables with `File /nonfatal`,
-        # so a runner without scripts/Redist/ still produces a working setup.exe.
-        #
-        # -AppVersion обязателен (Б8): installer.nsi больше не имеет молчаливого
-        # дефолта версии. Здесь ЗАВЕДОМО нерелизное значение 0.0.0-ci — этот
-        # артефакт собирается только чтобы поймать поломку .nsi/сборки, он не
-        # подписывается и не публикуется. Если такой билд всё же кто-то поставит,
-        # версия 0.0.0-ci не совпадёт ни с одним манифестом и будет видна сразу,
-        # вместо того чтобы притвориться настоящим релизом.
-        #
-        # -PackageZip собирает вторым артефактом ЧИСТЫЙ ZIP полезной нагрузки —
-        # тот самый, который на выкатке уезжает в админку и становится
-        # манифестом. Вместе с ним работает постусловие New-LauncherPayload:
-        # «ни одного preserve-файла в архиве». Без ключа эта проверка впервые
-        # срабатывала только на публикации, то есть ошибку в списке исключений
-        # ловил релиз, а не PR — при том, что цена такой ошибки известна:
-        # вечный цикл самообновления у всех, кто поставил сборку (1.0.2, 1.0.3,
-        # 1.1.7, 1.1.8).
-        #
-        # -NoCompress: этот установщик собирается только чтобы поймать поломку
-        # .nsi и сборки, он не подписывается и не публикуется. Сжатие в нём
-        # не проверяет ничего, а стоит дороже всего остального вместе взятого:
-        # внутри шага сама сборка занимает 18 секунд, а solid-LZMA со словарём
-        # 64 МБ жмёт 274 файла self-contained .NET около пятидесяти — однопоточно.
-        #
-        # Релиз собирается ДРУГИМ вызовом (deploy-kit, desktop-artifact.yml) и
-        # ключа не получает: там размер загрузки для каждого игрока важнее
-        # минуты прогона.
-        run: ./scripts/build-installer.ps1 -Configuration Release -AppVersion 0.0.0-ci -PackageZip -NoCompress
-      # Собранный установщик ЗАПУСКАЕТСЯ: ставится тихо во временный каталог,
-      # проверяется по составу, версии и реестру, затем так же тихо удаляется.
-      # До этого шага единственной проверкой установщика было «makensis не
-      # упал», а всё остальное — доезжают ли файлы, совпадает ли
-      # launcher.version с версией сборки, исчезает ли запись из списка
-      # программ — выяснялось у пользователя. Подробности: scripts/ci/smoke-installer.ps1.
-      - name: Smoke-проверка установщика
+        run: ./scripts/ci/native-installer-smoke.ps1
+      - name: Журналы и снимки экранов
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-windows-validation
+          path: |
+            launcher/ChillHub.Native/dist/ci-*.log
+            launcher/ChillHub.Native/dist/qa-renders
+            launcher/ChillHub.Native/dist/build-info.json
+            launcher/ChillHub.Native/dist/helper-runtime-deps.txt
+          retention-days: 3
+
+  native-coverage:
+    name: Rust coverage
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-native
+        with:
+          cache-scope: coverage
+      - name: Подготовить инструменты покрытия
         shell: pwsh
-        run: ./scripts/ci/smoke-installer.ps1 -ExpectedVersion 0.0.0-ci
-      # Сам установщик артефактом не выкладывается: его никто не скачивал, а
-      # полсотни мегабайт на каждый прогон за девяносто дней хранения съели
-      # общую квоту артефактов организации, и 21.09.2026 CI упал во всех
-      # репозиториях. Любую версию можно собрать из кода заново.
+        run: ./scripts/ci/ensure-native-quality-tools.ps1 -Component Coverage
+      - name: Покрытие всех исполняемых приложений
+        shell: pwsh
+        run: ./scripts/native-coverage.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage-launcher
+          path: launcher/ChillHub.Native/dist/coverage
+          retention-days: 3
+          if-no-files-found: error
+
+  native-mutations:
+    name: Rust mutation tests
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-native
+        with:
+          cache-scope: mutations
+      - name: Подготовить мутационные тесты
+        shell: pwsh
+        run: ./scripts/ci/ensure-native-quality-tools.ps1 -Component Mutations
+      - name: Проверить чувствительность тестов к ошибкам
+        shell: pwsh
+        run: ./scripts/native-mutations.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: native-mutations
+          path: launcher/ChillHub.Native/dist/mutations
+          retention-days: 3
+          if-no-files-found: error
+
+  native-audit:
+    name: Rust dependency audit
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Подготовить аудит
+        shell: pwsh
+        run: ./scripts/ci/ensure-native-quality-tools.ps1 -Component Audit
+      - name: Проверить закреплённые зависимости
+        shell: pwsh
+        run: |
+          cargo-audit audit --file launcher/ChillHub.Native/Cargo.lock
+          if ($LASTEXITCODE) { throw 'Аудит Rust-зависимостей завершился ошибкой.' }
 
   coverage-launcher:
     name: Launcher coverage (Codecov)
+    needs: native-coverage
     runs-on: ubuntu-latest
-    needs: dotnet-lint
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-launcher
-          path: .
-
-      - name: Убедиться, что отчёт на месте
-        run: test -s launcher.cobertura.xml
-
-      - name: Отправить покрытие клиента в Codecov
-        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
-        # прецедент компрометации релиза.
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+          path: native-coverage
+      - run: test -s native-coverage/launcher.lcov
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          files: launcher.cobertura.xml
+          files: native-coverage/launcher.lcov
           flags: launcher
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
-  # Довозили-2026-08-08: 1.3.0..1.3.2 собрались, смержились, но <Version> в
-  # ChillHub.csproj остался на 1.3.0 — уже установленным клиентам было нечего
-  # предлагать, самообновление молчало у всех троих подряд, а заметили только
-  # на четвёртом мерже (#56, "Довезти до пользователей..."). Ничто в CI до
-  # этого коммита не спрашивало, выросла ли версия — только человек, руками,
-  # после факта.
-  #
-  # Единственный источник правды — VERSION_CMD в .deploy-kit/installer.env:
-  # `<Version>` из ChillHub.csproj и есть версия, которую увидит прод (сверка
-  # с ней встроена в build-installer.ps1, Resolve-AppVersion). Проверять
-  # что-то ещё значило бы завести второй источник, который может разъехаться
-  # с первым.
   launcher-version-bump:
     name: Launcher version bump
     runs-on: ubuntu-latest
@@ -899,112 +680,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Полная история: сравниваем с базой PR, а не с последним коммитом
-          # ветки — правка версии в любом из коммитов PR засчитывается.
           fetch-depth: 0
-      - name: Сверить <Version> с тем, что уже на проде
-        shell: bash
+      - name: Проверить версию Native и свободный номер релиза
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-
-          BASE="${{ github.event.pull_request.base.sha }}"
-          HEAD="${{ github.sha }}"
-          if [ -z "$BASE" ]; then
-            echo "нет base.sha (не pull_request?) — сверять не с чем, пропускаю"
-            exit 0
+          if [ -n "$BASE_REF" ]; then
+            FILES="$(git diff --name-only "$BASE_REF" HEAD)"
+            if ! echo "$FILES" | grep -qE '^(launcher/ChillHub\.Native/|scripts/(native-|ensure-webview2|installer\.nsi|app\.ico|ci/ensure-(nsis|native-rust))|\.deploy-kit/|\.github/workflows/deploy\.yml)'; then
+              echo "Native release inputs unchanged"
+              exit 0
+            fi
           fi
-
-          # Триггер — не только launcher/updater. `changes` в deploy.yml
-          # пересобирает установщик и по тем же путям, что и здесь, И по двум
-          # добавочным: правка .deploy-kit/ или самого deploy.yml валит job'у
-          # `changes` в фолбэк «не с чем сравнивать — катим всё» (см. ветку
-          # `all` там) и установщик едет заново со старой, уже опубликованной
-          # версией — молча, задним числом, уже после мержа. Ровно так провалился
-          # прогон https://github.com/samoy-love/chillhub/actions/runs/31264927554:
-          # PR трогал только .deploy-kit/*.env, launcher-version-bump это не
-          # заметил и пропустил проверку, а installer/build упал на «launcher
-          # version 1.3.2 is already published».
-          #
-          # Список ниже обязан быть НАДМНОЖЕСТВОМ путей из `changes` в
-          # deploy.yml — при правке синхронизировать оба места.
-          FILES="$(git diff --name-only "$BASE" "$HEAD")"
-          #
-          # launcher/ разобран на ChillHub/ и файлы прямо в каталоге, а не взят
-          # целиком: build-installer.ps1 собирает ровно
-          # launcher/ChillHub/ChillHub.csproj, launcher/tests/ в установщик не
-          # входит и ни одного раздаваемого байта не меняет. Взятый целиком, он
-          # требовал релиза клиента ради обновления тестового пакета.
-          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|ChillHub\.Security/|ChillHub\.SecurityHelper/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
-            echo "PR не трогает ни launcher/updater, ни триггеры полной выкатки — версия клиента ни при чём"
-            exit 0
-          fi
-
-          CSPROJ=launcher/ChillHub/ChillHub.csproj
-          DECLARED="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$CSPROJ" | head -1)"
-          if [ -z "$DECLARED" ]; then
-            echo "::error::в $CSPROJ нет <Version> — версия обязана быть явной (см. CLAUDE.md, раздел «Версии»)"
-            exit 1
-          fi
-
-          LIVE_JSON="$(curl -fsSL https://launcher.samoy.love/manifests/launcher/latest.json)" \
-            || { echo "::error::не удалось прочитать https://launcher.samoy.love/manifests/launcher/latest.json"; exit 1; }
-          LIVE="$(printf '%s' "$LIVE_JSON" | sed -n 's#.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*#\1#p')"
-          if [ -z "$LIVE" ]; then
-            echo "::error::не удалось разобрать версию из latest.json: $LIVE_JSON"
-            exit 1
-          fi
-
-          echo "На проде сейчас: $LIVE"
-          echo "В этом PR:       $DECLARED"
-
-          if [ "$DECLARED" = "$LIVE" ]; then
-            echo "::error::<Version> в $CSPROJ ($DECLARED) совпадает с тем, что уже на проде. PR меняет launcher/updater — версия обязана вырасти, иначе самообновление не увидит эту сборку и следующая загрузка того же номера в админку молча заменит уже раздаваемую (см. #56)."
-            exit 1
-          fi
-
-          HIGHEST="$(printf '%s\n%s\n' "$LIVE" "$DECLARED" | sort -V | tail -1)"
-          if [ "$HIGHEST" != "$DECLARED" ]; then
-            echo "::error::<Version> в $CSPROJ ($DECLARED) ниже того, что уже на проде ($LIVE). Версия обязана расти, а не откатываться."
-            exit 1
-          fi
-
-          # СРАВНЕНИЯ С latest.json НЕДОСТАТОЧНО.
-          #
-          # latest — это то, что лаунчеры сейчас качают, а НЕ то, что уже
-          # загружено в админку: выкатка довозит сборку до сервера, а
-          # переключение latest делает человек руками, иногда через несколько
-          # дней. Между этими двумя моментами версия «занята», но гейт её
-          # не видел.
-          #
-          # Ровно так упала выкатка #108: 1.5.12 приехала с #106 и лежала
-          # неактивной, latest оставался 1.5.11, гейт сказал «версия выросла»,
-          # а админка на публикации ответила «launcher version 1.5.12 is
-          # already published» — уже после мержа, когда установщик на сайте был
-          # подменён, а сборка самообновления не уехала. Такой отказ не чинится
-          # перезапуском: нужен новый номер и новый мерж.
-          #
-          # Занятость версии видно по манифесту: сервер кладёт его в
-          # content/manifests/launcher/<версия>.json и раздаёт по HTTP.
-          MANIFEST_URL="https://launcher.samoy.love/manifests/launcher/$DECLARED.json"
-          CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$MANIFEST_URL")"
-          case "$CODE" in
-            404)
-              echo "Версия $DECLARED в админку ещё не загружалась — номер свободен"
-              ;;
-            200)
-              echo "::error::версия $DECLARED УЖЕ опубликована в админке ($MANIFEST_URL), хотя latest пока $LIVE. Повторная загрузка того же номера отклоняется сервером, и выкатка упадёт ПОСЛЕ мержа. Поднимите <Version> в $CSPROJ."
-              exit 1
-              ;;
-            *)
-              # Ни 200, ни 404 — сервер не ответил внятно. Молча пропускать
-              # нельзя: это тот же «не знаю» который однажды уже выдали за «всё
-              # хорошо».
-              echo "::error::$MANIFEST_URL ответил $CODE — занятость версии $DECLARED проверить не удалось"
-              exit 1
-              ;;
-          esac
-
-          echo "OK: $DECLARED > $LIVE"
+          python3 scripts/ci/native-version.py
 
   # Переименование или слияние задачи CI не красит сам прогон в красный —
   # красной становится защита ветки main, и не сразу, а на СЛЕДУЮЩЕМ PR: она
@@ -1042,9 +731,10 @@ jobs:
       - coverage-web
       - go-lint
       - vuln-scan
-      - dotnet-lint
-      - format
-      - installer-windows
+      - native-windows
+      - native-coverage
+      - native-mutations
+      - native-audit
       - coverage-launcher
       - launcher-version-bump
     if: always()

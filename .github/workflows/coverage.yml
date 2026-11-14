@@ -11,7 +11,7 @@ name: Покрытие main
 # показывал цифру того дня, когда CI последний раз запускался на push в main.
 #
 # ТРИ СЛАГАЕМЫХ, А НЕ ОДНО. В репозитории три независимых набора кода: сервер
-# на Go, клиент на C# и браузерный JS (лендинг + морда админки). Пока считался
+# на Go, клиент на Rust и браузерный JS (лендинг + морда админки). Пока считался
 # один сервер, бейдж отвечал не на тот вопрос, который ему задают.
 
 on:
@@ -70,39 +70,25 @@ jobs:
   launcher-build:
     name: Launcher coverage (build report)
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: ./.github/actions/setup-native
         with:
-          dotnet-version: '8.0.x'
-          cache: true
-          cache-dependency-path: |
-            **/*.csproj
-            **/packages.lock.json
-
-      - name: Tests (launcher)
-        working-directory: launcher/tests/ChillHub.Tests
-        run: dotnet test --nologo --collect:"XPlat Code Coverage"
-
-      - name: Найти отчёт
-        # coverlet кладёт отчёт в каталог со случайным GUID, а `files:` у
-        # codecov-action шаблоны НЕ разворачивает — он ищет путь буквально.
-        # Промах при этом молчалив. Поэтому GUID разбирается здесь, где
-        # шаблоны работают, и дальше идёт одно фиксированное имя.
+          cache-scope: coverage
+      - name: Подготовить инструменты покрытия
         shell: pwsh
-        run: |
-          $report = Get-ChildItem -Recurse -Filter coverage.cobertura.xml `
-            -Path launcher/tests/ChillHub.Tests/TestResults | Select-Object -First 1
-          if (-not $report) { throw "coverlet не оставил coverage.cobertura.xml" }
-          Copy-Item $report.FullName launcher.cobertura.xml
-          Write-Host "отчёт: $($report.FullName)"
-
+        run: ./scripts/ci/ensure-native-quality-tools.ps1 -Component Coverage
+      - name: Покрытие Rust-приложений
+        shell: pwsh
+        run: ./scripts/native-coverage.ps1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-launcher
-          path: launcher.cobertura.xml
+          path: launcher/ChillHub.Native/dist/coverage
           retention-days: 1
           if-no-files-found: error
 
@@ -121,12 +107,12 @@ jobs:
       - name: Убедиться, что отчёт на месте
         # Без этой проверки промах пути проходит молча: при fail_ci_if_error
         # ненайденный файл не считается ошибкой. Пусть падает здесь и по делу.
-        run: test -s launcher.cobertura.xml
+        run: test -s launcher.lcov
 
       - name: Отправить покрытие клиента в Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          files: launcher.cobertura.xml
+          files: launcher.lcov
           flags: launcher
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
