@@ -6,6 +6,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {fileHash} from './media-history.mjs';
 import { validatePresentation, mergeRegistry } from './presentation-tools.mjs';
+import {validateGameplayPresentation} from './gameplay-presentation.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, '../..');
@@ -16,7 +17,8 @@ const bundled = await read(path.join(data,'games.json'));
 const provenance = await read(path.join(directory,'metadata-provenance.json'));
 const prepared = process.argv.includes('--prepared') ? await read(path.join(directory,'.cache/media-upload-plan.json')) : null;
 if(prepared){
-  assert(prepared.files.length >= 45 && prepared.files.length <= 100);
+  assert(prepared.files.length >= 45 && prepared.files.length <= 4000);
+  assert(prepared.files.reduce((sum,file)=>sum+file.bytes,0)<=20*1024*1024*1024,'Prepared media exceeds 20 GiB');
   for(const file of prepared.files){
     assert.equal((await stat(file.localPath)).size,file.bytes);assert.equal(await fileHash(file.localPath),file.sha256);
   }
@@ -36,10 +38,11 @@ for (const game of bundled) {
   assert.equal(game.Mods.length,p.mods.length);
   assert.deepEqual(game.Mods.map(m=>`${m.Id}-${m.Version}`).toSorted(),source.packages.map(p=>p.id).toSorted());
   assert.equal(game.ModpackDescription,p.modpackDescription);
-  assert.equal(p.media.filter(m=>m.kind==='video').length,1);
+  assert.equal(p.media.filter(m=>m.kind==='video').length,source.gameplay ? 2 : 1);
   assert.equal(p.media.filter(m=>m.kind==='image').length,3);
   assert.deepEqual(game.ModBenefits,p.modBenefits);
   assert.equal(p.media.find(m=>m.role==='trailer').height,1080);
+  validateGameplayPresentation(p,source);
   for (const media of p.media) for (const variant of media.variants || []) {
     assert(prepared === null || prepared.files.some(f => f.url === variant.url && f.bytes === variant.bytes && f.height === variant.height && f.width === variant.width), `Unprepared video quality: ${game.Id} ${variant.height}`);
   }

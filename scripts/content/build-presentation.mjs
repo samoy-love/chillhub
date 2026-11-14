@@ -2,6 +2,7 @@ import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import {gameplayPresentationEntry, bundledPosterPath} from './gameplay-presentation.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, '../..');
@@ -39,6 +40,7 @@ for (const game of harvest.registry.items) {
   if (!ready || ready.trailerId !== movie.id) throw new Error(`Missing verified prepared media: ${id}`);
   const media = [
     { kind: 'video', provider:'file', role:'trailer', url: ready.trailer.url, variants:ready.trailer.variants || [], posterUrl: ready.poster.url, caption: 'Официальный трейлер', sourceUrl:ready.source, author:(store.value.developers||[]).join(', '), width:1920,height:1080 },
+    ...(ready.gameplay ? [gameplayPresentationEntry(ready.gameplay)] : []),
     ...ready.screenshots.map(shot => ({ kind: 'image', provider:'file',url: shot.url, posterUrl: shot.url, caption: shot.caption,sourceUrl:shot.sourceUrl,width:shot.width,height:shot.height })),
   ];
   const mods = [];
@@ -75,9 +77,9 @@ for (const game of harvest.registry.items) {
     Media: media.map((m, index) => ({
       Kind: m.kind,
       Variants: m.variants || [],
-      Path: `Assets/Media/${id}/${index === 0 ? 'trailer-poster.jpg' : `screenshot-${index}.jpg`}`,
+      Path: bundledPosterPath(id,m,index,Boolean(ready.gameplay)),
       Caption: m.caption, Url: m.url, Provider:m.provider,Role:m.role||'',SourceUrl:m.sourceUrl||'', Author:m.author||'',PublishedAt:m.publishedAt||'',Width:m.width||0,Height:m.height||0,
-      Source: m.sourceUrl || `https://store.steampowered.com/app/${store.appId}/`,
+      Source: m.role === 'gameplay' ? '' : m.sourceUrl || `https://store.steampowered.com/app/${store.appId}/`,
     })),
     Mods: mods.map(m => Object.fromEntries(Object.entries(m).map(([key,value]) => [key[0].toUpperCase() + key.slice(1), value]))),
   });
@@ -85,6 +87,7 @@ for (const game of harvest.registry.items) {
     gameVersion: game.latestVersion, modpackVersion: game.mods?.version || '', modpackRevision: game.mods?.revision || '',
     steamAppId: store.appId, steamSource: `https://store.steampowered.com/api/appdetails?appids=${store.appId}&l=russian&cc=us`,
     trailerName: movie.name, trailerId: movie.id, trailerFormat: 'mp4-h264-aac-1080p', trailer:publicAsset(ready.trailer),
+    ...(ready.gameplay ? {gameplay:{role:'gameplay',provider:'file',author:ready.gameplay.author,caption:ready.gameplay.caption,url:ready.gameplay.url,posterUrl:ready.gameplay.posterUrl,variants:ready.gameplay.variants}} : {}),
     screenshots:ready.screenshots.map(publicAsset),
     modBenefits:(text.modBenefits || []).map((benefit,index)=>{
       const packages=benefitSources[id]?.[index];

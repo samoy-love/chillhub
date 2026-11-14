@@ -12,7 +12,7 @@ const cache = path.join(root, 'scripts/content/.cache');
 const sourceRoot = await realpath(path.join(cache, 'release-media'));
 const plan = JSON.parse(await readFile(path.join(cache, 'media-upload-plan.json'), 'utf8'));
 assert.equal(Object.keys(plan.games).length, 9, 'Expected all nine games');
-assert(plan.files.length >= 45 && plan.files.length <= 100, 'Unexpected media inventory');
+assert(plan.files.length >= 45 && plan.files.length <= 4000, 'Unexpected media inventory');
 const release = JSON.parse(await readFile(path.join(root, 'scripts/content/media-release.json'), 'utf8'));
 assert.deepEqual(plan.files.map(({localPath, ...asset}) => asset), release.files,
   'Prepared media differs from the reviewed release; record and review the new checksums before deployment');

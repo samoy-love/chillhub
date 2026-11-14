@@ -370,6 +370,17 @@ jobs:
       - name: Проверить подготовку и публикацию медиа
         run: node --test --test-concurrency=1 scripts/content/*.test.mjs
 
+      - name: Set up Python for bundled media tests
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Test bundled media layout
+        run: |
+          python -m venv "$RUNNER_TEMP/chillhub-content-tests"
+          "$RUNNER_TEMP/chillhub-content-tests/bin/python" -m pip install --disable-pip-version-check --no-input Pillow==11.3.0 blake3==1.0.8
+          "$RUNNER_TEMP/chillhub-content-tests/bin/python" scripts/content/prepare_bundled_media_test.py
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Отчёт уезжает артефактом, а отправляет его coverage-web на ubuntu.
         # Со своего раннера отправка не работала вовсе: cli.codecov.io отдавал
