@@ -20,6 +20,34 @@ use std::{
     time::Instant,
 };
 
+#[test]
+fn saving_window_geometry_preserves_bounds_for_fullscreen_close() {
+    let mut config = chillhub_native::config::AppConfig {
+        window_width: 1360.0,
+        window_height: 820.0,
+        window_maximized: false,
+        ..Default::default()
+    };
+
+    super::controller::apply_window_geometry(&mut config, 1400.0, 900.0, false, false);
+    assert_eq!((config.window_width, config.window_height), (1400.0, 900.0));
+
+    super::controller::apply_window_geometry(&mut config, 2560.0, 1440.0, true, false);
+    assert_eq!((config.window_width, config.window_height), (1400.0, 900.0));
+    assert!(config.window_maximized);
+
+    config.window_maximized = false;
+    super::controller::apply_window_geometry(&mut config, 2560.0, 1440.0, false, true);
+
+    assert_eq!((config.window_width, config.window_height), (1400.0, 900.0));
+    assert!(!config.window_maximized);
+
+    config.window_maximized = true;
+    super::controller::apply_window_geometry(&mut config, 2560.0, 1440.0, false, true);
+    assert_eq!((config.window_width, config.window_height), (1400.0, 900.0));
+    assert!(config.window_maximized);
+}
+
 struct Loopback {
     base: String,
     stop: Arc<AtomicBool>,

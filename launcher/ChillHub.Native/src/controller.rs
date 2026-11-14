@@ -2664,18 +2664,40 @@ pub(super) fn bind(ui: &AppWindow, state: &State) {
         );
     });
 }
+pub(super) fn apply_window_geometry(
+    config: &mut chillhub_native::config::AppConfig,
+    width: f64,
+    height: f64,
+    maximized: bool,
+    viewer_fullscreen: bool,
+) {
+    if viewer_fullscreen {
+        return;
+    }
+    if !maximized {
+        config.window_width = width;
+        config.window_height = height;
+    }
+    config.window_maximized = maximized;
+}
+
 pub(super) fn save_window(ui: &AppWindow, state: &State) {
     use slint::winit_030::WinitWindowAccessor;
-    let store = state.borrow().services.config.clone();
+    let (store, viewer_fullscreen) = {
+        let state = state.borrow();
+        (
+            state.services.config.clone(),
+            state.viewer_restore.is_some(),
+        )
+    };
+    if viewer_fullscreen {
+        return;
+    }
     ui.window().with_winit_window(|w| {
         let size = w.outer_size().to_logical::<f64>(w.scale_factor());
         let maximized = w.is_maximized();
         let _ = store.update(|c| {
-            if !maximized {
-                c.window_width = size.width;
-                c.window_height = size.height;
-            }
-            c.window_maximized = maximized;
+            apply_window_geometry(c, size.width, size.height, maximized, viewer_fullscreen)
         });
     });
 }

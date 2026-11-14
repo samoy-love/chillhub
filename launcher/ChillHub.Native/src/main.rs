@@ -577,6 +577,7 @@ fn clear_game(ui: &AppWindow, state: &State) {
     ui.set_can_play(false);
 }
 fn close_panel(ui: &AppWindow, state: &State) {
+    set_viewer_fullscreen(ui, state, false);
     ui.set_viewer_fullscreen(false);
     {
         let mut s = state.borrow_mut();
@@ -742,6 +743,7 @@ fn set_viewer_fullscreen(ui: &AppWindow, state: &State, enabled: bool) {
         if state.borrow().viewer_restore.is_some() {
             return;
         }
+        controller::save_window(ui, state);
         ui.window().with_winit_window(|window| {
             let restore = ViewerRestore {
                 size: window.inner_size(),
