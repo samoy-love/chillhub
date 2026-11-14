@@ -141,8 +141,10 @@ Var DeleteGames_Check
 Var Un_GamesDir
 Var DeleteGames_State
 Var LaunchAfterFlag
+!ifndef NATIVE_CLIENT
 Var PrereqsRan
 Var WebView2Present
+!endif
 Var DesktopShortcut_Check
 Var DesktopShortcut_State
 
@@ -1366,7 +1368,9 @@ FunctionEnd
 Function .onInstSuccess
   ; If only "Run app" was selected (without prereqs), launch now
   StrCmp $LaunchAfterFlag 1 0 done
+!ifndef NATIVE_CLIENT
   StrCmp $PrereqsRan 1 done 0
+!endif
   ExecShell "open" "$INSTDIR\${APP_EXE}"
 done:
 FunctionEnd

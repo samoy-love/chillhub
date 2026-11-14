@@ -401,6 +401,12 @@ impl Harness {
         element.invoke_accessible_default_action();
         settle();
     }
+    fn click_pointer(&self, label: &str) {
+        let element = ElementHandle::find_by_accessible_label(&self.ui, label)
+            .find(|e| e.accessible_enabled().unwrap_or(true))
+            .unwrap_or_else(|| panic!("Missing enabled control: {label}"));
+        click_input(self.ui.window(), &element);
+    }
     fn capture(&mut self, name: &str, width: u32, height: u32, scale: f32) {
         resize(self.ui.window(), width, height, scale);
         settle();
@@ -1492,7 +1498,7 @@ fn real_ui_headless_layout_and_actions() {
         let received = selected.clone();
         h.ui.on_video_quality_selected(move |height| *received.borrow_mut() = height);
         let stage_bottom = h.ui.get_video_y() + h.ui.get_video_height();
-        h.click("Выбрать качество видео");
+        h.click_pointer("Выбрать качество видео");
         let quality = ElementHandle::find_by_accessible_label(&h.ui, "720p")
             .find(|element| element.accessible_enabled() == Some(true))
             .unwrap();
@@ -1505,9 +1511,23 @@ fn real_ui_headless_layout_and_actions() {
             !h.ui.get_viewer_quality_open() && h.ui.get_gallery_open(),
             "Escape closes the quality picker before the viewer"
         );
-        h.click("Выбрать качество видео");
-        h.click("720p");
+        h.click_pointer("Выбрать качество видео");
+        h.click_pointer("720p");
         assert_eq!(*selected.borrow(), 720);
+        text_key(h.ui.window(), "f");
+        assert!(
+            h.ui.get_viewer_fullscreen(),
+            "keyboard fullscreen shortcut remains active after changing video quality"
+        );
+        key(h.ui.window(), Key::Escape);
+        assert!(!h.ui.get_viewer_fullscreen());
+        key(h.ui.window(), Key::F11);
+        assert!(
+            h.ui.get_viewer_fullscreen(),
+            "F11 remains active after the quality change and fullscreen round trip"
+        );
+        key(h.ui.window(), Key::Escape);
+        assert!(!h.ui.get_viewer_fullscreen());
         assert_eq!(
             h.ui.get_video_y() + h.ui.get_video_height(),
             stage_bottom,
@@ -1516,8 +1536,8 @@ fn real_ui_headless_layout_and_actions() {
         h.ui.set_video_failed(true);
         h.ui.set_video_time_label("Ошибка видео".into());
         h.capture("gallery-video-error", 900, 500, 1.0);
-        h.click("Выбрать качество видео");
-        h.click("480p");
+        h.click_pointer("Выбрать качество видео");
+        h.click_pointer("480p");
         assert_eq!(
             *selected.borrow(),
             480,
