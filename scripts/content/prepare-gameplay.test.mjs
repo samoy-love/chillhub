@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {prepareGameplay} from './prepare-gameplay.mjs';
+import {prepareGameplay,runCli} from './prepare-gameplay.mjs';
 import {gameplayPresentationEntry,bundledPosterPath,validateGameplayPresentation} from './gameplay-presentation.mjs';
 import {validatePresentation} from './presentation-tools.mjs';
 
@@ -84,5 +84,29 @@ test('rejects external source inputs that would create external public asset URL
     const poster=path.join(root,'poster.jpg'); await writeFile(poster,Buffer.from([0xff,0xd8,0xff,0xd9]));
     const plan={games:{sample:{}},files:[]};
     await assert.rejects(()=>prepareGameplay({gameId:'sample',input:'https://example.com/video.mp4',poster,author:'Автор',caption:'Подпись',plan,output:path.join(root,'out'),prepareVideo:async()=>({variants:[{name:'x.mp4',localPath:'x',width:1280,height:720,bytes:1}]})}),/Invalid local gameplay video|ENOENT|no such file/i);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('CLI workflow writes a JSON-serializable updated media plan', async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'chillhub-gameplay-cli-'));
+  try{
+    const input=path.join(root,'capture.mp4'),poster=path.join(root,'poster.jpg'),planPath=path.join(root,'media-upload-plan.json');
+    await writeFile(input,'local video');await writeFile(poster,Buffer.from([0xff,0xd8,0xff,0xd9]));
+    await writeFile(planPath,JSON.stringify({games:{sample:{trailer:{url:'https://launcher.samoy.love/assets/trailer.mp4'}}},files:[]}));
+    const prepareVideo=async({output,name})=>{
+      const bytes=Buffer.from('fixture mp4'),sha256=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
+      const filename=`${name}-720p-${sha256.slice(0,16)}.mp4`,localPath=path.join(output,filename);
+      await writeFile(localPath,bytes);
+      return {variants:[{name:filename,localPath,width:1280,height:720,bytes:bytes.length,sha256}]};
+    };
+    const result=await runCli(['node','prepare-gameplay.mjs','--game-id','sample','--input',input,'--poster',poster,
+      '--author','Автор канала','--caption','Запись прохождения','--plan',planPath,'--output',path.join(root,'release-media')],{prepareVideo});
+    const saved=JSON.parse(await readFile(planPath,'utf8'));
+    assert.equal(saved.games.sample.gameplay.author,'Автор канала');
+    assert.equal(saved.games.sample.gameplay.caption,'Запись прохождения');
+    assert.equal(saved.games.sample.gameplay.variants[0].height,720);
+    assert.equal(saved.files.length,2);
+    assert.equal(result.serverWrites,0);
+    assert.equal(await readFile(planPath+'.part','utf8').catch(()=>''),'');
   }finally{await rm(root,{recursive:true,force:true});}
 });

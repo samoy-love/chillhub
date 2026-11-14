@@ -75,7 +75,7 @@ export async function prepareGameplay({gameId, input, poster, author, caption, p
   return {plan, gameplay, added: [...variants, posterAsset]};
 }
 
-async function main(args) {
+export async function runCli(args, {prepareVideo = defaultPrepareVideo} = {}) {
   const {values:options}=parseArgs({args:args.slice(2),allowPositionals:false,options:{
     'game-id':{type:'string'},input:{type:'string'},poster:{type:'string'},author:{type:'string'},caption:{type:'string'},
     plan:{type:'string'},output:{type:'string'},
@@ -85,11 +85,16 @@ async function main(args) {
   const plan = JSON.parse(await readFile(planPath,'utf8'));
   const output = options.output || path.join(directory,'.cache/release-media');
   const result = await prepareGameplay({gameId:options['game-id'],input:options.input,poster:options.poster,
-    author:options.author,caption:options.caption,plan,output});
+    author:options.author,caption:options.caption,plan,output,prepareVideo});
   const temp = planPath+'.part';
   await writeFile(temp,JSON.stringify(result.plan,null,2)+'\n');
   await rename(temp,planPath);
-  console.log(JSON.stringify({gameId:options['game-id'],variants:result.gameplay.variants.length,serverWrites:0}));
+  return {gameId:options['game-id'],planPath,plan:result.plan,gameplay:result.gameplay,serverWrites:0};
+}
+
+async function main(args) {
+  const {gameId,gameplay,serverWrites}=await runCli(args);
+  console.log(JSON.stringify({gameId,variants:gameplay.variants.length,serverWrites}));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
