@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {mkdtemp,readFile,writeFile,rm,access} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {prepareMediaHistory,mergeMediaManifest,validateMediaManifest} from './media-history.mjs';
+import {prepareMediaHistory,mergeMediaManifest,validateMediaManifest,MAX_MEDIA_BYTES} from './media-history.mjs';
 const bytes=Buffer.from('official-media-fixture');
 const file={path:'media/2026-10/peak/screenshot-1.jpg',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
 async function fixture(t){
@@ -49,4 +49,19 @@ test('network failure and altered media refuse a new snapshot instead of empty h
 test('media manifest cannot escape local cache or request unbounded downloads',()=>{
   for(const bad of [{...file,path:'../outside.mp4'},{...file,path:'media/2026-11/peak/../../bad.mp4'},{...file,bytes:10*1024*1024*1024+1},{...file,sha256:'invalid'}])assert.throws(()=>validateMediaManifest({files:[bad]}));
   assert.throws(()=>validateMediaManifest({files:[file,file]}),/Duplicate/);
+});
+test('aggregate media cap accepts exactly 24 GiB and rejects one byte over',()=>{
+  const manifest = sizes => ({files:sizes.map((size,index)=>({
+    path:`media/2026-11/peak/quality-${index}.mp4`,bytes:size,sha256:String(index).padStart(64,'0'),
+  }))});
+  const capSized=manifest([10,10,4].map(gib=>gib*1024**3));
+  assert.equal(MAX_MEDIA_BYTES,24*1024**3);
+  assert.equal(validateMediaManifest(capSized),capSized);
+  assert.throws(()=>validateMediaManifest(manifest([10*1024**3,10*1024**3,4*1024**3+1])),/24 GiB/);
+});
+test('history and current media are checked against one combined cap',()=>{
+  const entry=(name,size,index)=>({path:`media/2026-11/peak/${name}.mp4`,bytes:size,sha256:String(index).padStart(64,'0')});
+  const history={files:[entry('old-a',10*1024**3,1),entry('old-b',10*1024**3,2)]};
+  const current={files:[entry('new-a',4*1024**3,3),entry('new-b',1,4)]};
+  assert.throws(()=>mergeMediaManifest(history,current),/24 GiB/);
 });

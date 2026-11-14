@@ -36,7 +36,7 @@ test('default staging copies files independently', async t => {
   const source = path.join(f.sourceDirectory, `gameplay-demo-${sha256.slice(0, 16)}.mp4`);
   const destination = path.join(f.destinationDirectory, 'gameplay.mp4');
   await writeFile(source, data);
-  const result = await stageMediaFile({source, destination, entry: entry(), hardlinkEnabled: false});
+  const result = await stageMediaFile({source, destination, entry: entry()});
   assert.deepEqual(result, {method: 'copied', bytes: data.length});
   await writeFile(source, Buffer.from('changed source after staging'));
   assert.deepEqual(await readFile(destination), data);

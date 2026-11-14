@@ -4,6 +4,8 @@ import {mkdir, readFile, writeFile, open, rename, rm, lstat} from 'node:fs/promi
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
+export const MAX_MEDIA_BYTES = 24 * 1024 * 1024 * 1024;
+
 export function validateMediaManifest(manifest) {
   assert(manifest && Array.isArray(manifest.files) && manifest.files.length <= 4000, 'Invalid media manifest');
   const paths=new Set();let total=0;
@@ -14,7 +16,7 @@ export function validateMediaManifest(manifest) {
     assert(Number.isSafeInteger(file.bytes)&&file.bytes>0&&file.bytes<=10*1024*1024*1024, 'Invalid media size');
     total+=file.bytes;
   }
-  assert(total<=20*1024*1024*1024,'Media history exceeds 20 GiB');
+  assert(total<=MAX_MEDIA_BYTES,`Media history exceeds ${MAX_MEDIA_BYTES / 1024 ** 3} GiB`);
   return manifest;
 }
 export async function fileHash(filename){const hash=createHash('sha256');for await(const chunk of createReadStream(filename))hash.update(chunk);return hash.digest('hex');}

@@ -46,6 +46,38 @@
         "height": 1080
       },
       {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/gameplay-over-the-hill-1080p-1d701fcc5cc9f147.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/gameplay-over-the-hill-1080p-1d701fcc5cc9f147.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 4002264631
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/gameplay-over-the-hill-720p-c3482af3bc23754d.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 2371712107
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/gameplay-over-the-hill-480p-34d0675266e45c58.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 1208904687
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/gameplay-poster-f1c8cd50f021a294.jpg",
+        "caption": "Бездорожье с Joe Speen",
+        "author": "Joe Speen",
+        "width": 1920,
+        "height": 1080
+      },
+      {
         "kind": "image",
         "provider": "file",
         "url": "https://launcher.samoy.love/assets/media/2026-11/over-the-hill/screenshot-1.jpg",
@@ -121,6 +153,38 @@
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/4656000/",
         "author": "Lefto Studio",
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/gameplay-bombanana-1080p-1a51f967b916d25f.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/gameplay-bombanana-1080p-1a51f967b916d25f.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 648009454
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/gameplay-bombanana-720p-ec17911b341d3f3e.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 561941982
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/bombanana/gameplay-bombanana-480p-9bacc1b073a5af26.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 271656416
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/bombanana/gameplay-poster-378082f42f9e2895.jpg",
+        "caption": "Три обезьяны с JOHAN",
+        "author": "JOHAN",
         "width": 1920,
         "height": 1080
       },
@@ -216,6 +280,38 @@
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/1966720/",
         "author": "Zeekerss",
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/gameplay-lethal-company-1080p-d03a4a203259d361.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/gameplay-lethal-company-1080p-d03a4a203259d361.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 904735325
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/gameplay-lethal-company-720p-880b10f496a7f6a9.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 499077961
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/gameplay-lethal-company-480p-006686c40111826f.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 231265842
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/lethal-company/gameplay-poster-9828a7135c8ca354.jpg",
+        "caption": "Кооп с Marmok",
+        "author": "Marmok",
         "width": 1920,
         "height": 1080
       },
@@ -1749,6 +1845,38 @@
         "height": 1080
       },
       {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/gameplay-farfarwest-1080p-cc7e6a8d7ea300f7.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/gameplay-farfarwest-1080p-cc7e6a8d7ea300f7.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 2591294471
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/gameplay-farfarwest-720p-702bbc1ba9c09881.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 1686913322
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/gameplay-farfarwest-480p-95bc12c69ba79dad.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 943917064
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/gameplay-poster-de2304ef46f0a32f.jpg",
+        "caption": "Кооп: Мишка и Юля",
+        "author": "Мишка и Юля",
+        "width": 1920,
+        "height": 1080
+      },
+      {
         "kind": "image",
         "provider": "file",
         "url": "https://launcher.samoy.love/assets/media/2026-11/farfarwest/screenshot-1.jpg",
@@ -1840,6 +1968,38 @@
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/4001890/",
         "author": "Dazed Games",
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/gameplay-how-to-fish-1080p-1eeb2a4031320797.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/gameplay-how-to-fish-1080p-1eeb2a4031320797.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 486961215
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/gameplay-how-to-fish-720p-d12d2a6435202aae.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 442038022
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/gameplay-how-to-fish-480p-10e60569172712a3.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 208688571
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/how-to-fish/gameplay-poster-59666f18aeeb8934.jpg",
+        "caption": "Рыбалка с JOHAN",
+        "author": "JOHAN",
         "width": 1920,
         "height": 1080
       },
@@ -2161,6 +2321,38 @@
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/3241660/",
         "author": "semiwork",
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/repo/gameplay-repo-1080p-8719824c9171d85e.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/gameplay-repo-1080p-8719824c9171d85e.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 512541608
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/gameplay-repo-720p-c265668382ad9350.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 381159757
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/repo/gameplay-repo-480p-a452665891fd3c5e.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 175608651
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/repo/gameplay-poster-f4f18929ccaf9d98.jpg",
+        "caption": "Кооп с Marmok",
+        "author": "Marmok",
         "width": 1920,
         "height": 1080
       },
@@ -2902,6 +3094,38 @@
         "height": 1080
       },
       {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/gameplay-drive-beyond-horizons-1080p-bbae5f00bc76518e.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/gameplay-drive-beyond-horizons-1080p-bbae5f00bc76518e.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 813484214
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/gameplay-drive-beyond-horizons-720p-e88d5efc5b98e00c.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 545819887
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/gameplay-drive-beyond-horizons-480p-c51786e5a8f9ba42.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 254045965
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/gameplay-poster-f2bd920fd562d7d9.jpg",
+        "caption": "Дорога смеха с JOHAN",
+        "author": "JOHAN",
+        "width": 1920,
+        "height": 1080
+      },
+      {
         "kind": "image",
         "provider": "file",
         "url": "https://launcher.samoy.love/assets/media/2026-11/drive-beyond-horizons/screenshot-1.jpg",
@@ -2993,6 +3217,38 @@
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/3527290/",
         "author": "Team PEAK",
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/peak/gameplay-peak-1080p-3ed0857097297e68.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/gameplay-peak-1080p-3ed0857097297e68.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 519800000
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/gameplay-peak-720p-f6b4450e393d9ee0.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 301910159
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/peak/gameplay-peak-480p-c9b749295c78576a.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 139563665
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/peak/gameplay-poster-1d77036f8e3b1535.jpg",
+        "caption": "Восхождение с Marmok",
+        "author": "Marmok",
         "width": 1920,
         "height": 1080
       },
@@ -5170,6 +5426,38 @@
         "caption": "Официальный трейлер",
         "sourceUrl": "https://store.steampowered.com/app/4108000/",
         "author": "Mike Klubnika, GDeavid",
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "kind": "video",
+        "provider": "file",
+        "role": "gameplay",
+        "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/gameplay-machine-party-1080p-6e6fb9557b36dfa9.mp4",
+        "sourceUrl": "",
+        "variants": [
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/gameplay-machine-party-1080p-6e6fb9557b36dfa9.mp4",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 1024529287
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/gameplay-machine-party-720p-7730beed67a910b5.mp4",
+            "width": 1280,
+            "height": 720,
+            "bytes": 660247728
+          },
+          {
+            "url": "https://launcher.samoy.love/assets/media/2026-11/machine-party/gameplay-machine-party-480p-6fa33cb92751357e.mp4",
+            "width": 854,
+            "height": 480,
+            "bytes": 391619453
+          }
+        ],
+        "posterUrl": "https://launcher.samoy.love/assets/media/2026-11/machine-party/gameplay-poster-8c7bf5f9b986fd77.jpg",
+        "caption": "Испытания с JOHAN",
+        "author": "JOHAN",
         "width": 1920,
         "height": 1080
       },

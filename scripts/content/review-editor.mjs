@@ -6,12 +6,15 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import Presentation from '../../server/admin_ui/presentation.js';
 const require = createRequire(import.meta.url);
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || path.join(process.env.LOCALAPPDATA,'agent-tools/playwright/node_modules/playwright'));
 const directory = path.dirname(fileURLToPath(import.meta.url)), root = path.resolve(directory,'../..');
 const seed = JSON.parse(await readFile(path.join(root,'launcher/ChillHub.Native/Data/presentation-seed.json'),'utf8'));
 const videoQualities = [480,720,1080].map(height=>({url:`/assets/media/test-${height}.mp4`,height,width:height===480?854:height===720?1280:1920,bytes:height*10000}));
 seed.peak.media[0].variants = videoQualities;
+const initialPresentation=structuredClone(seed.peak);
+const expectedCounts={mods:initialPresentation.mods.length,media:initialPresentation.media.length,benefits:initialPresentation.modBenefits.length};
 const output=path.join(directory,'.cache/admin-review');await mkdir(output,{recursive:true});
 let saved=null;
 const fixtures={games:{items:[{gameId:'peak',title:'PEAK',exeRelativePath:'PEAK.exe',order:0,mods:{enabled:true,steamAppId:'3527290',exeNames:['PEAK.exe']},presentation:seed.peak}]},summary:{launcher:{},mods:[]},'maintenance/get':{state:{enabled:false},effective:{enabled:false,blocks:{}}},'system/free':{bytes:10000000000,total:20000000000},'metrics/summary':{totals:{},byDay:[],topErrors:[]}};
@@ -39,9 +42,9 @@ try{
   await page.route('**/*',route=>new URL(route.request().url()).origin===base?route.continue():route.abort());
   await page.goto(base+'/admin/#games');
   await page.locator('[data-tab="presentation"]').click();
-  assert.equal(await page.locator('[data-p-row="mods"]').count(),233);
-  assert.equal(await page.locator('[data-p-row="media"]').count(),4);
-  assert.equal(await page.locator('[data-p-row="modBenefits"]').count(),3);
+  assert.equal(await page.locator('[data-p-row="mods"]').count(),expectedCounts.mods);
+  assert.equal(await page.locator('[data-p-row="media"]').count(),expectedCounts.media);
+  assert.equal(await page.locator('[data-p-row="modBenefits"]').count(),expectedCounts.benefits);
   assert.equal(await page.locator('[data-p-field="instructions"]').count(),0);
   await page.screenshot({path:path.join(output,'desktop-overview.png')});
   await page.locator('[data-p-row="modBenefits"]').first().scrollIntoViewIfNeeded();
@@ -58,9 +61,12 @@ try{
   await page.locator('[data-game-do="save"]').click();
   await page.waitForFunction(()=>document.body.textContent.includes('Сохранено'));
   await page.waitForLoadState('networkidle');
-  assert(saved);assert.equal(saved.items[0].presentation.mods.length,233);
-  assert.equal(saved.items[0].presentation.media.length,4);
-  assert.deepEqual(saved.items[0].presentation.media[0].variants,videoQualities);
+  assert(saved);assert.equal(saved.items[0].presentation.mods.length,expectedCounts.mods);
+  assert.equal(saved.items[0].presentation.media.length,expectedCounts.media);
+  assert.equal(saved.items[0].presentation.modBenefits.length,expectedCounts.benefits);
+  assert.deepEqual(Presentation.normalize(saved.items[0].presentation).media,
+    Presentation.normalize(initialPresentation).media,'all media entries must round-trip unchanged');
+  assert.equal(saved.items[0].presentation.media[0].variants[1].url,'/assets/media/test-720.mp4');
   assert.equal(saved.items[0].presentation.modBenefits[0].title,'Команда друзей');
   assert.equal(saved.items[0].mods.steamAppId,'3527290');
   const layouts=[];
@@ -73,6 +79,6 @@ try{
     assert(size.content<=size.viewport,`Horizontal overflow at ${width}: ${size.content}; ${JSON.stringify(overflow)}`);layouts.push(size);
   }
   assert.deepEqual(errors,[]);
-  const report={valid:true,serverWrites:0,localFixtureSaves:1,games:['peak'],mods:233,media:4,benefits:3,layouts,browserErrors:errors};
+  const report={valid:true,serverWrites:0,localFixtureSaves:1,games:['peak'],...expectedCounts,layouts,browserErrors:errors};
   const {writeFile}=await import('node:fs/promises');await writeFile(path.join(output,'result.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report));
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

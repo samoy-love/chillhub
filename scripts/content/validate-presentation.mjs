@@ -4,7 +4,7 @@ import { readFile, writeFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {fileHash} from './media-history.mjs';
+import {fileHash, MAX_MEDIA_BYTES} from './media-history.mjs';
 import { validatePresentation, mergeRegistry } from './presentation-tools.mjs';
 import {validateGameplayPresentation} from './gameplay-presentation.mjs';
 
@@ -18,7 +18,7 @@ const provenance = await read(path.join(directory,'metadata-provenance.json'));
 const prepared = process.argv.includes('--prepared') ? await read(path.join(directory,'.cache/media-upload-plan.json')) : null;
 if(prepared){
   assert(prepared.files.length >= 45 && prepared.files.length <= 4000);
-  assert(prepared.files.reduce((sum,file)=>sum+file.bytes,0)<=20*1024*1024*1024,'Prepared media exceeds 20 GiB');
+  assert(prepared.files.reduce((sum,file)=>sum+file.bytes,0)<=MAX_MEDIA_BYTES,`Prepared media exceeds ${MAX_MEDIA_BYTES / 1024 ** 3} GiB`);
   for(const file of prepared.files){
     assert.equal((await stat(file.localPath)).size,file.bytes);assert.equal(await fileHash(file.localPath),file.sha256);
   }
