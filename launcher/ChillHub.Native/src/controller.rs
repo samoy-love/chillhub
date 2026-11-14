@@ -619,6 +619,7 @@ pub(super) fn install_window_refresh(ui: &AppWindow) {
                             state.borrow_mut().last_activation = Some(now);
                             poll_services(&ui, state);
                             refresh_catalog_quietly(&ui, state);
+                            refresh_disk(&ui, state);
                             if !ui.get_busy() && !ui.get_operation_busy() {
                                 refresh_choice(&ui, state);
                                 refresh_library_states(&ui, state);
@@ -1063,25 +1064,19 @@ pub(super) fn request_exit(ui: &AppWindow, state: &State) {
 
 fn refresh_disk(ui: &AppWindow, state: &State) {
     let path = state.borrow().services.paths.games_dir.clone();
+    let expected_path = path.clone();
     background(
         ui,
-        move || {
-            let mut p = path.as_path();
-            while !p.exists() {
-                let parent = p.parent()?;
-                p = parent;
+        move || service::available_space(&path),
+        move |ui, state, space| {
+            if state.borrow().services.paths.games_dir == expected_path {
+                set_disk_label(ui, space);
             }
-            fs2::available_space(p).ok()
-        },
-        |ui, _, space| {
-            ui.set_disk_label(
-                space
-                    .map(|n| format!("Свободно {:.1} ГБ", n as f64 / 1024_f64.powi(3)))
-                    .unwrap_or_else(|| "Не удалось определить свободное место".into())
-                    .into(),
-            )
         },
     );
+}
+pub(super) fn set_disk_label(ui: &AppWindow, available_bytes: Option<u64>) {
+    ui.set_disk_label(service::format_available_space(available_bytes).into());
 }
 fn reload(ui: &AppWindow, state: &State) {
     state.borrow_mut().catalog_checked_at = std::time::Instant::now();

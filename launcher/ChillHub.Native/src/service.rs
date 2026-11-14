@@ -30,6 +30,19 @@ pub struct DownloadEstimate {
     pub required_free_bytes: u64,
     pub available_bytes: Option<u64>,
 }
+
+pub fn available_space(path: &Path) -> Option<u64> {
+    path.ancestors()
+        .find(|candidate| candidate.is_dir())
+        .and_then(|candidate| fs2::available_space(candidate).ok())
+}
+
+pub fn format_available_space(bytes: Option<u64>) -> String {
+    bytes
+        .map(|value| format!("Свободно {:.1} ГБ", value as f64 / 1024_f64.powi(3)))
+        .unwrap_or_else(|| "Не удалось определить свободное место".into())
+}
+
 impl Services {
     pub fn new(mut paths: AppPaths) -> Result<(Self, AppConfig), String> {
         let config = ConfigStore::new(paths.clone());
@@ -394,10 +407,7 @@ impl Services {
                 .required_free_bytes
                 .saturating_add(plan.required_free_bytes);
         }
-        estimate.available_bytes = root
-            .ancestors()
-            .find(|path| path.is_dir())
-            .and_then(|path| fs2::available_space(path).ok());
+        estimate.available_bytes = available_space(&root);
         Ok(estimate)
     }
     pub fn idle(&self) -> bool {
@@ -604,6 +614,13 @@ pub fn desktop_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn available_space_uses_existing_games_root_ancestor() {
+        let temp = tempfile::tempdir().unwrap();
+        let games = temp.path().join("games");
+        std::fs::create_dir_all(&games).unwrap();
+        assert!(available_space(&games.join("not-installed-yet")).is_some());
+    }
     #[test]
     fn maintenance_blocks_only_named_operations() {
         let m = Maintenance {

@@ -6,6 +6,10 @@ pub(super) enum PlayFailure {
     General(String),
     Folder(PathBuf, String),
 }
+fn apply_estimate(ui: &AppWindow, estimate: &chillhub_native::service::DownloadEstimate) {
+    controller::set_disk_label(ui, estimate.available_bytes);
+    ui.set_install_hint(describe(estimate).into());
+}
 impl From<String> for PlayFailure {
     fn from(value: String) -> Self {
         Self::General(value)
@@ -94,7 +98,7 @@ pub(super) fn hint(ui: &AppWindow, state: &State) {
                 return;
             }
             match result {
-                Ok(e) => ui.set_install_hint(describe(&e).into()),
+                Ok(e) => apply_estimate(ui, &e),
                 Err(error) => {
                     ui.set_install_hint("Размер уточнится перед загрузкой".into());
                     chillhub_native::diagnostics::log(
@@ -129,6 +133,43 @@ fn describe(e: &chillhub_native::service::DownloadEstimate) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn install_estimate_replaces_stale_disk_value_and_clears_it_when_unknown() {
+        slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+            i_slint_backend_testing::TestingBackendOptions {
+                mock_time: true,
+                threading: false,
+                renderer_name: Some("software".into()),
+            },
+        )))
+        .expect("headless test platform only");
+        let ui = AppWindow::new().unwrap();
+        ui.set_disk_label("Свободно 52.8 ГБ".into());
+        ui.set_install_hint("Свободно 52.8 ГБ".into());
+        apply_estimate(
+            &ui,
+            &chillhub_native::service::DownloadEstimate {
+                bytes_to_prepare: 1024,
+                required_free_bytes: 2048,
+                available_bytes: Some(20 * 1024 * 1024 * 1024),
+            },
+        );
+        assert_eq!(ui.get_disk_label(), "Свободно 20.0 ГБ");
+        assert!(ui.get_install_hint().contains("свободно 20.0 ГБ"));
+        assert!(!ui.get_disk_label().contains("52.8"));
+        assert!(!ui.get_install_hint().contains("52.8"));
+
+        apply_estimate(
+            &ui,
+            &chillhub_native::service::DownloadEstimate {
+                bytes_to_prepare: 0,
+                required_free_bytes: 0,
+                available_bytes: None,
+            },
+        );
+        assert_eq!(ui.get_disk_label(), "Не удалось определить свободное место");
+        assert!(!ui.get_install_hint().contains("52.8"));
+    }
     #[test]
     fn folder_recovery_uses_native_codes_not_localized_messages() {
         for code in [5, 19, 32, 33, 1314] {
