@@ -6,7 +6,7 @@ package builds
 //   - PUT  /admin/api/upload/chunk    (query: uploadId, index)
 //   - GET  /admin/api/upload/status   (query: uploadId)
 //   - POST /admin/api/upload/complete (query: uploadId) -> validates sha256 if provided, renames .part to .zip
-//   - GET  /admin/api/upload/process  (query: uploadId) -> NDJSON stream: unzip + compose manifest
+//   - POST /admin/api/upload/process  (query: uploadId) -> NDJSON stream: unzip + compose manifest
 //   - POST /admin/api/upload/cleanup  -> removes stale/broken tmp uploads
 
 import (
@@ -43,7 +43,40 @@ const (
 	uploadDoneRetention = time.Hour
 )
 
-var uploadMu sync.Mutex
+type uploadActivity struct {
+	mu     sync.RWMutex
+	meta   sync.Mutex
+	chunks [32]sync.Mutex
+	refs   int
+}
+
+var uploadActivities = struct {
+	sync.Mutex
+
+	items map[string]*uploadActivity
+}{items: make(map[string]*uploadActivity)}
+
+// Uploads can write distinct chunks in parallel. Completion, extraction and
+// removal get exclusive access to the upload until they finish.
+func (h *Handlers) uploadActivity(id string) (*uploadActivity, func()) {
+	dir := strings.ToLower(filepath.Clean(h.uploadDir(id)))
+	uploadActivities.Lock()
+	state := uploadActivities.items[dir]
+	if state == nil {
+		state = &uploadActivity{}
+		uploadActivities.items[dir] = state
+	}
+	state.refs++
+	uploadActivities.Unlock()
+	return state, func() {
+		uploadActivities.Lock()
+		defer uploadActivities.Unlock()
+		state.refs--
+		if state.refs == 0 {
+			delete(uploadActivities.items, dir)
+		}
+	}
+}
 
 // What an archive is. The kind decides where the version is published:
 // launcher and game builds keep their historic layout, a modpack goes to the
@@ -88,6 +121,7 @@ type uploadMeta struct {
 	TotalChunks    int    `json:"totalChunks"`
 	Received       []bool `json:"received"`
 	ExpectedSha256 string `json:"expectedSha256"`
+	SHA256         string `json:"sha256,omitempty"`
 	UpdatedAt      int64  `json:"updatedAt"` // unix seconds
 	Status         string `json:"status"`    // init|uploading|ready|processing|done|error
 }
@@ -137,6 +171,9 @@ func (h *Handlers) readUploadMeta(id string) (*uploadMeta, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, err
 	}
+	if !strings.EqualFold(m.UploadID, id) {
+		return nil, errors.New("upload metadata id mismatch")
+	}
 	return &m, nil
 }
 
@@ -160,7 +197,11 @@ func (h *Handlers) writeUploadMeta(m *uploadMeta) error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	return os.Rename(tmpPath, h.uploadMetaPath(m.UploadID))
+	if err := os.Rename(tmpPath, h.uploadMetaPath(m.UploadID)); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // writeAndSync writes b to f, flushes it to the platter and closes the handle.
@@ -250,15 +291,9 @@ func (h *Handlers) UploadCleanup(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
-			m, _ := h.readUploadMeta(id)
-			if !reapUpload(m, uploadIdle(m, entryModTime(e), now), uploadIdleGrace) {
-				continue
+			if h.reapIdleUpload(e, now, uploadIdleGrace) {
+				removed++
 			}
-			if err := os.RemoveAll(h.uploadDir(id)); err != nil {
-				log.Printf("[upload:cleanup] failed to remove %s: %v", h.uploadDir(id), err)
-				continue
-			}
-			removed++
 		}
 	}
 
@@ -320,7 +355,7 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 	if in.Kind == uploadKindLauncher {
 		in.GameID = "launcher"
 	}
-	if !adminutil.IsSafeGameID(in.GameID) || !adminutil.IsSafeVersion(in.Version) {
+	if !adminutil.IsCatalogGameID(in.GameID) || !adminutil.IsSafeVersion(in.Version) {
 		log.Printf("[upload:init] invalid ids: kind=%s gameId=%q version=%q", in.Kind, in.GameID, in.Version)
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
@@ -512,23 +547,34 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad index", http.StatusBadRequest)
 		return
 	}
-	var m *uploadMeta
-	for attempt := range 5 {
-		if m, err = h.readUploadMeta(id); err == nil {
-			break
-		}
-		time.Sleep(time.Duration(5*(attempt+1)) * time.Millisecond) // 5,10,15,20,25ms
-	}
+	state, release := h.uploadActivity(id)
+	defer release()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	chunk := &state.chunks[idx%len(state.chunks)]
+	chunk.Lock()
+	defer chunk.Unlock()
+
+	m, err := h.readUploadMeta(id)
 	if err != nil {
 		log.Printf("[upload:chunk] meta not found uploadId=%s index=%s remote=%s error=%v", id, idxStr, r.RemoteAddr, err)
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if idx >= m.TotalChunks {
+	if idx >= m.TotalChunks || idx >= len(m.Received) {
 		http.Error(w, "index out of range", http.StatusBadRequest)
 		return
 	}
 	exp := expectedChunkSize(m, idx)
+	if m.Received[idx] {
+		// A retry after the response was lost must leave the accepted bytes alone.
+		adminutil.WriteJSON(w, map[string]any{"status": "ok", "bytes": exp, "writeMs": 0})
+		return
+	}
+	if r.ContentLength >= 0 && r.ContentLength != int64(exp) {
+		http.Error(w, "invalid chunk length", http.StatusBadRequest)
+		return
+	}
 	t0 := time.Now()
 	n, werr := h.writeChunk(id, int64(idx)*int64(m.ChunkSize), r.Body, int64(exp))
 	if werr != nil && !errors.Is(werr, io.EOF) {
@@ -542,17 +588,7 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// mark received
-	uploadMu.Lock()
-	// Reload latest meta under the lock to avoid lost updates from concurrent chunk handlers
-	if mLatest, err2 := h.readUploadMeta(id); err2 == nil && mLatest != nil {
-		m = mLatest
-	}
-	if idx >= 0 && idx < len(m.Received) {
-		m.Received[idx] = true
-	}
-	m.Status = "uploading"
-	metaErr := h.writeUploadMeta(m)
-	uploadMu.Unlock()
+	metaErr := h.markChunkReceived(state, id, idx)
 	if metaErr != nil {
 		// ОТМЕТКА О ЧАНКЕ — ЭТО И ЕСТЬ ДОСТАВКА. Ошибка записи meta.json (том
 		// кончился ровно на том, чем занята многогигабайтная заливка)
@@ -565,6 +601,18 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminutil.WriteJSON(w, map[string]any{"status": "ok", "bytes": int(n), "writeMs": time.Since(t0).Milliseconds()})
+}
+
+func (h *Handlers) markChunkReceived(state *uploadActivity, id string, idx int) error {
+	state.meta.Lock()
+	defer state.meta.Unlock()
+	m, err := h.readUploadMeta(id)
+	if err != nil {
+		return err
+	}
+	m.Received[idx] = true
+	m.Status = "uploading"
+	return h.writeUploadMeta(m)
 }
 
 // expectedChunkSize returns how many bytes chunk idx must carry. Every chunk
@@ -690,6 +738,10 @@ func (h *Handlers) UploadAbort(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	state, release := h.uploadActivity(id)
+	defer release()
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	if err := os.RemoveAll(h.uploadDir(id)); err != nil {
 		log.Printf("[upload:abort] uploadId=%s failed to remove: %v", id, err)
 		http.Error(w, "abort failed", http.StatusInternalServerError)
@@ -714,12 +766,31 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	state, release := h.uploadActivity(id)
+	defer release()
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	m, err := h.readUploadMeta(id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// ensure all chunks present
+	part, zip := h.uploadZipPartPath(id), h.uploadZipPath(id)
+	if m.SHA256 != "" {
+		if m.Status != "done" && m.Status != "processed" {
+			if _, err := os.Stat(zip); err != nil {
+				http.Error(w, "completed upload archive missing", http.StatusConflict)
+				return
+			}
+		}
+		writeUploadComplete(w, m.SHA256)
+		return
+	}
+	if len(m.Received) == 0 || len(m.Received) != m.TotalChunks {
+		http.Error(w, "invalid chunk metadata", http.StatusConflict)
+		return
+	}
+	// Ensure all chunks are present.
 	for i, ok := range m.Received {
 		if !ok {
 			log.Printf("[upload:complete] missing chunk uploadId=%s index=%d total=%d", id, i, len(m.Received))
@@ -727,8 +798,12 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// compute sha256 of full file
-	sum, err := sha256OfFile(h.uploadZipPartPath(id))
+	source := part
+	if _, err := os.Stat(part); os.IsNotExist(err) {
+		// Recover if the final ZIP was renamed and storing the ready state failed.
+		source = zip
+	}
+	sum, err := sha256OfFile(source)
 	if err != nil {
 		log.Printf("[upload:complete] read part uploadId=%s error: %v", id, err)
 		http.Error(w, "upload storage error", http.StatusInternalServerError)
@@ -736,20 +811,49 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	if m.ExpectedSha256 != "" && sum != m.ExpectedSha256 {
 		log.Printf("[upload:complete] sha256 mismatch uploadId=%s expected=%s actual=%s", id, m.ExpectedSha256, sum)
-		m.Status = "error"
-		_ = h.writeUploadMeta(m)
-		http.Error(w, "sha256 mismatch", http.StatusBadRequest)
+		h.rejectUploadChecksum(w, m, source == zip)
 		return
 	}
-	// rename to final zip inside upload dir
-	if err := os.Rename(h.uploadZipPartPath(id), h.uploadZipPath(id)); err != nil {
+	if source == part {
+		err = os.Rename(part, zip)
+	}
+	if err != nil {
 		log.Printf("[upload:complete] rename part->zip uploadId=%s error: %v", id, err)
 		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	m.Status = "ready"
-	_ = h.writeUploadMeta(m)
-	adminutil.WriteJSON(w, map[string]any{"status": "ok", "sha256": sum})
+	m.SHA256 = sum
+	if err := h.writeUploadMeta(m); err != nil {
+		log.Printf("[upload:complete] save ready state uploadId=%s: %v", id, err)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
+		return
+	}
+	writeUploadComplete(w, sum)
+}
+
+func (h *Handlers) rejectUploadChecksum(w http.ResponseWriter, m *uploadMeta, finalized bool) {
+	if finalized {
+		// Recover a damaged archive left by a failed ready-state write.
+		// Retried chunks need the file back under its part name.
+		if err := os.Rename(h.uploadZipPath(m.UploadID), h.uploadZipPartPath(m.UploadID)); err != nil {
+			log.Printf("[upload:complete] restore part uploadId=%s: %v", m.UploadID, err)
+			http.Error(w, "upload storage error", http.StatusInternalServerError)
+			return
+		}
+	}
+	m.Status = "error"
+	clear(m.Received)
+	if err := h.writeUploadMeta(m); err != nil {
+		log.Printf("[upload:complete] save checksum failure uploadId=%s: %v", m.UploadID, err)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
+		return
+	}
+	http.Error(w, "sha256 mismatch", http.StatusBadRequest)
+}
+
+func writeUploadComplete(w http.ResponseWriter, sha string) {
+	adminutil.WriteJSON(w, map[string]any{"status": "ok", "sha256": sha})
 }
 
 // sha256OfFile returns the lower-case hex sha256 of a file's contents.
@@ -785,17 +889,15 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	state, release := h.uploadActivity(id)
+	defer release()
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	m, err := h.readUploadMeta(id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// Keep the record's liveness up to date: the janitor and the cleanup endpoint
-	// decide what to delete from it, and a run that neither refreshes nor
-	// finalises its meta looks abandoned.
-	m.Status = "processing"
-	_ = h.writeUploadMeta(m)
-
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	nw := newNDJSONWriter(w)
 	fl := adminutil.Flusher(nw)
@@ -806,8 +908,21 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// it is turned into a filesystem path again. The start event is already out,
 	// so the failure has to travel as an error event: an http.Error here would be
 	// dropped by the client, which would then treat the build as published.
-	if !adminutil.IsSafeGameID(m.GameID) || !adminutil.IsSafeVersion(m.Version) {
+	if !adminutil.IsCatalogGameID(m.GameID) || !adminutil.IsSafeVersion(m.Version) {
 		nw.fail(http.StatusBadRequest, "invalid gameId or version")
+		return
+	}
+	ns := uploadNamespace(m.Kind)
+	if m.Status == "done" {
+		outPath := filepath.Join(h.ManifestsDirFor(ns, m.GameID), m.Version+".json")
+		emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+		fl.Flush()
+		return
+	}
+	m.Status = "processing"
+	if err := h.writeUploadMeta(m); err != nil {
+		log.Printf("[upload:process] save state uploadId=%s: %v", id, err)
+		nw.fail(http.StatusInternalServerError, "upload storage error")
 		return
 	}
 	// The already-published check happens after compose (below): by the time
@@ -823,7 +938,6 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// Thunderstore builder produces: the panel lists, activates and deletes
 	// modpack versions from that subtree, and a hand-made pack published as a
 	// version of the game itself would never show up there.
-	ns := uploadNamespace(m.Kind)
 	finalVerDir := filepath.Join(h.ContentDirFor(ns, m.GameID), m.Version)
 	staged, err := h.StageTree(ns, m.GameID, m.Version)
 	if err != nil {
@@ -851,12 +965,15 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	if !ok2 {
 		return
 	}
+	dir := h.ManifestsDirFor(ns, m.GameID)
+	unlock := lockPublish(dir)
+	defer unlock()
 
 	// See the comment above stageDir's setup: this is deliberately after
 	// extraction, not before. This also covers the race UploadInit's own
 	// check cannot see — another publish landing after Init let this one
 	// through but before this process step ran.
-	if h.processLauncherRepublish(nw, fl, m, id, zipPath, files, emptyDirs) {
+	if h.processLauncherRepublish(nw, fl, m, files, emptyDirs) {
 		return
 	}
 
@@ -874,33 +991,15 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		nw.fail(http.StatusBadRequest, "the build cannot be published: "+err.Error())
 		return
 	}
-	// Everything is extracted and hashed: publish the build in one rename.
-	// See lockPublish: promote and the manifest write must not interleave with
-	// another publication of the same version.
-	// The key must match what Publish (publish.go) locks for the same
-	// namespace, or a hand upload and a Thunderstore build of one version
-	// would not exclude each other.
-	unlock := lockPublish(string(ns)+"/"+m.GameID, m.Version)
-	defer unlock()
 	// See Upload: the backup goes only after the manifest is written.
 	// update latest.json is opted-in by client via existing API; here keep minimal
-	outPath, _, err := h.publishTree(stageDir, finalVerDir, h.ManifestsDirFor(ns, m.GameID), mOut, false)
+	outPath, _, err := h.publishTree(stageDir, finalVerDir, dir, mOut, false)
 	if err != nil {
 		streamError(nw, fl, err.Error())
 		return
 	}
 	promoted = true
-	// The archive has served its purpose. Dropping it here — rather than waiting
-	// out the janitor's 12 hours — is what keeps a 30 GB upload from occupying
-	// the volume long after the build is live.
-	if err := os.Remove(zipPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("[upload:process] uploadId=%s: cannot remove %s: %v", id, zipPath, err)
-	}
-	m.Status = "done"
-	_ = h.writeUploadMeta(m)
-
-	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
-	fl.Flush()
+	h.finishUpload(nw, fl, m, outPath)
 }
 
 // processLauncherRepublish is UploadProcessStream's version of
@@ -910,7 +1009,7 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 // normal process run does once it has promoted. Kept as its own function,
 // same as its two siblings, to keep UploadProcessStream's cyclomatic
 // complexity under the linter's ceiling.
-func (h *Handlers) processLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flusher, m *uploadMeta, id, zipPath string, files []manifestFile, emptyDirs []string) bool {
+func (h *Handlers) processLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flusher, m *uploadMeta, files []manifestFile, emptyDirs []string) bool {
 	if !h.launcherVersionAlreadyPublished(m.GameID, m.Version) {
 		return false
 	}
@@ -918,16 +1017,27 @@ func (h *Handlers) processLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flush
 		nw.fail(http.StatusConflict, launcherVersionConflictMessage(m.Version))
 		return true
 	}
-	if err := os.Remove(zipPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("[upload:process] uploadId=%s: cannot remove %s: %v", id, zipPath, err)
+	outPath := filepath.Join(h.manifestsDir(m.GameID), m.Version+".json")
+	log.Printf("[upload:process] uploadId=%s: launcher version %s re-uploaded with identical content, no-op", m.UploadID, m.Version)
+	h.finishUpload(nw, fl, m, outPath)
+	return true
+}
+
+func (h *Handlers) finishUpload(nw *ndjsonWriter, fl adminutil.Flusher, m *uploadMeta, outPath string) {
+	if uploadNamespace(m.Kind) == NamespaceMods {
+		removeLegacyModSource(h.ManifestsDirFor(NamespaceMods, m.GameID), m.Version)
 	}
 	m.Status = "done"
-	_ = h.writeUploadMeta(m)
-	outPath := filepath.Join(h.manifestsDir(m.GameID), m.Version+".json")
-	log.Printf("[upload:process] uploadId=%s: launcher version %s re-uploaded with identical content, no-op", id, m.Version)
+	if err := h.writeUploadMeta(m); err != nil {
+		log.Printf("[upload:process] save completion uploadId=%s: %v", m.UploadID, err)
+		nw.fail(http.StatusInternalServerError, "upload storage error")
+		return
+	}
+	if err := os.Remove(h.uploadZipPath(m.UploadID)); err != nil && !os.IsNotExist(err) {
+		log.Printf("[upload:process] uploadId=%s: cannot remove archive: %v", m.UploadID, err)
+	}
 	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
-	return true
 }
 
 // StartUploadJanitor removes expired upload staging directories. It blocks and
@@ -955,10 +1065,25 @@ func (h *Handlers) sweepUploads(now time.Time) {
 		if !e.IsDir() {
 			continue
 		}
-		id := e.Name()
-		m, _ := h.readUploadMeta(id)
-		if reapUpload(m, uploadIdle(m, entryModTime(e), now), uploadExpire) {
-			_ = os.RemoveAll(h.uploadDir(id))
-		}
+		h.reapIdleUpload(e, now, uploadExpire)
 	}
+}
+
+func (h *Handlers) reapIdleUpload(entry os.DirEntry, now time.Time, expire time.Duration) bool {
+	id := entry.Name()
+	state, release := h.uploadActivity(id)
+	defer release()
+	if !state.mu.TryLock() {
+		return false
+	}
+	defer state.mu.Unlock()
+	m, _ := h.readUploadMeta(id)
+	if !reapUpload(m, uploadIdle(m, entryModTime(entry), now), expire) {
+		return false
+	}
+	if err := os.RemoveAll(h.uploadDir(id)); err != nil {
+		log.Printf("[upload:cleanup] failed to remove %s: %v", h.uploadDir(id), err)
+		return false
+	}
+	return true
 }

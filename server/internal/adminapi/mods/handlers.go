@@ -504,18 +504,10 @@ func (h *Handlers) runBuild(ctx context.Context, w http.ResponseWriter, req Requ
 		fl.Flush()
 	}
 
-	src, err := h.builder.Build(ctx, req, allowMissing, emit)
-	if err != nil {
+	req.Community = cfg.Community
+	if _, err := h.builder.Build(ctx, req, allowMissing, emit); err != nil {
 		log.Printf("[mods] build %s/%s failed: %v", req.GameID, req.VersionName(), err)
 		emit(Event{Type: "error", Message: err.Error()})
-		return
-	}
-
-	// The pack URL is stored after the fact so the panel can link a built
-	// version back to its page without recomputing it from the version name.
-	src.PackageURL = req.PackageURL(cfg.Community)
-	if err := h.builder.writeSource(req.GameID, src.Version, src); err != nil {
-		log.Printf("[mods] update source record %s/%s: %v", req.GameID, src.Version, err)
 	}
 }
 

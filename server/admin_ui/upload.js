@@ -40,6 +40,13 @@
 
   /** Сколько версий перед активной оставляют нетронутыми. */
   const KEEP_BEFORE_ACTIVE = 2;
+  const MAX_VERSION_COMPONENT = 18446744073709551615n;
+
+  function versionNumber(part) {
+    if (!/^\d*$/.test(part)) return null;
+    const n = BigInt(part || '0');
+    return n <= MAX_VERSION_COMPONENT ? n : null;
+  }
 
   /**
    * Сравнение версий по числам, а не по буквам.
@@ -49,21 +56,31 @@
    * (`adminutil.CompareVersions`).
    */
   function compareVersions(a, b) {
-    const parts = (v) => String(v || '').split('-')[0].split('.');
-    const A = parts(a);
-    const B = parts(b);
+    const parts = (value) => {
+      const label = String(value || '').trim();
+      const split = label.search(/[-+]/);
+      if (split < 0) return { core: label.split('.'), pre: '' };
+      return { core: label.slice(0, split).split('.'), pre: label.slice(split + 1) };
+    };
+    const pa = parts(a);
+    const pb = parts(b);
+    const A = pa.core;
+    const B = pb.core;
     for (let i = 0; i < Math.max(A.length, B.length); i++) {
       const x = A[i] === undefined ? '' : A[i];
       const y = B[i] === undefined ? '' : B[i];
-      const nx = Number(x);
-      const ny = Number(y);
-      if (Number.isFinite(nx) && Number.isFinite(ny) && x !== '' && y !== '') {
+      const nx = versionNumber(x);
+      const ny = versionNumber(y);
+      if (nx !== null && ny !== null) {
         if (nx !== ny) return nx < ny ? -1 : 1;
         continue;
       }
       if (x !== y) return x < y ? -1 : 1;
     }
-    return 0;
+    if (pa.pre === pb.pre) return 0;
+    if (!pa.pre) return 1;
+    if (!pb.pre) return -1;
+    return pa.pre < pb.pre ? -1 : 1;
   }
 
   /**
@@ -108,6 +125,7 @@
     const s = String(v === undefined || v === null ? '' : v).trim();
     if (!s) return 'Без номера версии сборку некуда положить';
     if (s === '.' || s === '..') return 'Такой номер означает папку, а не версию';
+    if (/^(?:gallery|latest)$/i.test(s) || /\.(?:old|tmp)-/i.test(s)) return 'Это имя зарезервировано сервером';
     if (!VERSION_RE.test(s)) return 'В номере только латиница, цифры, точка, дефис и подчёркивание';
     if (opts && opts.game) {
       if (!GAME_VERSION_RE.test(s)) return 'Между точками нужны цифры или буквы — например, 2.4.A';
@@ -264,6 +282,7 @@
           deps: Object.assign({}, d.xhrDeps, { signal: d.signal }),
           signal: d.signal,
           put: d.put,
+          refresh: api.me,
           maxAttempts: d.maxAttempts,
           retryDelayMs: d.retryDelayMs,
         });

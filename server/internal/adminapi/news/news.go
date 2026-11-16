@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"ChillHub/server/internal/adminapi/media"
 	"ChillHub/server/internal/adminutil"
 )
 
@@ -561,8 +562,6 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	name := adminutil.SanitizeFilename(hdr.Filename)
-	outPath := filepath.Join(base, name)
 	// Read through a limit reader: the request cap above bounds the body, but
 	// the part itself must not be trusted to stay inside it. Buffering first and
 	// writing atomically means a rejected or interrupted upload never replaces
@@ -577,6 +576,17 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "image too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	ext, err := media.ImageExtension(buf)
+	if err != nil || media.CheckImageBounds(buf) != nil {
+		http.Error(w, "invalid cover image", http.StatusBadRequest)
+		return
+	}
+	name := adminutil.SanitizeFilename(hdr.Filename)
+	originalExt := filepath.Ext(name)
+	if !strings.EqualFold(originalExt, ext) && !(ext == ".jpg" && strings.EqualFold(originalExt, ".jpeg")) {
+		name = adminutil.SanitizeFilename(strings.TrimSuffix(name, originalExt)) + ext
+	}
+	outPath := filepath.Join(base, name)
 	if err := adminutil.WriteFileAtomic(outPath, buf, 0o644); err != nil {
 		log.Printf("[news:cover] write %q: %v", outPath, err)
 		http.Error(w, "failed to store cover", http.StatusInternalServerError)

@@ -4,9 +4,33 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
+
+func TestLoginRejectsPartialOrQueryCredentials(t *testing.T) {
+	a, pass := newTestAuth(t)
+	query := url.Values{"username": {"admin"}, "password": {pass}}.Encode()
+	body := `{"username":"admin","password":"` + pass + `"}`
+	for _, tc := range []struct{ name, contentType, suffix, body string }{
+		{"bad field after credentials", "application/json", "", strings.TrimSuffix(body, "}") + `,"username":1}`},
+		{"trailing JSON", "application/json", "", body + ` {}`},
+		{"trailing oversized data", "application/json", "", body + strings.Repeat(" ", maxLoginBodyBytes)},
+		{"malformed form", "application/x-www-form-urlencoded", "", query + "&bad=%"},
+		{"query only", "application/x-www-form-urlencoded", "?" + query, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/login"+tc.suffix, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", tc.contentType)
+			w := httptest.NewRecorder()
+			a.HandleLogin(w, r)
+			if w.Code != http.StatusBadRequest || w.Header().Get("Set-Cookie") != "" {
+				t.Fatalf("status = %d, want 400 without a session", w.Code)
+			}
+		})
+	}
+}
 
 // countingReader считает, сколько байт тела действительно вычитал обработчик.
 type countingReader struct {

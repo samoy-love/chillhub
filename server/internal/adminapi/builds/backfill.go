@@ -51,10 +51,10 @@ var backfillHashed = func() {}
 // пришедшаяся на время подсчёта, была бы затёрта старым списком файлов.
 func (h *Handlers) BackfillBlocks(ns Namespace, gid, ver string) (BackfillResult, error) {
 	// Имена приходят с диска и из командной строки, а превращаются в пути.
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
+	if !adminutil.IsCatalogGameID(gid) || !adminutil.IsSafeVersion(ver) {
 		return BackfillResult{}, fmt.Errorf("unsafe gameId %q or version %q", gid, ver)
 	}
-	unlock := lockPublish(string(ns)+"/"+gid, ver)
+	unlock := lockPublish(h.ManifestsDirFor(ns, gid))
 	defer unlock()
 
 	manDir := h.ManifestsDirFor(ns, gid)

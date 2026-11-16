@@ -60,6 +60,7 @@
 
   /** Длиннее этого в адрес не кладём. */
   const URL_VALUE_LIMIT = 512;
+  const BODY_ONLY_FIELDS = new Set(['url', 'caption', 'expected']);
 
   /** Идентификатор, под которым сервер держит сборки самого лаунчера. */
   const LAUNCHER = 'launcher';
@@ -191,7 +192,7 @@
       };
       add(c.query);
 
-      const init = { method: method, signal: c.signal, headers: { accept: 'application/json' } };
+      const init = { method: method, signal: c.signal, headers: { accept: 'application/json', ...c.headers } };
 
       if (c.body !== undefined) {
         if (typeof FormData !== 'undefined' && c.body instanceof FormData) {
@@ -211,11 +212,18 @@
           init.body = JSON.stringify(c.body);
         } else {
           /* Обычный путь: то же самое и в адрес, и телом формы. */
-          add(c.body);
           const form = new URLSearchParams();
           for (const k of Object.keys(c.body || {})) {
             const v = c.body[k];
-            if (usable(v)) form.set(k, asText(v));
+            if (k === 'expected' && Array.isArray(v) && v.length === 0) {
+              form.set(k, '');
+              continue;
+            }
+            for (const item of Array.isArray(v) ? v : [v]) {
+              if (!usable(item)) continue;
+              form.append(k, asText(item));
+              if (!BODY_ONLY_FIELDS.has(k) && asText(item).length <= URL_VALUE_LIMIT) q.append(k, asText(item));
+            }
           }
           init.headers['content-type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
           init.body = form.toString();
@@ -245,6 +253,9 @@
       }
 
       if (!res.ok) throw new ApiError(reason(data, res.status), res.status, path);
+      if (path === 'games' && method === 'GET' && data && typeof data === 'object' && res.headers) {
+        data.registryRevision = res.headers.get('ETag');
+      }
       return data;
     }
 
@@ -286,7 +297,7 @@
       /* Сколько оставить, сервер решает сам: всё старше активной,
          кроме двух перед ней. Параметра `keep` у ручки нет, и слать
          его — притворяться, будто панель этим управляет. */
-      pruneVersions: (gameId) => post('pruneVersions', { gameId: gameId }),
+      pruneVersions: (gameId, expected = []) => post('pruneVersions', { gameId: gameId, expected: expected }),
 
       /* Лаунчер для сервера — такая же «игра», как остальные, только с
          зарезервированным идентификатором. Без него ручки версий
@@ -294,7 +305,7 @@
       launcherVersions: () => get('list', { gameId: LAUNCHER }),
       launcherActivate: (version) => post('activate', { gameId: LAUNCHER, version: version }),
       launcherDelete: (version) => post('deleteVersion', { gameId: LAUNCHER, version: version }),
-      launcherPrune: () => post('pruneVersions', { gameId: LAUNCHER }),
+      launcherPrune: (expected = []) => post('pruneVersions', { gameId: LAUNCHER, expected: expected }),
       freeSpace: () => get('system/free'),
 
       uploadInit: (payload) => post('upload/init', payload),
@@ -307,7 +318,11 @@
       uploadAbort: (id) => post('upload/abort', { uploadId: id }),
 
       games: () => get('games'),
-      gamesSave: (items) => post('games/save', { items: items }),
+      gamesSave: (items, revision) => call('games/save', {
+        method: 'POST',
+        body: { items: items },
+        headers: revision ? { 'If-Match': revision } : undefined,
+      }),
       gamesScan: () => post('games/scan'),
       gamesPurge: (gameId) => post('games/purge', { gameId: gameId }),
       /* Это запись, а не чтение: ручка сама сохраняет запись реестра

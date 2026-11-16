@@ -427,9 +427,9 @@
               <span class="k">${esc(p.checking ? 'Проверяем обновления' : p.updateError || p.latestAt || 'дата не приходит с Thunderstore')}</span>
             </div>
             <div class="push"></div>
-            <button class="btn btn--text" type="button" data-act="versions" data-args='{"gameId":"${esc(p.gameId)}","title":"${esc(p.title)}"}'>Все версии</button>
-            <button class="btn btn--text" type="button" data-act="compare" data-args='{"kind":"mods","gameId":"${esc(p.gameId)}","title":"${esc(p.title)}"}'>Сравнить версии</button>
-            ${staged ? `<button class="btn" type="button" data-act="mods-diff" data-args='{"gameId":"${esc(p.gameId)}","from":"${esc(p.active)}","to":"${esc(p.built)}","title":"${esc(p.title)}"}'>Что изменится</button>` : ''}
+            <button class="btn btn--text" type="button" data-act="versions" data-args='${esc(JSON.stringify({ gameId: p.gameId, title: p.title }))}'>Все версии</button>
+            <button class="btn btn--text" type="button" data-act="compare" data-args='${esc(JSON.stringify({ kind: 'mods', gameId: p.gameId, title: p.title }))}'>Сравнить версии</button>
+            ${staged ? `<button class="btn" type="button" data-act="mods-diff" data-args='${esc(JSON.stringify({ gameId: p.gameId, from: p.active, to: p.built, title: p.title }))}'>Что изменится</button>` : ''}
             ${staged ? `<button class="btn btn--accent" type="button" data-act="mods.activate" data-args='{"gameId":"${esc(p.gameId)}","version":"${esc(p.built)}"}'>Отдать игрокам</button>` : ''}
             ${stale && p.latest ? `<button class="btn btn--accent" type="button" data-act="build">Собрать ${esc(p.latest)}</button>` : ''}
           </div>
@@ -1909,7 +1909,7 @@
         </div>
         <div class="stack stack--tight">
           <p class="dim">Удалить контент — с диска уходят все сборки, манифесты и картинки этой игры. Вернуть их можно только заливкой заново.</p>
-          <div class="btn-row"><button class="btn btn--danger" type="button" data-act="games.purge" data-args='{"gameId":"${esc(g.gameId)}","title":"${esc(g.title || g.gameId)}"}'>Удалить контент</button></div>
+          <div class="btn-row"><button class="btn btn--danger" type="button" data-act="games.purge" data-args='${esc(JSON.stringify({ gameId: g.gameId, title: g.title || g.gameId }))}'>Удалить контент</button></div>
         </div>
       </div>`;
   }
@@ -1919,10 +1919,11 @@
       return '<span class="push"></span><button class="btn btn--accent" type="button" data-game-do="save">Сохранить</button>';
     }
     if (gameEdit.tab === 'versions') {
+      const canPrune = gameBuilds && window.CH2Upload.prunable(gameBuilds.versions.map((v) => v.version), gameBuilds.active).length > 0;
       return (
         '<span class="faint">Старее активной сервер оставляет две — на случай отката</span>' +
         '<span class="push"></span>' +
-        '<button class="btn" type="button" data-game-do="prune">Убрать старые</button>' +
+        (canPrune ? '<button class="btn" type="button" data-game-do="prune">Убрать старые</button>' : '') +
         (gameBuilds && gameBuilds.versions.length >= 2
           ? '<button class="btn" type="button" data-act="compare" data-args=\'' +
             esc(JSON.stringify({ kind: 'game', gameId: gameEdit.gameId })) +
@@ -2063,8 +2064,13 @@
      номера целиком, а лист говорит, сколько строк переедет. */
   function flowOrder() {
     const R = window.CH2Registry;
-    const before = D.games.slice();
-    let list = D.games.slice();
+    const snapshot = D.raw;
+    if (!snapshot.loaded) {
+      toast('Реестр не загрузился. Обновите данные и попробуйте ещё раз.', 'warn');
+      return;
+    }
+    const before = snapshot.games.slice();
+    let list = before.slice();
 
     const sheet = openSheet({
       title: 'Порядок игр',
@@ -2100,7 +2106,7 @@
       }
       if (e.target.closest('[data-flow="save"]')) {
         try {
-          await API.gamesSave(R.reorder(list));
+          await API.gamesSave(R.reorder(list), snapshot.revision);
           toast('Порядок сохранён. Игроки увидят его сразу.', 'ok');
           sheet.close();
           await refresh(['games']);
@@ -3145,19 +3151,26 @@
     }
 
     if (kind === 'prune') {
+      if (!gameBuilds) return;
+      const gameId = gameEdit.gameId;
+      const victims = window.CH2Upload.prunable(gameBuilds.versions.map((v) => v.version), gameBuilds.active);
+      if (!victims.length) return;
       const agreed = await ask({
         title: 'Убрать старые версии?',
-        body: 'Уйдёт всё, что старше версии у игроков, кроме двух непосредственно перед ней: откатиться на шаг-два останется возможным.',
+        body: 'С сервера будут удалены версии: ' + victims.join(', ') + '. Вернуть их можно повторной загрузкой.',
         ok: 'Убрать старые',
         cancel: 'Отмена',
       });
       if (!agreed) return;
       try {
-        await API.pruneVersions(gameEdit.gameId);
-        toast('Старые версии убраны', 'ok');
-        gameBuilds = null;
-        await loadGameBuilds();
-        drawGameDetail();
+        const result = await API.pruneVersions(gameId, victims);
+        const failed = Array.isArray(result && result.failed) && result.failed.length;
+        toast(window.CH2Actions.success('launcher.prune', { victims: victims }, result), failed ? 'warn' : 'ok');
+        if (gameEdit.gameId === gameId) {
+          gameBuilds = null;
+          await loadGameBuilds();
+          drawGameDetail();
+        }
       } catch (err) {
         toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
       }
@@ -3165,6 +3178,11 @@
     }
 
     if (kind === 'remove') {
+      const snapshot = D.raw;
+      if (!snapshot.loaded) {
+        toast('Реестр не загрузился. Обновите данные и попробуйте ещё раз.', 'warn');
+        return;
+      }
       const item = gameEdit.item;
       const agreed = await ask({
         title: 'Убрать «' + (item.title || item.gameId) + '» из реестра?',
@@ -3174,7 +3192,7 @@
       });
       if (!agreed) return;
       try {
-        await API.gamesSave(R.reorder(R.remove(D.raw.games, item.gameId)));
+        await API.gamesSave(R.reorder(R.remove(snapshot.games, item.gameId)), snapshot.revision);
         toast('Игра убрана из реестра', 'ok');
         gameEdit.item = null;
         gameEdit.gameId = '';
@@ -3202,7 +3220,8 @@
     const wasNew = gameEdit.adding;
     const savedId = gameEdit.item.gameId;
     try {
-      await API.gamesSave(rows);
+      if (!D.raw.loaded) throw new Error('Реестр не загрузился. Обновите данные и попробуйте ещё раз.');
+      await API.gamesSave(rows, D.raw.revision);
       toast(wasNew ? 'Игра заведена' : 'Сохранено. Лаунчер увидит это при следующем старте.', 'ok');
       gameEdit.adding = false;
       gameEdit.gameId = savedId;
@@ -3752,7 +3771,7 @@
     try {
       return await API.games();
     } catch {
-      return { items: [] };
+      return null;
     }
   }
 
@@ -3798,7 +3817,12 @@
     /* Реестр целиком, как он лежит на сервере. Правка игры уезжает
        вместе со всем списком, а в списке есть поля, которых таблица не
        показывает: собранный из неё список их бы стёр. */
-    data.raw = { games: window.CH2Sections.items(await rawGamesSoon) };
+    const registry = await rawGamesSoon;
+    data.raw = {
+      games: window.CH2Sections.items(registry),
+      loaded: (Array.isArray(registry) || Array.isArray(registry && registry.items)) && registry.registryRevision !== null,
+      revision: registry && registry.registryRevision,
+    };
     return data;
   }
 

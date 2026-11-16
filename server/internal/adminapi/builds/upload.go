@@ -478,7 +478,7 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		nw.fail(http.StatusBadRequest, problem)
 		return
 	}
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
+	if !adminutil.IsCatalogGameID(gid) || !adminutil.IsSafeVersion(ver) {
 		nw.fail(http.StatusBadRequest, "invalid gameId or version")
 		return
 	}
@@ -534,6 +534,9 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	dir := h.manifestsDir(gid)
+	unlock := lockPublish(dir)
+	defer unlock()
 
 	// Same reasoning as Upload: the zip was already fully spooled and
 	// extracted before this point regardless of the outcome below, so
@@ -560,13 +563,8 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Everything is extracted and hashed: publish the build in one rename.
-	// See lockPublish: promote and the manifest write must not interleave with
-	// another publication of the same version.
-	unlock := lockPublish(gid, ver)
-	defer unlock()
 	// See Upload: the backup goes only after the manifest is written.
-	outPath, _, err := h.publishTree(stageDir, finalVerDir, h.manifestsDir(gid), m, upd)
+	outPath, _, err := h.publishTree(stageDir, finalVerDir, dir, m, upd)
 	if err != nil {
 		streamError(nw, fl, err.Error())
 		return

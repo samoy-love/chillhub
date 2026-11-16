@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
 )
 
@@ -228,7 +230,7 @@ func (s *server) register(mux *http.ServeMux) []string {
 	// origin.
 	contentDir := filepath.Join(s.contentRoot, "content")
 	if isDir(contentDir) {
-		add("/content/", httpx.NoStore(http.StripPrefix("/content/", galleryOnly(http.Dir(contentDir)))))
+		add("/content/", httpx.NoStore(http.StripPrefix("/content/", galleryOnly(contentDir))))
 	}
 	// Static Admin UI assets from server/admin_ui
 	uiDir := detectAdminUIDir()
@@ -246,19 +248,55 @@ func (s *server) register(mux *http.ServeMux) []string {
 // (in particular, never the unpacked builds in content/<gameId>/<version>/,
 // which this unauthenticated mount was never meant to expose — see the comment
 // at its call site).
-func galleryOnly(root http.FileSystem) http.Handler {
-	fs := http.FileServer(root)
+func galleryOnly(contentDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		segments := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-		// Order is load-bearing here, not just style: len(segments) < 3 must
-		// short-circuit before segments[1]/segments[len-1] are indexed, or a
-		// 0-1 segment path (e.g. GET /content/x) panics with index out of range.
-		if len(segments) < 3 || segments[1] != "gallery" || segments[len(segments)-1] == "" {
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		segments := strings.SplitN(name, "/", 3)
+		// ServeMux checks the escaped path. Check the decoded path as well.
+		if len(segments) != 3 || segments[1] != "gallery" || !adminutil.IsSafeGameID(segments[0]) || !fs.ValidPath(name) {
 			http.NotFound(w, r)
 			return
 		}
-		fs.ServeHTTP(w, r)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		file, info, err := openGalleryFile(contentDir, segments[0], segments[2])
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer func() { _ = file.Close() }()
+		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 	})
+}
+
+func openGalleryFile(contentDir, gid, name string) (*os.File, os.FileInfo, error) {
+	local, err := filepath.Localize(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	gameDir := filepath.Join(contentDir, gid)
+	galleryDir := filepath.Join(gameDir, "gallery")
+	for _, dir := range []string{gameDir, galleryDir} {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() {
+			return nil, nil, fs.ErrNotExist
+		}
+	}
+	// A link inside the gallery must stay inside the gallery, even if its
+	// destination is another directory under the content root.
+	file, err := os.OpenInRoot(galleryDir, local)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, nil, fs.ErrNotExist
+	}
+	return file, info, nil
 }
 
 func isDir(p string) bool {

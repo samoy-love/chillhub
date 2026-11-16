@@ -2,6 +2,7 @@ package builds
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,73 @@ import (
 	"testing"
 	"time"
 )
+
+func TestOverlappingModBuildKeepsItsSourceWithItsFiles(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	const gid, version = "demo", "1.0"
+	stage := func(label string) *StagedTree {
+		t.Helper()
+		s, err := h.StageTree(NamespaceMods, gid, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(s.Discard)
+		if err := os.WriteFile(filepath.Join(s.FilesRoot, "pack.txt"), []byte(label), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	slow, fast := stage("slow"), stage("fast")
+	slowSource, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.PublishModpack(slow, nil, func(r PublishResult) ([]byte, error) {
+			close(slowSource)
+			<-release
+			return []byte(fmt.Sprintf(`{"label":"slow","treeDigest":%q}`, r.TreeDigest)), nil
+		})
+		done <- err
+	}()
+	select {
+	case <-slowSource:
+	case err := <-done:
+		t.Fatalf("slow build never reached the source stage: %v", err)
+	}
+	_, fastErr := h.PublishModpack(fast, nil, func(r PublishResult) ([]byte, error) {
+		return []byte(fmt.Sprintf(`{"label":"fast","treeDigest":%q}`, r.TreeDigest)), nil
+	})
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if fastErr != nil {
+		t.Fatal(fastErr)
+	}
+	data, err := ReadModSource(root, gid, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source struct {
+		Label      string `json:"label"`
+		TreeDigest string `json:"treeDigest"`
+	}
+	if err := json.Unmarshal(data, &source); err != nil {
+		t.Fatal(err)
+	}
+	filesDir := filepath.Join(h.ContentDirFor(NamespaceMods, gid), version, "files")
+	payload, err := os.ReadFile(filepath.Join(filesDir, "pack.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _, err := walkManifest(filesDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Label != string(payload) || source.TreeDigest != treeDigest(files) {
+		t.Fatalf("source %+v does not match published files %q", source, payload)
+	}
+}
 
 // readPublishedManifest returns the stored manifest of a published version.
 func readPublishedManifest(t *testing.T, root, gid, ver string) manifest {
@@ -84,19 +152,51 @@ func TestRemoveVersionWaitsForAPublicationOfTheSameVersion(t *testing.T) {
 	seedManifest(t, h, "game", "1.0.0", true)
 	seedVersionTree(t, root, "game", "1.0.0")
 
-	unlock := lockPublish("game", "1.0.0")
-	done := make(chan error, 1)
-	go func() { done <- h.removeVersion("game", "1.0.0") }()
+	unlock := lockPublish(h.manifestsDir("game"))
+	done := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+			"/admin/api/deleteVersion?gameId=game&version=1.0.0", nil)
+		h.DeleteVersion(w, r)
+		done <- w.Code
+	}()
 
 	select {
-	case err := <-done:
+	case status := <-done:
 		unlock()
-		t.Fatalf("удаление завершилось, пока версия публикуется: %v", err)
+		t.Fatalf("удаление завершилось, пока версия публикуется: %d", status)
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	unlock()
-	if err := <-done; err != nil {
-		t.Fatalf("удаление после снятия замка: %v", err)
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("удаление после снятия замка: %d", status)
+	}
+}
+
+func TestModDeletionChecksActiveVersionUnderPublicationLock(t *testing.T) {
+	h := New(t.TempDir())
+	dir := h.ManifestsDirFor(NamespaceMods, "demo")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "1.0.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	unlock := lockPublish(dir)
+	done := make(chan error, 1)
+	go func() { done <- h.DeletePublished(NamespaceMods, "demo", "1.0") }()
+	if err := writeLatestJSON(dir, "1.0"); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	if err := <-done; err == nil {
+		t.Fatal("deleted an active mod version")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "1.0.json")); err != nil {
+		t.Fatalf("active manifest missing: %v", err)
 	}
 }

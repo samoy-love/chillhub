@@ -1,14 +1,11 @@
 /* Транспорт админ-панели: адреса, CSRF, продление сессии.
    ------------------------------------------------------------------
-   ПЕРЕНЕСЕНО ИЗ ВЕРСИИ 1.0 БЕЗ ИЗМЕНЕНИЙ (шапка `admin_ui/admin.js`).
-   Это не оформление, а безопасность, и переписывать её заново незачем:
-
      - `/admin/...` переписывается в `/admin/api/...`, чтобы у морды был
        один префикс и она не конфликтовала со статикой в nginx;
      - CSRF-токен из куки уходит заголовком `X-CSRF-Token` ТОЛЬКО для
        небезопасных методов и ТОЛЬКО на свой origin — иначе секрет сессии
        уедет к чужому хосту;
-     - на 401 делается один `auth/refresh` и запрос повторяется;
+     - запросы, получившие 401, используют общее продление сессии;
      - то же самое навешивается на XMLHttpRequest: чанковая загрузка идёт
        через него ради побайтового прогресса.
 
@@ -62,28 +59,49 @@
   function needsCsrf(method, url){
     return UNSAFE_METHODS.has(String(method||'GET').toUpperCase()) && isSameOrigin(url);
   }
+  function canRefresh(input) {
+    if (!isSameOrigin(input)) return false;
+    const url = new URL(input && input.url || input, window.location.href);
+    return url.pathname.startsWith(ADMIN_API_PREFIX) &&
+      !['login', 'logout', 'refresh'].some((name) => url.pathname === ADMIN_API_PREFIX + 'auth/' + name);
+  }
   // Low-level fetch wrapper: rewrite URL, attach CSRF for unsafe, auto-refresh on 401 once
   try {
     const origFetch = window.fetch;
+    let refreshing = null;
+    let sessionRevision = 0;
+    function refreshSession() {
+      if (!refreshing) {
+        refreshing = origFetch.call(window, '/admin/api/auth/refresh', { method: 'POST' })
+          .then((res) => {
+            if (res.ok) sessionRevision++;
+            return res.ok;
+          }, () => false)
+          .finally(() => { refreshing = null; });
+      }
+      return refreshing;
+    }
     async function doFetchOnce(input, init){
-      const r = rewrite(input);
       const opts = init ? { ...init } : {};
       // Метод может быть задан и в init, и в самом Request — учитываем оба.
-      const method = (opts.method || (r && typeof r === 'object' && r.method) || 'GET');
-      if (needsCsrf(method, r)) {
-        opts.headers = new Headers(opts.headers || (r && typeof r === 'object' ? r.headers : undefined) || {});
+      const method = (opts.method || (input && typeof input === 'object' && input.method) || 'GET');
+      if (needsCsrf(method, input)) {
+        opts.mode = 'same-origin';
+        opts.headers = new Headers(opts.headers || (input && typeof input === 'object' ? input.headers : undefined) || {});
         if (!opts.headers.has('X-CSRF-Token')) {
           const csrf = getCsrf(); if (csrf) opts.headers.set('X-CSRF-Token', csrf);
         }
       }
-      return origFetch.call(this, r, opts);
+      return origFetch.call(window, input, opts);
     }
     window.fetch = async function(input, init){
-      const res = await doFetchOnce(input, init);
-      if (res && res.status === 401) {
-        // try refresh once, then retry original
-        try { await origFetch.call(this, '/admin/api/auth/refresh', { method: 'POST' }); } catch {}
-        return doFetchOnce(input, init);
+      const request = rewrite(input);
+      const revision = sessionRevision;
+      const retryable = canRefresh(request) && !(init && window.ReadableStream && init.body instanceof window.ReadableStream);
+      const retry = retryable && typeof Request !== 'undefined' && request instanceof Request ? request.clone() : request;
+      const res = await doFetchOnce(request, init);
+      if (res && res.status === 401 && retryable && (revision !== sessionRevision || await refreshSession())) {
+        return doFetchOnce(retry, init);
       }
       return res;
     };

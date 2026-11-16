@@ -12,12 +12,12 @@ package feedback
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -209,10 +209,13 @@ func (h *Handlers) readAll() ([]Item, error) {
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
-	} else if json.Unmarshal(b, &items) != nil {
-		items = nil
+	} else if err := json.Unmarshal(b, &items); err != nil {
+		return nil, fmt.Errorf("decode feedback inbox: %w", err)
 	}
-	pending := h.readJournal()
+	pending, err := h.readJournal()
+	if err != nil {
+		return nil, err
+	}
 	if len(pending) == 0 {
 		if items == nil {
 			return []Item{}, nil
@@ -229,10 +232,13 @@ func (h *Handlers) readAll() ([]Item, error) {
 
 // readJournal returns the un-merged reports in arrival order. A truncated tail
 // line (a crash mid-append) is skipped rather than failing the whole read.
-func (h *Handlers) readJournal() []Item {
+func (h *Handlers) readJournal() ([]Item, error) {
 	f, err := os.Open(h.journalPath())
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 	var out []Item
@@ -250,9 +256,9 @@ func (h *Handlers) readJournal() []Item {
 		out = append(out, it)
 	}
 	if err := sc.Err(); err != nil {
-		log.Printf("[feedback] journal read: %v", err)
+		return nil, fmt.Errorf("read feedback journal: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 // appendJournal stores one report with a single append and reports the journal
@@ -303,28 +309,7 @@ func (h *Handlers) writeAll(items []Item) error {
 	if err != nil {
 		return err
 	}
-	dst := h.path()
-	dir := filepath.Dir(dst)
-	tmp, err := os.CreateTemp(dir, "inbox-*.json")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	_, werr := tmp.Write(b2)
-	cerr := tmp.Close()
-	if werr != nil {
-		_ = os.Remove(tmpName)
-		return werr
-	}
-	if cerr != nil {
-		_ = os.Remove(tmpName)
-		return cerr
-	}
-	if runtime.GOOS == "windows" {
-		_ = os.Remove(dst)
-	}
-	if err := os.Rename(tmpName, dst); err != nil {
-		_ = os.Remove(tmpName)
+	if err := adminutil.WriteFileAtomic(h.path(), b2, inboxFilePerm); err != nil {
 		return err
 	}
 	// Everything the journal held is now part of the array file.

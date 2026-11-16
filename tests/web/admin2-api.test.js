@@ -21,6 +21,7 @@ function fake(response) {
     return {
       ok: r.ok !== false,
       status: r.status || 200,
+      headers: r.headers,
       text: async () => (r.text !== undefined ? r.text : '{}'),
     };
   };
@@ -50,6 +51,31 @@ test('запись уходит формой, а не JSON: так её чита
   assert.match(calls[0].init.headers['content-type'], /x-www-form-urlencoded/);
   assert.match(calls[0].url, /gameId=launcher&version=1\.6\.25/);
   assert.strictEqual(new URLSearchParams(calls[0].init.body).get('version'), '1.6.25');
+});
+
+test('чистка передаёт точный список версий, который увидел оператор', async () => {
+  const { calls, api } = fake();
+  await api.launcherPrune(['1.0.1', '1.0.2']);
+  assert.strictEqual(calls[0].url, BASE + 'pruneVersions?gameId=launcher');
+  assert.deepStrictEqual(new URLSearchParams(calls[0].init.body).getAll('expected'), ['1.0.1', '1.0.2']);
+  await api.launcherPrune([]);
+  assert.deepStrictEqual(new URLSearchParams(calls[1].init.body).getAll('expected'), ['']);
+});
+
+test('адрес загрузки передаётся только в теле формы', async () => {
+  const { calls, api } = fake();
+  const url = 'https://example.test/file.png?token=private';
+  await api.newsAssetsUploadByUrl('news', url, 'cover');
+  assert.doesNotMatch(calls[0].url, /url=|private/);
+  assert.strictEqual(new URLSearchParams(calls[0].init.body).get('url'), url);
+});
+
+test('сохранение реестра проверяет прочитанную ревизию', async () => {
+  const revision = '"read-registry-version"';
+  const { calls, api } = fake({ headers: new Headers({ ETag: revision }), text: '{"items":[]}' });
+  const registry = await api.games();
+  await api.gamesSave(registry.items, registry.registryRevision);
+  assert.strictEqual(calls[1].init.headers['If-Match'], revision);
 });
 
 test('FormData уходит как есть: границу multipart ставит браузер', async () => {

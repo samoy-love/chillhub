@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	_ "image/gif"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -55,6 +56,8 @@ var (
 	ErrImageTooLarge = errors.New("image dimensions too large")
 	// ErrBlockedAddress reports a fetch aimed at the server's own network.
 	ErrBlockedAddress = errors.New("address not allowed")
+	// ErrAssetExtension is returned when a file rename changes its served type.
+	ErrAssetExtension = errors.New("keep the original file extension")
 
 	errInvalidPath       = errors.New("invalid path")
 	errUnsupportedFormat = errors.New("unsupported format")
@@ -66,6 +69,19 @@ var (
 	errFFmpegTimedOut    = errors.New("ffmpeg timed out")
 	errFFmpegExit        = errors.New("ffmpeg exited with code")
 )
+
+// RenameAsset allows directories to be renamed freely. A file keeps its media
+// extension so serving the same bytes through their new URL keeps the type.
+func RenameAsset(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() && !strings.EqualFold(filepath.Ext(src), filepath.Ext(dst)) {
+		return ErrAssetExtension
+	}
+	return os.Rename(src, dst)
+}
 
 // CheckImageBounds reads only the image header and reports whether the declared
 // dimensions are safe to decode. An undecodable header is left to the caller's
@@ -86,88 +102,80 @@ func CheckImageBounds(data []byte) error {
 	return nil
 }
 
-// sourceExt resolves the source extension from the client's hint, falling back
-// to the reported Content-Type when the upload carried no filename.
-func sourceExt(extHint, contentType string) string {
-	ext := strings.ToLower(strings.TrimSpace(extHint))
-	if ext != "" || contentType == "" {
-		return ext
+// ImageExtension derives a safe public suffix from the actual bytes. The
+// filename and the source server's Content-Type can both be arbitrary.
+func ImageExtension(data []byte) (string, error) {
+	kind := http.DetectContentType(data)
+	if kind == "image/webp" {
+		if len(data) < 20 {
+			return "", errUnsupportedFormat
+		}
+		return ".webp", nil
 	}
-	switch {
-	case strings.Contains(contentType, "png"):
-		return ".png"
-	case strings.Contains(contentType, "jpeg"), strings.Contains(contentType, "jpg"):
-		return ".jpg"
-	case strings.Contains(contentType, "gif"):
-		return ".gif"
-	case strings.Contains(contentType, "webp"):
-		return ".webp"
+	_, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", errUnsupportedFormat
 	}
-	return ""
-}
-
-// outputPlan picks the extension the asset is stored under and reports whether
-// the source may carry animation (GIF/WEBP), which needs the ffmpeg pipeline.
-func outputPlan(ext, contentType string) (string, bool) {
-	switch ext {
-	case ".gif", ".webp":
-		return ".webp", true
-	case ".png", ".jpg", ".jpeg":
-		return ".jpg", false
+	switch format {
+	case "png":
+		return ".png", nil
+	case "jpeg":
+		return ".jpg", nil
+	case "gif":
+		return ".gif", nil
+	default:
+		return "", errUnsupportedFormat
 	}
-	lower := strings.ToLower(contentType)
-	if strings.Contains(lower, "gif") || strings.Contains(lower, "webp") {
-		return ".webp", true
-	}
-	return ".jpg", false
-}
-
-// originalAnimatedExt is the extension an animated source keeps when no
-// transcode runs. A GIF stored under a .webp name is refused by every browser.
-func originalAnimatedExt(ext, contentType string) string {
-	if ext != "" {
-		return ext
-	}
-	if strings.Contains(strings.ToLower(contentType), "webp") {
-		return ".webp"
-	}
-	return ".gif"
 }
 
 // ProcessAndSaveAsset converts and saves image bytes into the assets directory.
 //   - Chooses output extension and pipeline (static -> JPEG; animated GIF/WEBP -> WEBP if possible)
 //   - Resizes so that the minimal side is 1080 if larger
 //   - Returns final filename and optional meta fields (e.g., note, format)
-func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, contentType string) (string, map[string]string, error) {
+func ProcessAndSaveAsset(base, rel, desired string, data []byte) (string, map[string]string, error) {
+	ext, err := ImageExtension(data)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := CheckImageBounds(data); err != nil {
+		return "", nil, err
+	}
 	meta := map[string]string{}
-	ext := sourceExt(extHint, contentType)
-	outExt, animated := outputPlan(ext, contentType)
+	outExt := ".jpg"
+	animated := ext == ".gif" || ext == ".webp"
+	convert := animated && HasFFmpeg()
+	switch {
+	case convert:
+		outExt = ".webp"
+	case animated:
+		outExt = ext
+	}
 
 	if strings.TrimSpace(desired) == "" {
 		desired = "image"
 	}
 	outName := adminutil.SanitizeFilename(desired) + outExt
 	outDir := filepath.Join(base, rel)
+	outPath := filepath.Join(outDir, outName)
+	if !adminutil.EnsureWithin(base, outPath) {
+		return "", nil, errInvalidPath
+	}
 	// #nosec G301 -- the asset tree is handed out under /assets/ by nginx, which
 	// runs as a different user than the API; 0750 would make it unreadable.
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", nil, err
 	}
-	outPath := filepath.Join(outDir, outName)
-	if !adminutil.EnsureWithin(base, outPath) {
-		return "", nil, errInvalidPath
-	}
-
-	if animated {
-		if HasFFmpeg() {
-			if err := transcodeAnimated(data, outPath); err != nil {
-				return "", nil, err
-			}
-			return outName, meta, nil
+	if convert {
+		demuxer := "gif"
+		if ext == ".webp" {
+			demuxer = "webp_pipe"
 		}
-		// Fallback: keep the original bytes under the original extension.
-		outName = adminutil.SanitizeFilename(desired) + originalAnimatedExt(ext, contentType)
-		outPath = filepath.Join(outDir, outName)
+		if err := transcodeAnimated(data, outPath, demuxer); err != nil {
+			return "", nil, err
+		}
+		return outName, meta, nil
+	}
+	if animated {
 		// Atomic: the asset tree is served publicly while it is rewritten, and
 		// os.WriteFile truncates first — a reader in between gets a broken image.
 		if err := adminutil.WriteFileAtomic(outPath, data, 0o644); err != nil {
@@ -186,7 +194,7 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 
 // transcodeAnimated converts an animated source to WEBP through ffmpeg and
 // stores the result at outPath.
-func transcodeAnimated(data []byte, outPath string) error {
+func transcodeAnimated(data []byte, outPath, demuxer string) error {
 	tmpIn, err := os.CreateTemp("", "asset_in_*")
 	if err != nil {
 		return err
@@ -208,7 +216,8 @@ func transcodeAnimated(data []byte, outPath string) error {
 	scaleExpr := "scale='if(gte(min(iw,ih),1080), if(lte(iw,ih), -2, 1080), iw)':'if(gte(min(iw,ih),1080), if(lte(iw,ih), 1080, -2), ih)'"
 	// Use quality 95 for lossy output and encode with libwebp preserving animation
 	// Add pixel format with alpha, preset and compression level for ffmpeg 6 compatibility
-	args := []string{"-y", "-i", tmpIn.Name(), "-vf", scaleExpr,
+	// Limit ffmpeg to the inspected image format and its local scratch input.
+	args := []string{"-y", "-protocol_whitelist", "file", "-f", demuxer, "-i", tmpIn.Name(), "-vf", scaleExpr,
 		"-c:v", "libwebp", "-lossless", "0", "-q:v", "95", "-compression_level", "4",
 		"-preset", "picture", "-pix_fmt", "yuva420p", "-vsync", "0", "-loop", "0", tmpOut}
 	if err := runFFmpegTranscode(args); err != nil {
@@ -250,9 +259,6 @@ func decodeStatic(data []byte, ext string) (image.Image, string, error) {
 // storeStatic re-encodes a still image to JPEG and writes it to outPath,
 // recording the source format in meta.
 func storeStatic(outPath, ext string, data []byte, meta map[string]string) error {
-	if err := CheckImageBounds(data); err != nil {
-		return err
-	}
 	img, format, err := decodeStatic(data, ext)
 	if err != nil {
 		return err

@@ -85,8 +85,12 @@
           ', две перед ней и всё, что новее. Вернуть нельзя.',
         ok: 'Удалить старые',
       }),
-      run: (api) => api.launcherPrune(),
-      done: (a) => 'Удалено версий: ' + (a.victims || []).length,
+      run: (api, a) => api.launcherPrune(a.victims),
+      done: (a, result) => {
+        const deleted = result && Array.isArray(result.deleted) ? result.deleted.length : (a.victims || []).length;
+        const failed = result && Array.isArray(result.failed) && result.failed.length;
+        return 'Удалено версий: ' + deleted + (failed ? '. Не удалось удалить: ' + result.failed.join(', ') : '');
+      },
       after: ['launcher'],
     },
 
@@ -279,9 +283,9 @@
   }
 
   /** Что сказать после успеха. */
-  function success(id, args) {
+  function success(id, args, result) {
     if (!has(id)) return '';
-    return ACTIONS[id].done(args || {});
+    return ACTIONS[id].done(args || {}, result);
   }
 
   /** Какие разделы устарели после действия. */
@@ -309,7 +313,7 @@
 
     try {
       const result = await ACTIONS[id].run(d.api, args || {});
-      return { ok: true, result: result, message: success(id, args), stale: stale(id) };
+      return { ok: true, result: result, message: success(id, args, result), stale: stale(id) };
     } catch (e) {
       return { ok: false, error: e, message: (e && e.message) || 'не получилось' };
     }

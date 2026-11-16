@@ -71,6 +71,7 @@
     const retryDelayMs = o.retryDelayMs || 400;
     const put = o.put || putChunkXHR;
     let attempts = 0;
+    let refreshed = false;
     while (attempts < maxAttempts && !(o.signal && o.signal.aborted)) {
       attempts++;
       try {
@@ -78,6 +79,11 @@
         if (o.signal && o.signal.aborted) break;
         if (r.ok) return { ok: true, attempts, exists: false, writeMs: Number((r.json && r.json.writeMs) || 0) | 0 };
         if (r.status === 409) return { ok: true, attempts, exists: true, writeMs: 0 };
+        if (r.status === 401 && !refreshed && o.refresh && attempts < maxAttempts) {
+          refreshed = true;
+          await o.refresh();
+          continue;
+        }
         if (o.onAttemptFailed) o.onAttemptFailed({ index, attempts, status: r.status });
         await new Promise((res) => setTimeout(res, retryDelayMs * attempts));
       } catch (e) {
@@ -105,7 +111,7 @@
           const idx = indexes[ptr++];
           active++;
           if (onActiveChange) onActiveChange(active);
-          Promise.resolve(worker(idx)).then((ok) => {
+          Promise.resolve().then(() => worker(idx)).catch(() => false).then((ok) => {
             active--;
             if (onActiveChange) onActiveChange(active);
             if (!ok) failed.push(idx);
