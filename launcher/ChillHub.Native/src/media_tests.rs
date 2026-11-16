@@ -1,20 +1,22 @@
 use super::*;
+use std::{
+    io::{self, BufRead, BufReader, Write},
+    net::{TcpListener, TcpStream},
+    sync::{Arc, mpsc},
+};
+
 const FISH_ICON: &[u8] = include_bytes!("../tests/fixtures/how-to-fish-icon.png");
 // A fixture starts listening before its URL acquires a striped lock. Allow
 // another URL's bounded two-attempt HTTP operation (2 x 10s) to finish first.
 const SERVER_WAIT: Duration = Duration::from_secs(30);
 
-fn raw_image_server() -> (std::net::TcpListener, ApiClient) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+fn image_listener() -> TcpListener {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    let api = ApiClient::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
-    (listener, api)
+    listener
 }
 
-fn raw_image_connection(
-    listener: &std::net::TcpListener,
-) -> std::io::BufReader<std::net::TcpStream> {
-    let deadline = Instant::now() + SERVER_WAIT;
+fn accept_image_connection(listener: &TcpListener, deadline: Instant) -> TcpStream {
     let stream = loop {
         match listener.accept() {
             Ok((stream, _)) => break stream,
@@ -26,37 +28,145 @@ fn raw_image_connection(
         }
     };
     stream.set_nonblocking(false).unwrap();
-    stream.set_read_timeout(Some(SERVER_WAIT)).unwrap();
-    stream.set_write_timeout(Some(SERVER_WAIT)).unwrap();
-    std::io::BufReader::new(stream)
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    assert!(!remaining.is_zero(), "expected raw image request");
+    stream.set_read_timeout(Some(remaining)).unwrap();
+    stream.set_write_timeout(Some(remaining)).unwrap();
+    stream
 }
 
-fn raw_image_request(connection: &mut std::io::BufReader<std::net::TcpStream>) -> String {
-    use std::io::BufRead;
+// A private trust root keeps these requests on the wire while isolating them
+// from local plaintext HTTP filtering.
+fn tls_image_server() -> (TcpListener, ApiClient, reqwest::blocking::Client) {
+    let listener = image_listener();
+    let address = listener.local_addr().unwrap();
+    let api = ApiClient::new(&format!("https://localhost:{}", address.port())).unwrap();
+    let ca =
+        reqwest::Certificate::from_pem(include_bytes!("../tests/fixtures/media-loopback/root.pem"))
+            .unwrap();
+    let client = client_builder()
+        .no_proxy()
+        .resolve("localhost", address)
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(ca)
+        .build()
+        .unwrap();
+    (listener, api, client)
+}
+
+type TlsImageConnection = BufReader<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>;
+
+fn tls_image_request(listener: &TcpListener) -> (TlsImageConnection, String) {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+    static TLS: OnceLock<Arc<rustls::ServerConfig>> = OnceLock::new();
+    let config = TLS.get_or_init(|| {
+        let cert = CertificateDer::from_pem_slice(include_bytes!(
+            "../tests/fixtures/media-loopback/server.pem"
+        ))
+        .unwrap();
+        // The public fixture key is only valid for the loopback certificate.
+        let key = PrivateKeyDer::from_pem_slice(include_bytes!(
+            "../tests/fixtures/media-loopback/server-key.pem"
+        ))
+        .unwrap();
+        Arc::new(
+            rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .unwrap(),
+        )
+    });
+    let deadline = Instant::now() + SERVER_WAIT;
+    let mut accepted_cancel = false;
+    loop {
+        let socket = accept_image_connection(listener, deadline);
+        let tls = rustls::ServerConnection::new(config.clone()).unwrap();
+        let mut connection = BufReader::new(rustls::StreamOwned::new(tls, socket));
+        match raw_image_request(&mut connection) {
+            Ok(headers) => return (connection, headers),
+            Err(error)
+                if !accepted_cancel
+                    && matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::UnexpectedEof
+                    ) =>
+            {
+                // An aborted connection delivered no complete HTTP request.
+                // Keep listening for the client's one remaining attempt.
+                accepted_cancel = true;
+                eprintln!(
+                    "Loopback client cancelled before HTTP: {error}; local={:?}, peer={:?}",
+                    connection.get_ref().sock.local_addr(),
+                    connection.get_ref().sock.peer_addr(),
+                );
+            }
+            Err(error) => panic!("Could not receive a TLS HTTP request: {error}"),
+        }
+    }
+}
+
+fn raw_image_request(connection: &mut impl BufRead) -> io::Result<String> {
     let mut reader = connection.take(8192);
     let mut headers = String::new();
     loop {
         let offset = headers.len();
-        assert_ne!(
-            reader.read_line(&mut headers).unwrap(),
-            0,
-            "incomplete HTTP headers"
-        );
+        match reader.read_line(&mut headers) {
+            Ok(0) if headers.is_empty() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "missing HTTP request",
+                ));
+            }
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "incomplete HTTP headers",
+                ));
+            }
+            Err(error) if headers.is_empty() => return Err(error),
+            Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
+            Ok(_) => {}
+        }
         if &headers[offset..] == "\r\n" {
             break;
         }
     }
-    headers
+    Ok(headers)
+}
+
+#[test]
+fn partial_http_headers_are_not_a_pre_request_disconnect() {
+    struct Reset;
+    impl Read for Reset {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::ConnectionReset.into())
+        }
+    }
+
+    assert_eq!(
+        raw_image_request(&mut BufReader::new(Reset))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::ConnectionReset
+    );
+    for fragment in [b"GET /fish.png".as_slice(), b"GET /fish.png HTTP/1.1\r\n"] {
+        let mut connection = BufReader::new(fragment.chain(Reset));
+        assert_eq!(
+            raw_image_request(&mut connection).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
 }
 
 fn raw_response(
-    connection: &mut std::io::BufReader<std::net::TcpStream>,
+    connection: &mut impl Write,
     status: &str,
     headers: &str,
     body: &[u8],
     keep_alive: bool,
 ) {
-    use std::io::Write;
     let connection_header = if keep_alive { "keep-alive" } else { "close" };
     let mut response = format!("HTTP/1.1 {status}\r\nConnection: {connection_header}\r\n");
     if !status.starts_with("304 ") {
@@ -66,17 +176,8 @@ fn raw_response(
     response.push_str("\r\n");
     let mut response = response.into_bytes();
     response.extend_from_slice(body);
-    let stream = connection.get_mut();
-    stream.write_all(&response).unwrap();
-    if !keep_alive {
-        // Deliver the complete response before closing the socket. Wait
-        // briefly for the client's end of the connection to close as well.
-        stream.shutdown(std::net::Shutdown::Write).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_millis(250)))
-            .unwrap();
-        let _ = connection.read(&mut [0]);
-    }
+    connection.write_all(&response).unwrap();
+    connection.flush().unwrap();
 }
 
 fn raw_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
@@ -283,35 +384,40 @@ fn stale_image_is_revalidated_over_the_same_http_connection() {
 
 fn revalidate_stale_image(keep_alive: bool) {
     let temp = tempfile::tempdir().unwrap();
-    let (server, api) = raw_image_server();
+    let (server, api, client) = tls_image_server();
     let api = api.with_diagnostics(temp.path().join("profile"));
     let diagnostic_root = temp.path().to_owned();
     let diagnostic_path = diagnostic_root.join(format!(
         "{}.img",
         blake3::hash(api.base.join("/fish.png").unwrap().as_str().as_bytes()).to_hex()
     ));
+    let caller_diagnostics = diagnostic_path.clone();
+    let (initial_finished, wait_initial) = mpsc::channel();
+    let (revalidation_finished, wait_revalidation) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut connection = raw_image_connection(&server);
-        let headers = raw_image_request(&mut connection);
+        let (mut connection, headers) = tls_image_request(&server);
         assert!(headers.starts_with("GET /fish.png HTTP/1.1\r\n"));
         assert_eq!(raw_header(&headers, "If-None-Match"), None);
         raw_response(
-            &mut connection,
+            connection.get_mut(),
             "200 OK",
             "ETag: \"fish-v1\"\r\n",
             FISH_ICON,
             keep_alive,
         );
-        if !keep_alive {
+        wait_initial.recv_timeout(SERVER_WAIT).unwrap();
+        let headers = if keep_alive {
+            // The second request must arrive on the original stream.
+            raw_image_request(&mut connection).unwrap()
+        } else {
             drop(connection);
-            connection = raw_image_connection(&server);
-        }
-        // For keep-alive the original buffered socket must receive the second
-        // request. Accepting another connection here would hide a reuse bug.
-        let headers = raw_image_request(&mut connection);
+            let (next, headers) = tls_image_request(&server);
+            connection = next;
+            headers
+        };
         let conditional = raw_header(&headers, "If-None-Match") == Some("\"fish-v1\"");
         raw_response(
-            &mut connection,
+            connection.get_mut(),
             if conditional {
                 "304 Not Modified"
             } else {
@@ -326,8 +432,26 @@ fn revalidate_stale_image(keep_alive: bool) {
             "Second wire request: {headers:?}; {}",
             cache_diagnostics(&diagnostic_root, &diagnostic_path)
         );
+        // Keep the listener and socket alive until the client consumes 304.
+        wait_revalidation.recv_timeout(SERVER_WAIT).unwrap();
     });
-    let path = image_path("/fish.png", temp.path(), temp.path(), &api).unwrap();
+    let fetch = || {
+        image_path_with_client(
+            "/fish.png",
+            temp.path(),
+            temp.path(),
+            &api,
+            || Ok(&client),
+            |_, _| {},
+        )
+    };
+    let path = fetch().unwrap_or_else(|error| {
+        panic!(
+            "Initial fetch failed: {error}; {}",
+            cache_diagnostics(temp.path(), &caller_diagnostics)
+        )
+    });
+    initial_finished.send(()).unwrap();
     let metadata_bytes = fs::read(path.with_extension("meta")).unwrap_or_else(|error| {
         panic!(
             "Image validators were not persisted after 200: {error}; diagnostics: {}",
@@ -352,11 +476,10 @@ fn revalidate_stale_image(keep_alive: bool) {
         Some("\"fish-v1\""),
         "After stale_image: {after_stale}"
     );
-    assert_eq!(
-        image_path("/fish.png", temp.path(), temp.path(), &api).unwrap(),
-        path
-    );
+    let revalidated = fetch();
+    let _ = revalidation_finished.send(());
     worker.join().unwrap();
+    assert_eq!(revalidated.unwrap(), path);
     assert_eq!(fs::read(&path).unwrap(), FISH_ICON);
     assert!(
         fs::metadata(&path)
@@ -371,13 +494,80 @@ fn revalidate_stale_image(keep_alive: bool) {
     );
 }
 
+#[test]
+fn reset_get_retries_once_and_preserves_a_stale_image_on_second_reset() {
+    for (recover_on_retry, seeded_cache) in [(true, false), (false, false), (false, true)] {
+        let temp = tempfile::tempdir().unwrap();
+        let server = image_listener();
+        let api = ApiClient::new(&format!("http://{}", server.local_addr().unwrap())).unwrap();
+        let api = api.with_diagnostics(temp.path().join("profile"));
+        let existing = seeded_cache.then(|| stale_image(&api, temp.path()));
+        let (finished, wait_client) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            for attempt in 1..=2 {
+                let mut connection = BufReader::new(accept_image_connection(
+                    &server,
+                    Instant::now() + SERVER_WAIT,
+                ));
+                let headers = raw_image_request(&mut connection).unwrap();
+                assert!(headers.starts_with("GET /fish.png HTTP/1.1\r\n"));
+                if attempt == 2 && recover_on_retry {
+                    raw_response(connection.get_mut(), "200 OK", "", FISH_ICON, false);
+                    wait_client.recv_timeout(SERVER_WAIT).unwrap();
+                } else {
+                    socket2::SockRef::from(connection.get_ref())
+                        .set_linger(Some(Duration::ZERO))
+                        .unwrap();
+                    // Zero linger makes close reset the socket before any response.
+                    drop(connection);
+                }
+            }
+        });
+        let result = image_path("/fish.png", temp.path(), temp.path(), &api);
+        let _ = finished.send(());
+        worker.join().unwrap();
+        let log = fs::read_to_string(temp.path().join("profile/logs/launcher.log")).unwrap();
+        assert_eq!(
+            log.matches("\"event\":\"image.cache_request\"").count(),
+            2,
+            "{log}"
+        );
+        assert!(log.contains("ConnectionReset"), "{log}");
+        if recover_on_retry || seeded_cache {
+            let file = result.unwrap_or_else(|error| panic!("{error}; {log}"));
+            assert_eq!(fs::read(&file).unwrap(), FISH_ICON);
+            if let Some(existing) = existing {
+                assert_eq!(file, existing);
+                assert!(
+                    fs::metadata(&file)
+                        .unwrap()
+                        .modified()
+                        .unwrap()
+                        .elapsed()
+                        .unwrap()
+                        >= CACHE_TTL
+                );
+            }
+        } else {
+            assert!(result.is_err());
+            assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "img")
+            }));
+        }
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn temporary_validator_sharing_violation_keeps_conditional_request() {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
     let temp = tempfile::tempdir().unwrap();
-    let (server, api) = raw_image_server();
+    let (server, api, client) = tls_image_server();
     let api = api.with_diagnostics(temp.path().join("profile"));
     let path = stale_image(&api, temp.path());
     // Display or scanning can read the cached image while denying data
@@ -416,12 +606,12 @@ fn temporary_validator_sharing_violation_keeps_conditional_request() {
     assert_eq!(validators(&path).unwrap_err().raw_os_error(), Some(32));
     let diagnostic_root = temp.path().to_owned();
     let diagnostic_path = path.clone();
+    let (finished, wait_client) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut connection = raw_image_connection(&server);
-        let headers = raw_image_request(&mut connection);
+        let (mut connection, headers) = tls_image_request(&server);
         let conditional = raw_header(&headers, "If-None-Match") == Some("\"fish-v1\"");
         raw_response(
-            &mut connection,
+            connection.get_mut(),
             if conditional {
                 "304 Not Modified"
             } else {
@@ -436,25 +626,25 @@ fn temporary_validator_sharing_violation_keeps_conditional_request() {
             "Expected If-None-Match on the wire after unlocking metadata: {headers:?}; {}",
             cache_diagnostics(&diagnostic_root, &diagnostic_path)
         );
+        wait_client.recv_timeout(SERVER_WAIT).unwrap();
     });
     let mut reads = 0;
-    assert_eq!(
-        image_path_with_read_observer(
-            "/fish.png",
-            temp.path(),
-            temp.path(),
-            &api,
-            |error, attempt| {
-                assert_eq!(error.raw_os_error(), Some(32));
-                assert_eq!(attempt, 1);
-                reads += 1;
-                drop(held.take());
-            }
-        )
-        .unwrap(),
-        path
+    let revalidated = image_path_with_client(
+        "/fish.png",
+        temp.path(),
+        temp.path(),
+        &api,
+        || Ok(&client),
+        |error, attempt| {
+            assert_eq!(error.raw_os_error(), Some(32));
+            assert_eq!(attempt, 1);
+            reads += 1;
+            drop(held.take());
+        },
     );
+    let _ = finished.send(());
     worker.join().unwrap();
+    assert_eq!(revalidated.unwrap(), path);
     assert_eq!(reads, 1);
     assert_eq!(fs::read(&path).unwrap(), FISH_ICON);
     assert_eq!(

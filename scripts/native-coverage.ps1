@@ -84,6 +84,7 @@ try {
         'bin/security_helper.rs' = @{ Lines = 24; Branches = 29 }
         'bin/updater.rs' = @{ Lines = 39; Branches = 7 }
         'launch.rs' = @{ Lines = 89; Branches = 80 }
+        'media.rs' = @{ Lines = 82; Branches = 67 }
         'playtime.rs' = @{ Lines = 92; Branches = 80 }
         'queue.rs' = @{ Lines = 85; Branches = 71 }
         'security.rs' = @{ Lines = 51; Branches = 53 }

@@ -76,19 +76,37 @@ fn validators_with_retry(
     }
 }
 
+fn client_builder() -> reqwest::blocking::ClientBuilder {
+    reqwest::blocking::Client::builder()
+        .user_agent(concat!("ChillHub/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+}
+
 fn client() -> Result<&'static reqwest::blocking::Client, String> {
     IMAGE_CLIENT
-        .get_or_init(|| {
-            reqwest::blocking::Client::builder()
-                .user_agent(concat!("ChillHub/", env!("CARGO_PKG_VERSION")))
-                .connect_timeout(Duration::from_secs(4))
-                .timeout(Duration::from_secs(10))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|e| e.to_string())
-        })
+        .get_or_init(|| client_builder().build().map_err(|e| e.to_string()))
         .as_ref()
         .map_err(Clone::clone)
+}
+
+fn retryable_image_request(error: &reqwest::Error) -> bool {
+    use std::error::Error as _;
+    if error.is_timeout() || error.is_connect() || error.is_body() {
+        return true;
+    }
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
+        {
+            return true;
+        }
+        source = cause.source();
+    }
+    false
 }
 
 fn validate_image(bytes: &[u8]) -> Result<(), String> {
@@ -166,16 +184,17 @@ pub fn image_path(
     cache: &Path,
     api: &ApiClient,
 ) -> Result<PathBuf, String> {
-    image_path_with_read_observer(value, bundle, cache, api, |_, _| {})
+    image_path_with_client(value, bundle, cache, api, client, |_, _| {})
 }
 
-// The observer lets a TEMP test release a real competing Windows handle after
-// the first failed read, without sleeps or process-wide hooks in the fixture.
-fn image_path_with_read_observer(
+// A fixture can provide its own TLS trust root and release a competing Windows
+// handle after the first failed read without changing process-wide settings.
+fn image_path_with_client<'a>(
     value: &str,
     bundle: &Path,
     cache: &Path,
     api: &ApiClient,
+    get_client: impl FnOnce() -> Result<&'a reqwest::blocking::Client, String>,
     mut read_error: impl FnMut(&std::io::Error, usize),
 ) -> Result<PathBuf, String> {
     let address = location(value, bundle, api)?;
@@ -235,7 +254,7 @@ fn image_path_with_read_observer(
     } else {
         Validators::default()
     };
-    let client = client()?;
+    let client = get_client()?;
     for attempt in 1..=2 {
         let mut request = client.get(&address);
         if let Some(etag) = &validators.etag {
@@ -312,7 +331,7 @@ fn image_path_with_read_observer(
                 response.status().is_server_error(),
             ),
             Err(error) => {
-                let retry = error.is_timeout() || error.is_connect() || error.is_body();
+                let retry = retryable_image_request(&error);
                 api.event(
                     "image.request_error",
                     serde_json::json!({"path": path, "cause": format!("{:?}", error.without_url())}),
