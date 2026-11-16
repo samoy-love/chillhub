@@ -190,7 +190,7 @@ impl Server {
             root: root.path().join("game"),
             manifest_url: format!("{}/manifest", self.base),
             content_base_url: format!("{}/content", self.base),
-            approved_cleanup_paths: vec![],
+            approved_cleanup_files: vec![],
             max_parallel: 2,
             ..Default::default()
         }
@@ -362,13 +362,11 @@ fn wrong_content_range_never_promotes_or_deletes_existing_files() {
     fs::write(root.path().join("game/extra.sav"), b"save").unwrap();
     fs::write(root.path().join("game/.version"), b"1").unwrap();
     let mut request = server.request(&root);
-    request.approved_cleanup_paths = vec!["extra.sav".into()];
-    assert!(
-        TransferEngine::new()
-            .unwrap()
-            .run(&request, &TransferControl::default(), &|_| {})
-            .is_err()
-    );
+    let engine = TransferEngine::new().unwrap();
+    let control = TransferControl::default();
+    let plan = engine.plan(&request, &control, &|_| {}).unwrap();
+    request.approved_cleanup_files = plan.to_delete.clone();
+    assert!(engine.execute(&request, &plan, &control, &|_| {}).is_err());
     assert!(!root.path().join("game/game.bin").exists());
     assert!(root.path().join("game/extra.sav").exists());
     assert_eq!(fs::read(root.path().join("game/.version")).unwrap(), b"1");
@@ -469,16 +467,23 @@ fn cleanup_requires_confirmation_and_preserves_foreign_and_service_files() {
     fs::create_dir(root.path().join("game/freetp")).unwrap();
     fs::write(root.path().join("game/freetp/.hash"), b"keep").unwrap();
     let mut request = server.request(&root);
-    request.approved_cleanup_paths.clear();
+    request.approved_cleanup_files.clear();
     request.foreign_paths = vec!["mod.dll".into()];
     let engine = TransferEngine::new().unwrap();
     let result = engine.run(&request, &TransferControl::default(), &|_| {});
-    assert!(
-        matches!(result,Err(TransferError::NeedsCleanupConfirmation(ref files)) if files==&vec!["old.bin".to_owned()])
+    let Err(TransferError::NeedsCleanupConfirmation(files)) = result else {
+        panic!("expected cleanup confirmation: {result:?}");
+    };
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["old.bin"]
     );
     assert!(!root.path().join("game/game.bin").exists());
     assert!(!root.path().join("game/.updating").exists());
-    request.approved_cleanup_paths = vec!["old.bin".into()];
+    request.approved_cleanup_files = files;
     engine
         .run(&request, &TransferControl::default(), &|_| {})
         .unwrap();
@@ -508,13 +513,13 @@ fn modpack_cleanup_owns_only_previous_manifest_and_uses_verified_donor() {
     let mut request = server.request(&root);
     request.scope = SyncScope::OwnFilesOnly;
     request.previous_owned_paths = vec!["oldmod.dll".into()];
-    request.approved_cleanup_paths = vec!["oldmod.dll".into()];
     request.donor_roots = vec![donor.path().to_owned()];
     request.preserve_paths = vec!["doorstop_config.ini".into()];
-    let outcome = TransferEngine::new()
-        .unwrap()
-        .run(&request, &TransferControl::default(), &|_| {})
-        .unwrap();
+    let engine = TransferEngine::new().unwrap();
+    let control = TransferControl::default();
+    let plan = engine.plan(&request, &control, &|_| {}).unwrap();
+    request.approved_cleanup_files = plan.to_delete.clone();
+    let outcome = engine.execute(&request, &plan, &control, &|_| {}).unwrap();
     assert_eq!(outcome.network_bytes, 0);
     assert_eq!(outcome.reused_bytes, bytes.len() as u64);
     assert!(root.path().join("game/steamgame.exe").exists());
@@ -535,9 +540,16 @@ fn cleanup_consent_cannot_expand_when_the_queue_replans_or_restarts() {
     let queue = DownloadQueue::new(&state_file).unwrap();
     let id = queue.enqueue(server.request(&root)).unwrap();
     wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
-    assert_eq!(queue.snapshot()[0].cleanup_paths, vec!["old-extra.txt"]);
+    let displayed = queue.snapshot()[0].cleanup_files.clone();
+    assert_eq!(
+        displayed
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["old-extra.txt"]
+    );
     fs::write(root.path().join("game/new-save.txt"), b"new save").unwrap();
-    queue.confirm_cleanup(&id).unwrap();
+    queue.confirm_cleanup(&id, &displayed).unwrap();
     wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
     assert!(root.path().join("game/old-extra.txt").exists());
     assert_eq!(
@@ -545,20 +557,28 @@ fn cleanup_consent_cannot_expand_when_the_queue_replans_or_restarts() {
         b"new save"
     );
     assert_eq!(
-        queue.snapshot()[0].cleanup_paths,
-        vec!["new-save.txt", "old-extra.txt"]
+        queue.snapshot()[0]
+            .cleanup_files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["new-save.txt", "old-extra.txt"]
     );
     queue.shutdown();
     drop(queue);
     let restored = DownloadQueue::new(&state_file).unwrap();
     fs::write(root.path().join("game/third-save.txt"), b"third").unwrap();
-    restored.confirm_cleanup(&id).unwrap();
+    restored
+        .confirm_cleanup(&id, &restored.snapshot()[0].cleanup_files)
+        .unwrap();
     wait_until(|| restored.snapshot()[0].state == QueueState::NeedsConfirmation);
     assert_eq!(
         fs::read(root.path().join("game/third-save.txt")).unwrap(),
         b"third"
     );
-    restored.confirm_cleanup(&id).unwrap();
+    restored
+        .confirm_cleanup(&id, &restored.snapshot()[0].cleanup_files)
+        .unwrap();
     wait_until(|| restored.snapshot()[0].state == QueueState::Completed);
     assert!(!root.path().join("game/old-extra.txt").exists());
     assert!(!root.path().join("game/new-save.txt").exists());
@@ -566,15 +586,16 @@ fn cleanup_consent_cannot_expand_when_the_queue_replans_or_restarts() {
 }
 
 #[test]
-fn legacy_unbounded_cleanup_flag_never_authorizes_a_new_deletion() {
+fn legacy_boolean_and_path_only_cleanup_approval_never_authorize_deletion() {
     let mut value = serde_json::to_value(TransferRequest::default()).unwrap();
     value
         .as_object_mut()
         .unwrap()
-        .remove("approved_cleanup_paths");
+        .remove("approved_cleanup_files");
     value["allow_cleanup"] = true.into();
+    value["approved_cleanup_paths"] = serde_json::json!(["old.dat"]);
     let request: TransferRequest = serde_json::from_value(value).unwrap();
-    assert!(request.approved_cleanup_paths.is_empty());
+    assert!(request.approved_cleanup_files.is_empty());
 }
 
 #[test]
@@ -588,12 +609,14 @@ fn a_failed_attempt_cannot_reuse_consent_for_a_recreated_save() {
     let queue = DownloadQueue::new(root.path().join("queue.json")).unwrap();
     let id = queue.enqueue(server.request(&root)).unwrap();
     wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
-    queue.confirm_cleanup(&id).unwrap();
+    queue
+        .confirm_cleanup(&id, &queue.snapshot()[0].cleanup_files)
+        .unwrap();
     wait_until(|| queue.snapshot()[0].state == QueueState::Failed);
     assert!(
         queue.snapshot()[0]
             .request
-            .approved_cleanup_paths
+            .approved_cleanup_files
             .is_empty()
     );
     fs::write(&save, b"new save from another game session").unwrap();
@@ -604,6 +627,83 @@ fn a_failed_attempt_cannot_reuse_consent_for_a_recreated_save() {
         b"new save from another game session"
     );
     queue.shutdown();
+}
+
+#[test]
+fn a_save_replaced_at_the_same_path_between_preview_and_confirmation_is_protected() {
+    let bytes = data(100);
+    let server = Server::start(manifest(&bytes), bytes, Behavior::Normal);
+    let root = TempDir::new().unwrap();
+    prepare(&root);
+    let save = root.path().join("game/save.dat");
+    fs::write(&save, b"old save").unwrap();
+    let queue = DownloadQueue::new(root.path().join("queue.json")).unwrap();
+    let id = queue.enqueue(server.request(&root)).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
+    let first_preview = queue.snapshot()[0].cleanup_files.clone();
+    assert_eq!(first_preview[0].path, "save.dat");
+    let replacement = root.path().join("new-save.dat");
+    fs::write(&replacement, b"new save").unwrap();
+    fs::remove_file(&save).unwrap();
+    fs::rename(replacement, &save).unwrap();
+    queue.confirm_cleanup(&id, &first_preview).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
+    let current_preview = queue.snapshot()[0].cleanup_files.clone();
+    assert_eq!(current_preview[0].path, "save.dat");
+    assert_ne!(first_preview, current_preview);
+    assert_eq!(fs::read(&save).unwrap(), b"new save");
+    assert!(matches!(
+        queue.confirm_cleanup(&id, &first_preview),
+        Err(TransferError::CleanupConfirmationChanged)
+    ));
+    queue.confirm_cleanup(&id, &current_preview).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::Completed);
+    assert!(!save.exists());
+    queue.shutdown();
+}
+
+#[test]
+fn a_save_edited_during_download_is_never_deleted_under_its_old_approval() {
+    let bytes = data(1_500_000);
+    let server = Server::start(manifest(&bytes), bytes, Behavior::Slow);
+    let root = TempDir::new().unwrap();
+    prepare(&root);
+    let save = root.path().join("game/save.dat");
+    fs::write(&save, b"old save").unwrap();
+    let original_time = fs::metadata(&save).unwrap().modified().unwrap();
+    let engine = TransferEngine::new().unwrap();
+    let control = TransferControl::default();
+    let mut request = server.request(&root);
+    let plan = engine.plan(&request, &control, &|_| {}).unwrap();
+    request.approved_cleanup_files = plan.to_delete.clone();
+    let edited = AtomicBool::new(false);
+    let result = engine.execute(&request, &plan, &control, &|progress| {
+        if progress.stage == TransferStage::Downloading
+            && progress.network_bytes > 0
+            && progress.completed_bytes < progress.total_bytes
+            && !edited.swap(true, Ordering::SeqCst)
+        {
+            fs::write(&save, b"new save").unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&save)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(original_time))
+                .unwrap();
+        }
+    });
+    assert!(
+        edited.load(Ordering::SeqCst),
+        "fixture must edit a file during a download"
+    );
+    let Err(TransferError::NeedsCleanupConfirmation(files)) = result else {
+        panic!("expected a new cleanup preview: {result:?}");
+    };
+    assert_eq!(files[0].path, "save.dat");
+    assert_ne!(files, request.approved_cleanup_files);
+    assert_eq!(fs::read(&save).unwrap(), b"new save");
+    assert!(!root.path().join("game/.version").exists());
+    assert!(root.path().join("game/.updating").exists());
 }
 
 #[test]

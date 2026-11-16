@@ -132,7 +132,7 @@ fn paused_alias_task_blocks_delete_enqueue_estimate_and_integrity_checks() {
         progress: None,
         outcome: None,
         error: None,
-        cleanup_paths: vec![],
+        cleanup_files: vec![],
         report: Default::default(),
     };
     std::fs::write(

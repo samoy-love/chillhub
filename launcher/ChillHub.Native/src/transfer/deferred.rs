@@ -1,4 +1,4 @@
-//! Immutable verified payloads scheduled by Windows, recovered before replanning.
+//! Verified payloads for locked files, recovered against the next transfer plan.
 use super::*;
 const DIRECTORY: &str = ".chillhub-reboot";
 static JOURNAL_LOCK: Mutex<()> = Mutex::new(());
@@ -16,15 +16,10 @@ pub(super) fn is_locked(error: &TransferError) -> bool {
     matches!(error, TransferError::Io(error) if matches!(error.raw_os_error(), Some(32 | 33)))
 }
 
-pub(super) fn schedule(request: &TransferRequest, part: &Path, file: &ManifestFile) -> Result<()> {
-    stage(request, part, file, schedule_windows)
-}
-
-fn stage(
+pub(super) fn save_pending(
     request: &TransferRequest,
     part: &Path,
     file: &ManifestFile,
-    schedule: impl FnOnce(&Path, &Path) -> io::Result<()>,
 ) -> Result<()> {
     let root = &request.root;
     let _lock = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -36,7 +31,13 @@ fn stage(
     let journal = directory.join(format!("{id}.json"));
     let entry = Entry {
         payload,
-        file: file.clone(),
+        // Block signatures are only a download optimization. A large game's
+        // signatures can exceed the bounded recovery journal by themselves;
+        // recovery needs only the whole-file identity and hashes.
+        file: ManifestFile {
+            blocks: None,
+            ..file.clone()
+        },
         game_id: request.game_id.clone(),
         version: request.version.clone(),
         scope: request.scope,
@@ -48,15 +49,10 @@ fn stage(
         &serde_json::to_vec(&entry).map_err(|e| TransferError::Protocol(e.to_string()))?,
     )?;
     atomic_replace(part, &saved)?;
-    let destination = path_in(root, &file.path)?;
-    if let Err(error) = schedule(&saved, &destination) {
-        // Normal user installations may lack the right to schedule a reboot move.
-        // Restore the verified partial so retry does not redownload it.
-        atomic_replace(&saved, part)?;
-        remove_regular(&journal)?;
-        return Err(TransferError::Io(error));
-    }
-    Err(TransferError::RebootRequired(file.path.clone()))
+    // Do not register a name-only Windows boot move. These user-writable paths
+    // may change while the launcher is stopped, and cancellation must not leave
+    // an OS operation behind. A requested retry revalidates ownership and hashes.
+    Err(TransferError::ReplacementDeferred(file.path.clone()))
 }
 
 pub(super) fn recover(
@@ -131,8 +127,8 @@ pub(super) fn recover(
                         .map(|hash| hash.to_ascii_lowercase())
         });
         let Some(current) = current else {
-            // A new version supersedes the saved bytes. Remove the unique
-            // source so a previously registered Windows move becomes a no-op.
+            // A new version supersedes the saved bytes. Do not restore content
+            // that is no longer part of the current requested transfer plan.
             if payload.try_exists()? {
                 remove_regular(&payload)?;
             }
@@ -145,51 +141,21 @@ pub(super) fn recover(
             if !verify_file(&payload, &entry.file, control)? {
                 return Err(TransferError::Integrity(entry.file.path));
             }
-            // Closing the locking program permits an immediate retry. Consuming
-            // this unique payload makes any pending Windows rename a harmless no-op.
+            // Closing the locking program permits a verified immediate retry.
             match atomic_replace(&payload, &destination) {
                 Ok(()) => {}
                 Err(error) if is_locked(&error) => {
-                    return Err(TransferError::RebootRequired(entry.file.path));
+                    return Err(TransferError::ReplacementDeferred(entry.file.path));
                 }
                 Err(error) => return Err(error),
             }
         }
-        // Missing payload is either a completed boot move or a pre-rename crash.
+        // Missing payload can follow a pre-rename crash or an interrupted recovery.
         // The normal transfer plan verifies the destination before publishing a version.
         drop(file);
         remove_regular(&path)?;
     }
     Ok(recovered)
-}
-
-#[cfg(windows)]
-fn schedule_windows(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_DELAY_UNTIL_REBOOT, MOVEFILE_REPLACE_EXISTING, MoveFileExW,
-    };
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain([0]).collect();
-    let destination: Vec<u16> = destination.as_os_str().encode_wide().chain([0]).collect();
-    if unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_DELAY_UNTIL_REBOOT | MOVEFILE_REPLACE_EXISTING,
-        )
-    } == 0
-    {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-#[cfg(not(windows))]
-fn schedule_windows(_: &Path, _: &Path) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "Reboot replacement requires Windows",
-    ))
 }
 
 #[cfg(test)]

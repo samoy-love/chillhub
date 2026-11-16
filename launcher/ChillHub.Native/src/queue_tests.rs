@@ -53,7 +53,7 @@ fn queue_reset_adopts_a_repaired_file_instead_of_erasing_it() {
     fs::write(&path, b"{broken").unwrap();
     let queue = DownloadQueue::new(&path).unwrap();
     let mut task = item("recovered", QueueState::Waiting);
-    task.request.approved_cleanup_paths = vec!["save.dat".into()];
+    task.request.approved_cleanup_files = vec![CleanupFile::fixture("save.dat")];
     fs::write(&path, serde_json::to_vec(&vec![task]).unwrap()).unwrap();
     queue.reset_unreadable().unwrap();
     assert_eq!(queue.snapshot()[0].id, "recovered");
@@ -61,7 +61,7 @@ fn queue_reset_adopts_a_repaired_file_instead_of_erasing_it() {
     assert!(
         queue.snapshot()[0]
             .request
-            .approved_cleanup_paths
+            .approved_cleanup_files
             .is_empty()
     );
     assert!(queue.recovery_error().is_none());
@@ -78,7 +78,7 @@ fn resumed_or_restored_tasks_require_fresh_cleanup_consent() {
         QueueState::Cancelled,
     ] {
         let mut task = item("task", initial);
-        task.request.approved_cleanup_paths = vec!["save.dat".into()];
+        task.request.approved_cleanup_files = vec![CleanupFile::fixture("save.dat")];
         let queue = DownloadQueue {
             shared: Arc::new(Shared {
                 state: Mutex::new(state(vec![task])),
@@ -91,22 +91,44 @@ fn resumed_or_restored_tasks_require_fresh_cleanup_consent() {
         assert!(
             queue.snapshot()[0]
                 .request
-                .approved_cleanup_paths
+                .approved_cleanup_files
                 .is_empty()
         );
         queue.shutdown();
     }
     let mut task = item("restored", QueueState::Running);
-    task.request.approved_cleanup_paths = vec!["save.dat".into()];
+    task.request.approved_cleanup_files = vec![CleanupFile::fixture("save.dat")];
     let path = temp.path().join("restore.json");
     fs::write(&path, serde_json::to_vec(&vec![task]).unwrap()).unwrap();
     let queue = DownloadQueue::new(path).unwrap();
     assert!(
         queue.snapshot()[0]
             .request
-            .approved_cleanup_paths
+            .approved_cleanup_files
             .is_empty()
     );
+    queue.shutdown();
+}
+
+#[test]
+fn legacy_path_only_preview_is_restored_on_pause_and_cannot_be_confirmed() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("downloads.json");
+    let mut task = serde_json::to_value(item("legacy", QueueState::NeedsConfirmation)).unwrap();
+    task.as_object_mut().unwrap().remove("cleanup_files");
+    task["cleanup_paths"] = serde_json::json!(["save.dat"]);
+    task["request"]["approved_cleanup_paths"] = serde_json::json!(["save.dat"]);
+    fs::write(&path, serde_json::to_vec(&[task]).unwrap()).unwrap();
+
+    let queue = DownloadQueue::new(&path).unwrap();
+    assert!(queue.recovery_error().is_none());
+    assert_eq!(queue.snapshot()[0].state, QueueState::Paused);
+    assert!(queue.snapshot()[0].cleanup_files.is_empty());
+    assert!(matches!(
+        queue.confirm_cleanup("legacy", &[CleanupFile::fixture("save.dat")]),
+        Err(TransferError::CleanupConfirmationChanged)
+    ));
+    assert_eq!(queue.snapshot()[0].state, QueueState::Paused);
     queue.shutdown();
 }
 
@@ -129,17 +151,17 @@ fn failed_queue_write_cannot_authorize_cleanup_or_resume_work() {
     for initial in [QueueState::NeedsConfirmation, QueueState::Paused] {
         let temp = tempfile::tempdir().unwrap();
         let mut task = item("task", initial);
-        task.cleanup_paths = vec!["save.dat".into()];
+        task.cleanup_files = vec![CleanupFile::fixture("save.dat")];
         let queue = unwritable_queue(state(vec![task]), temp.path());
         let result = if initial == QueueState::NeedsConfirmation {
-            queue.confirm_cleanup("task")
+            queue.confirm_cleanup("task", &[CleanupFile::fixture("save.dat")])
         } else {
             queue.resume("task")
         };
         assert!(result.is_err());
         let snapshot = queue.snapshot();
         assert_eq!(snapshot[0].state, initial);
-        assert!(snapshot[0].request.approved_cleanup_paths.is_empty());
+        assert!(snapshot[0].request.approved_cleanup_files.is_empty());
     }
 }
 
@@ -294,7 +316,7 @@ fn item(id: &str, state: QueueState) -> QueueItem {
             ..Default::default()
         }),
         error: None,
-        cleanup_paths: vec!["old.dll".into()],
+        cleanup_files: vec![CleanupFile::fixture("old.dll")],
         report: QueueReport::default(),
     }
 }
@@ -311,12 +333,61 @@ fn state(items: Vec<QueueItem>) -> State {
 }
 
 #[test]
+fn successful_transfer_releases_dependents_after_late_stop_requests() {
+    for (queue_state, stopping, requeue) in [
+        (QueueState::Pausing, false, false),
+        (QueueState::Cancelling, false, false),
+        (QueueState::Pausing, false, true),
+        (QueueState::Paused, true, false),
+        (QueueState::Cancelling, true, false),
+    ] {
+        let mut game = item("game", queue_state);
+        game.outcome = None;
+        let mut mods = item("mods", QueueState::Waiting);
+        mods.request.depends_on = Some(game.id.clone());
+        assert!(!runnable(&mods, std::slice::from_ref(&game)));
+
+        finish_attempt(
+            &mut game,
+            Ok(TransferOutcome {
+                downloaded_files: 2,
+                ..Default::default()
+            }),
+            stopping,
+            requeue,
+        );
+
+        assert_eq!(game.state, QueueState::Completed);
+        assert_eq!(game.outcome.as_ref().unwrap().downloaded_files, 2);
+        assert!(game.cleanup_files.is_empty());
+        assert!(runnable(&mods, std::slice::from_ref(&game)));
+    }
+}
+
+#[test]
+fn interrupted_transfer_respects_stop_requests() {
+    for (queue_state, stopping, requeue, expected) in [
+        (QueueState::Pausing, false, false, QueueState::Paused),
+        (QueueState::Cancelling, false, false, QueueState::Cancelled),
+        (QueueState::Pausing, false, true, QueueState::Waiting),
+        (QueueState::Paused, true, false, QueueState::Paused),
+        (QueueState::Cancelling, true, false, QueueState::Paused),
+    ] {
+        let mut game = item("game", queue_state);
+        game.outcome = None;
+        finish_attempt(&mut game, Err(TransferError::Cancelled), stopping, requeue);
+        assert_eq!(game.state, expected);
+        assert!(game.outcome.is_none());
+    }
+}
+
+#[test]
 fn completed_history_is_bounded_without_losing_retry_data_or_dependencies() {
     let temp = tempfile::tempdir().unwrap();
     let mut items = (0..57)
         .map(|i| {
             let mut completed = item(&format!("done-{i}"), QueueState::Completed);
-            completed.request.approved_cleanup_paths = vec!["old.dll".into()];
+            completed.request.approved_cleanup_files = vec![CleanupFile::fixture("old.dll")];
             completed
         })
         .collect::<Vec<_>>();
@@ -337,11 +408,11 @@ fn completed_history_is_bounded_without_losing_retry_data_or_dependencies() {
         .iter()
         .filter(|i| i.state == QueueState::Completed)
     {
-        assert!(item.request.approved_cleanup_paths.is_empty());
+        assert!(item.request.approved_cleanup_files.is_empty());
         assert!(item.request.previous_owned_paths.is_empty());
         assert_eq!(item.request.foreign_paths.capacity(), 0);
         assert!(item.request.preserve_paths.is_empty() && item.request.donor_roots.is_empty());
-        assert!(item.progress.is_none() && item.cleanup_paths.is_empty());
+        assert!(item.progress.is_none() && item.cleanup_files.is_empty());
         assert_eq!(item.outcome.as_ref().unwrap().network_bytes, 7);
     }
     for id in [
@@ -356,7 +427,7 @@ fn completed_history_is_bounded_without_losing_retry_data_or_dependencies() {
             ["BepInEx/plugins/owned.dll"]
         );
         assert!(!item.request.foreign_paths.is_empty() && !item.request.preserve_paths.is_empty());
-        assert!(!item.request.donor_roots.is_empty() && !item.cleanup_paths.is_empty());
+        assert!(!item.request.donor_roots.is_empty() && !item.cleanup_files.is_empty());
     }
     assert!(
         state

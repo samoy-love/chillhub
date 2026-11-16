@@ -53,7 +53,9 @@ struct Loopback {
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
     requests: Arc<Mutex<Vec<String>>>,
+    manual_feedback: Arc<AtomicBool>,
     hold_content: Arc<AtomicBool>,
+    reject_catalog: Arc<AtomicBool>,
 }
 impl Loopback {
     fn new() -> Self {
@@ -168,15 +170,38 @@ impl Loopback {
         let stopped = stop.clone();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = requests.clone();
+        let manual_feedback = Arc::new(AtomicBool::new(false));
+        let feedback_received = manual_feedback.clone();
         let hold_content = Arc::new(AtomicBool::new(false));
         let held = hold_content.clone();
+        let reject_catalog = Arc::new(AtomicBool::new(false));
+        let unavailable = reject_catalog.clone();
         let worker = thread::spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
-                if let Some(request) = server.recv_timeout(Duration::from_millis(15)).unwrap() {
+                if let Some(mut request) = server.recv_timeout(Duration::from_millis(15)).unwrap() {
                     let path = request.url().to_owned();
                     captured.lock().unwrap().push(path.clone());
+                    if path.ends_with("/feedback/submit") {
+                        // The controlled worker panic can enqueue an automatic report
+                        // while this test is checking rejection of the manual form.
+                        let automatic =
+                            serde_json::from_reader::<_, serde_json::Value>(request.as_reader())
+                                .is_ok_and(|body| {
+                                    body.pointer("/system/auto").and_then(|v| v.as_str())
+                                        == Some("1")
+                                });
+                        if !automatic {
+                            feedback_received.store(true, Ordering::Relaxed);
+                        }
+                    }
                     let body = routes.get(&path).cloned();
-                    let status = if body.is_some() { 200 } else { 404 };
+                    let status = if path == "/api/games" && unavailable.load(Ordering::Relaxed) {
+                        503
+                    } else if body.is_some() {
+                        200
+                    } else {
+                        404
+                    };
                     while path.starts_with("/content/")
                         && held.load(Ordering::Relaxed)
                         && !stopped.load(Ordering::Relaxed)
@@ -195,7 +220,9 @@ impl Loopback {
             stop,
             worker: Some(worker),
             requests,
+            manual_feedback,
             hold_content,
+            reject_catalog,
         }
     }
 }
@@ -319,6 +346,9 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
     let captured = state.clone();
     let base = server.base.clone();
     let hold_content = server.hold_content.clone();
+    let reject_catalog = server.reject_catalog.clone();
+    let cleanup_root = paths.games_dir.join("confirmation-fixture");
+    let cleanup_save = cleanup_root.join("save.dat");
     let original_games = paths.games_dir.to_string_lossy().into_owned();
     let draft = temporary
         .path()
@@ -332,9 +362,11 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                 return Err(format!("phase {:?} timed out: loading={} busy={} label={} status={} tasks={:?}",
                     *stage.borrow(), ui.get_loading(), ui.get_busy(), ui.get_play_label(), ui.get_status(), captured.borrow().tasks));
             }
-            let failed = captured.borrow().tasks.iter().find(|t| matches!(t.state, QueueState::Failed | QueueState::NeedsConfirmation)).cloned();
-            if let Some(task) = failed { return Err(format!("unexpected failed/confirmation task: {task:?}")); }
             let (phase, expected_generation) = *stage.borrow();
+            if phase < 94 {
+                let failed = captured.borrow().tasks.iter().find(|t| matches!(t.state, QueueState::Failed | QueueState::NeedsConfirmation)).cloned();
+                if let Some(task) = failed { return Err(format!("unexpected failed/confirmation task: {task:?}")); }
+            }
             match phase {
                 0 if !ui.get_loading() && !ui.get_busy() && ui.get_can_play() => {
                     if ui.get_playtime_label() != "Сыграно меньше минуты" {
@@ -519,7 +551,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     let paused=chillhub_native::queue::QueueItem {
                         id:"alias-paused".into(),
                         request:chillhub_native::transfer::TransferRequest {game_id:"plain".into(),root:alias_root,..Default::default()},
-                        state:QueueState::Paused,progress:None,outcome:None,error:None,cleanup_paths:vec![],report:Default::default(),
+                        state:QueueState::Paused,progress:None,outcome:None,error:None,cleanup_files:vec![],report:Default::default(),
                     };
                     let queue_file=paths.data_dir.join("alias-controller-queue.json");
                     fs::write(&queue_file,serde_json::to_vec(&vec![paused]).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
@@ -539,6 +571,13 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     ui.invoke_action_requested("cancel-action".into());
                     if captured.borrow().pending.is_some() || !ui.get_panel_kind().is_empty() {
                         return Err("cancelling deletion retained a pending action".into());
+                    }
+                    ui.invoke_action_requested("confirm-action".into());
+                    ui.invoke_action_requested("removed-action".into());
+                    let tasks = captured.borrow().services.queue.snapshot();
+                    if tasks.len() != 1 || tasks[0].id != "alias-paused" || tasks[0].state != QueueState::Paused
+                        || ui.get_operation_busy() || !ui.get_toast().contains("недоступно") {
+                        return Err("cancelled or unsupported action changed the paused queue".into());
                     }
                     ui.set_panel_kind("gallery".into());
                     test_empty_catalog(&ui, &captured);
@@ -689,7 +728,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     *stage.borrow_mut() = (89, 0);
                 }
                 89 if !ui.get_operation_busy() => {
-                    if ui.get_panel_kind() != "feedback" || ui.get_toast().is_empty() {
+                    if ui.get_panel_kind() != "feedback" || !ui.get_toast().contains("Добавьте описание") {
                         return Err("invalid feedback cleared the user's form or hid the error".into());
                     }
                     let now = Instant::now();
@@ -712,6 +751,29 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                 90 if !captured.borrow().catalog_poll_inflight => {
                     if captured.borrow().records.len() != 2 || captured.borrow().offline {
                         return Err("quiet refresh did not apply the new catalog".into());
+                    }
+                    reject_catalog.store(true, Ordering::Relaxed);
+                    refocus_stale_catalog(&ui, &captured);
+                    if !captured.borrow().catalog_poll_inflight {
+                        return Err("stale catalog refresh did not begin".into());
+                    }
+                    *stage.borrow_mut() = (92, 0);
+                }
+                92 if !captured.borrow().catalog_poll_inflight => {
+                    if !captured.borrow().offline || captured.borrow().records.len() != 2
+                        || !ui.get_connection_note().contains("сохранённая библиотека")
+                        || controller::selected(&captured).is_none()
+                        || captured.borrow().services.queue.snapshot().first().map(|task| task.state) != Some(QueueState::Paused) {
+                        return Err("failed catalog refresh lost the cached library, selection, or paused download".into());
+                    }
+                    reject_catalog.store(false, Ordering::Relaxed);
+                    refocus_stale_catalog(&ui, &captured);
+                    *stage.borrow_mut() = (93, 0);
+                }
+                93 if !captured.borrow().catalog_poll_inflight => {
+                    if captured.borrow().offline || !ui.get_connection_note().is_empty()
+                        || controller::selected(&captured).is_none() {
+                        return Err("catalog recovery retained the offline warning or lost the selection".into());
                     }
                     let queue_path = captured.borrow().services.paths.data_dir.join("controller-recovery.json");
                     let corrupt = b"{fixture unreadable queue";
@@ -738,7 +800,56 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                         || ui.get_toast() != "Очередь загрузок восстановлена" {
                         return Err("confirmed queue reset did not recover an empty queue".into());
                     }
-                    return Ok(true);
+                    fs::create_dir_all(&cleanup_root).map_err(|e| e.to_string())?;
+                    fs::write(&cleanup_save, b"old save").map_err(|e| e.to_string())?;
+                    queue.enqueue(chillhub_native::transfer::TransferRequest {
+                        game_id: "fixture".into(),
+                        version: "1.0.0".into(),
+                        root: cleanup_root.clone(),
+                        manifest_url: format!("{base}/manifests/fixture/1.0.0.json"),
+                        content_base_url: format!("{base}/content/fixture/1.0.0/files"),
+                        ..Default::default()
+                    }).map_err(|e| e.to_string())?;
+                    *stage.borrow_mut() = (94, 0);
+                }
+                94 => {
+                    let queue = captured.borrow().services.queue.clone();
+                    if let Some(id) = show_cleanup_task(&captured)? {
+                        ui.invoke_queue_action(id.clone().into(), "confirm".into());
+                        if ui.get_panel_kind() != "confirm" || !ui.get_panel_body().contains("save.dat") {
+                            return Err("cleanup prompt did not name the file to remove".into());
+                        }
+                        fs::write(&cleanup_save, b"new save").map_err(|e| e.to_string())?;
+                        // A new attempt replans after the preview was presented.
+                        queue.cancel(&id).map_err(|e| e.to_string())?;
+                        queue.resume(&id).map_err(|e| e.to_string())?;
+                        *stage.borrow_mut() = (95, 0);
+                    }
+                }
+                95 => {
+                    if show_cleanup_task(&captured)?.is_some() {
+                        ui.invoke_action_requested("confirm-action".into());
+                        *stage.borrow_mut() = (96, 0);
+                    }
+                }
+                96 if !ui.get_operation_busy() => {
+                    let id = show_cleanup_task(&captured)?.ok_or("stale cleanup dialog resumed the queue")?;
+                    if !ui.get_toast().contains("Список файлов изменился")
+                        || fs::read(&cleanup_save).map_err(|e| e.to_string())? != b"new save" {
+                        return Err("stale cleanup dialog did not protect the new save".into());
+                    }
+                    ui.invoke_queue_action(id.into(), "confirm".into());
+                    ui.invoke_action_requested("confirm-action".into());
+                    *stage.borrow_mut() = (97, 0);
+                }
+                97 if !ui.get_operation_busy() => {
+                    let tasks = captured.borrow().services.queue.snapshot();
+                    let task = tasks.first().ok_or("cleanup task disappeared")?;
+                    match task.state {
+                        QueueState::Completed if !cleanup_save.exists() && cleanup_root.join(".version").is_file() => return Ok(true),
+                        QueueState::Waiting | QueueState::Running => {},
+                        _ => return Err(format!("fresh cleanup confirmation did not finish the expected install: {task:?}")),
+                    }
                 }
                 _ => {}
             }
@@ -794,7 +905,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
     // Loopback is deliberately not a trusted update origin: rejection must happen
     // before any HTTP request, while still clearing the stale release in the UI.
     assert!(!requests.iter().any(|p| p.contains("launcher/latest")));
-    assert!(!requests.iter().any(|p| p.contains("feedback/submit")));
+    assert!(!server.manual_feedback.load(Ordering::Relaxed));
 }
 
 #[test]
@@ -826,6 +937,32 @@ fn image_with_valid_header_and_corrupt_pixels_is_refetched_once() {
     assert_eq!((pixels.width(), pixels.height()), (64, 64));
     worker.join().unwrap();
     assert_eq!(fs::read(path).unwrap(), bytes);
+}
+
+fn refocus_stale_catalog(ui: &AppWindow, state: &State) {
+    let now = Instant::now();
+    {
+        let mut current = state.borrow_mut();
+        current.catalog_checked_at = now - Duration::from_secs(301);
+        current.last_activation = None;
+    }
+    controller::refresh_focused(ui, state, now);
+}
+
+fn show_cleanup_task(state: &State) -> Result<Option<String>, String> {
+    let tasks = state.borrow().services.queue.snapshot();
+    let task = tasks.first().ok_or("cleanup task disappeared")?;
+    match task.state {
+        QueueState::NeedsConfirmation => {
+            let id = task.id.clone();
+            // This fixture replaced the original queue during reset recovery.
+            // Deliver the replacement queue's current snapshot to the dialog.
+            state.borrow_mut().tasks = tasks;
+            Ok(Some(id))
+        }
+        QueueState::Waiting | QueueState::Running => Ok(None),
+        _ => Err(format!("unexpected cleanup task outcome: {task:?}")),
+    }
 }
 
 fn test_background_failure(ui: &AppWindow) {

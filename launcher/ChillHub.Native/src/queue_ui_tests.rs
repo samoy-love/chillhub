@@ -39,7 +39,7 @@ fn task() -> QueueItem {
         }),
         outcome: None,
         error: None,
-        cleanup_paths: vec![],
+        cleanup_files: vec![],
         report: Default::default(),
     }
 }

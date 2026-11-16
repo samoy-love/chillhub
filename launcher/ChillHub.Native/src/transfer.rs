@@ -1,5 +1,6 @@
 //! Content synchronization. A failed or cancelled transfer cannot publish a version marker.
 mod cleanup;
+pub use cleanup::CleanupFile;
 mod deferred;
 mod hash_cache;
 use crate::manifest::{self, DirectoryGuard, Manifest, ManifestFile, open_regular, safe_join};
@@ -40,7 +41,7 @@ pub enum TransferError {
     Protocol(String),
     Io(io::Error),
     AntivirusBlocked(String),
-    RebootRequired(String),
+    ReplacementDeferred(String),
     PendingReplacement,
     Busy,
     NoSpace {
@@ -48,7 +49,8 @@ pub enum TransferError {
         available: u64,
         required: u64,
     },
-    NeedsCleanupConfirmation(Vec<String>),
+    NeedsCleanupConfirmation(Vec<CleanupFile>),
+    CleanupConfirmationChanged,
 }
 impl fmt::Display for TransferError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -71,7 +73,7 @@ impl fmt::Display for TransferError {
                 f,
                 "Сначала завершите предыдущую загрузку для этой папки и повторите действие"
             ),
-            Self::RebootRequired(path) => write!(
+            Self::ReplacementDeferred(path) => write!(
                 f,
                 "Файл {path} занят. Закройте игру и повторите загрузку. Если это не поможет, перезагрузите компьютер: скачанный файл сохранён для замены."
             ),
@@ -89,6 +91,9 @@ impl fmt::Display for TransferError {
                 "Нужно подтвердить удаление лишних файлов ({})",
                 paths.len()
             ),
+            Self::CleanupConfirmationChanged => {
+                write!(f, "Список файлов изменился. Откройте подтверждение снова")
+            }
         }
     }
 }
@@ -127,7 +132,7 @@ pub struct TransferRequest {
     pub preserve_paths: Vec<String>,
     pub donor_roots: Vec<PathBuf>,
     pub force_rehash: bool,
-    pub approved_cleanup_paths: Vec<String>,
+    pub approved_cleanup_files: Vec<CleanupFile>,
     pub max_parallel: usize,
     pub bytes_per_second: u64,
     pub write_markers: bool,
@@ -147,7 +152,7 @@ impl Default for TransferRequest {
             preserve_paths: vec![],
             donor_roots: vec![],
             force_rehash: false,
-            approved_cleanup_paths: vec![],
+            approved_cleanup_files: vec![],
             max_parallel: 4,
             bytes_per_second: 0,
             write_markers: true,
@@ -186,7 +191,7 @@ pub struct TransferOutcome {
 pub struct TransferPlan {
     pub manifest: Manifest,
     pub downloads: Vec<ManifestFile>,
-    pub to_delete: Vec<String>,
+    pub to_delete: Vec<CleanupFile>,
     pub required_free_bytes: u64,
     pub total_download_bytes: u64,
     pub total_manifest_bytes: u64,
@@ -458,13 +463,16 @@ impl TransferEngine {
                 {
                     continue;
                 }
-                if path_in(&request.root, &path)?.is_file() {
-                    to_delete.push(path);
+                let candidate = path_in(&request.root, &path)?;
+                if candidate.is_file()
+                    && let Some(file) = cleanup::snapshot(&candidate, &path, control)?
+                {
+                    to_delete.push(file);
                 }
             }
         }
-        to_delete.sort_by_key(|p| p.to_lowercase());
-        to_delete.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        to_delete.sort_by(|a, b| a.path.cmp(&b.path));
+        to_delete.dedup_by(|a, b| a.path == b.path);
         let total_download_bytes: u64 = downloads.iter().map(|f| f.size).sum();
         let mut largest: Vec<_> = downloads.iter().map(|f| f.size).collect();
         largest.sort_unstable_by(|a, b| b.cmp(a));
@@ -530,14 +538,14 @@ impl TransferEngine {
         validate_request(request)?;
         // A UI may approve the same plan; changing roots/URLs/ownership requires a fresh plan.
         let mut approved = request.clone();
-        approved.approved_cleanup_paths = plan.request.approved_cleanup_paths.clone();
+        approved.approved_cleanup_files = plan.request.approved_cleanup_files.clone();
         if serde_json::to_vec(&approved).ok() != serde_json::to_vec(&plan.request).ok() {
             return Err(TransferError::InvalidManifest(
                 "request changed after planning".into(),
             ));
         }
         manifest::validate_manifest(&plan.manifest).map_err(TransferError::InvalidManifest)?;
-        if !cleanup::is_approved(&plan.to_delete, &request.approved_cleanup_paths) {
+        if !cleanup::is_approved(&plan.to_delete, &request.approved_cleanup_files) {
             return Err(TransferError::NeedsCleanupConfirmation(
                 plan.to_delete.clone(),
             ));
@@ -552,8 +560,8 @@ impl TransferEngine {
         for file in &plan.downloads {
             hashes.invalidate(&file.path);
         }
-        for path in &plan.to_delete {
-            hashes.invalidate(path);
+        for file in &plan.to_delete {
+            hashes.invalidate(&file.path);
         }
         hashes.save();
         let hashes = Mutex::new(hashes);
@@ -625,8 +633,10 @@ impl TransferEngine {
         let foreign = folded(&request.foreign_paths);
         let preserve = folded(&request.preserve_paths);
         let mut deleted = Vec::new();
-        for relative in &plan.to_delete {
+        let mut changed = Vec::new();
+        for file in &plan.to_delete {
             control.checkpoint()?;
+            let relative = &file.path;
             if manifest::is_service_path(relative)
                 || foreign.contains(&relative.to_lowercase())
                 || preserve.contains(&relative.to_lowercase())
@@ -634,11 +644,14 @@ impl TransferEngine {
                 continue;
             }
             let path = path_in(&request.root, relative)?;
-            let _parent = DirectoryGuard::acquire(path.parent().unwrap(), false)?;
-            if path.exists() {
-                remove_regular(&path)?;
-                deleted.push(path);
+            match cleanup::remove_approved(&path, file, control)? {
+                cleanup::CleanupResult::Removed => deleted.push(path),
+                cleanup::CleanupResult::Missing => {}
+                cleanup::CleanupResult::Changed(file) => changed.push(file),
             }
+        }
+        if !changed.is_empty() {
+            return Err(TransferError::NeedsCleanupConfirmation(changed));
         }
         for dir in &plan.manifest.empty_dirs {
             let path = path_in(&request.root, dir)?;
@@ -793,7 +806,7 @@ impl TransferEngine {
         open_regular(&part, true, false, false)?.sync_all()?;
         if let Err(error) = atomic_replace(&part, &destination) {
             if cfg!(windows) && deferred::is_locked(&error) {
-                return deferred::schedule(request, &part, file);
+                return deferred::save_pending(request, &part, file);
             }
             return Err(error);
         }
@@ -1331,7 +1344,7 @@ fn validate_request(request: &TransferRequest) -> Result<()> {
         .iter()
         .chain(&request.foreign_paths)
         .chain(&request.preserve_paths)
-        .chain(&request.approved_cleanup_paths)
+        .chain(request.approved_cleanup_files.iter().map(|file| &file.path))
     {
         manifest::validate_relative(path).map_err(TransferError::UnsafePath)?;
     }

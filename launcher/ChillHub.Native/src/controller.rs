@@ -9,7 +9,7 @@ use chillhub_native::{
     launch::{self, LaunchAction, LaunchOutcome, LaunchService},
     queue::{QueueEvent, QueueState},
     service,
-    transfer::TransferControl,
+    transfer::{CleanupFile, TransferControl},
     update::{self, UpdateCheck, UpdatePaths},
 };
 use settings::{
@@ -22,7 +22,7 @@ pub(super) enum Confirmation {
     Delete(GameRecord),
     DeleteOrphans(Vec<OrphanRow>),
     ChangeGamesFolder,
-    Cleanup(String),
+    Cleanup(String, Vec<CleanupFile>),
     ResetQueue,
     Version(GameRecord, LaunchTarget, String),
     Security(Vec<PathBuf>),
@@ -1776,10 +1776,10 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                     );
                     Ok("Локальная копия удалена".into())
                 }),
-                Some(Confirmation::Cleanup(id)) => operation(ui, state, move || {
+                Some(Confirmation::Cleanup(id, files)) => operation(ui, state, move || {
                     services
                         .queue
-                        .confirm_cleanup(&id)
+                        .confirm_cleanup(&id, &files)
                         .map(|_| "Задача продолжена".into())
                         .map_err(|e| e.to_string())
                 }),
@@ -2303,12 +2303,12 @@ pub(super) fn bind(ui: &AppWindow, state: &State) {
         if value == "confirm" {
             let task = state.borrow().tasks.iter().find(|t| t.id == id).cloned();
             if let Some(task) = task {
-                let more = task.cleanup_paths.len().saturating_sub(25);
+                let more = task.cleanup_files.len().saturating_sub(25);
                 let mut list = task
-                    .cleanup_paths
+                    .cleanup_files
                     .iter()
                     .take(25)
-                    .cloned()
+                    .map(|file| file.path.as_str())
                     .collect::<Vec<_>>()
                     .join("\n");
                 if more > 0 {
@@ -2317,7 +2317,7 @@ pub(super) fn bind(ui: &AppWindow, state: &State) {
                 confirm(
                     &ui,
                     &state,
-                    Confirmation::Cleanup(id),
+                    Confirmation::Cleanup(id, task.cleanup_files),
                     "Удалить лишние файлы?",
                     format!(
                         "В папке {} найдены файлы, которых нет в выбранной версии:\n\n{list}\n\nОни будут удалены. При необходимости сначала скопируйте свои сохранения и моды.",

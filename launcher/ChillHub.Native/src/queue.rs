@@ -1,7 +1,7 @@
 //! A single operation queue with durable intent and resumable file transfers.
 use crate::transfer::{
-    SyncScope, TransferControl, TransferEngine, TransferError, TransferEvent, TransferOutcome,
-    TransferRequest, atomic_write,
+    CleanupFile, SyncScope, TransferControl, TransferEngine, TransferError, TransferEvent,
+    TransferOutcome, TransferRequest, atomic_write,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -44,7 +44,8 @@ pub struct QueueItem {
     pub progress: Option<TransferEvent>,
     pub outcome: Option<TransferOutcome>,
     pub error: Option<String>,
-    pub cleanup_paths: Vec<String>,
+    #[serde(default)]
+    pub cleanup_files: Vec<CleanupFile>,
     #[serde(default)]
     pub report: QueueReport,
 }
@@ -100,7 +101,7 @@ impl QueueReport {
                 | TransferError::Busy
                 | TransferError::NoSpace { .. }
                 | TransferError::AntivirusBlocked(_)
-                | TransferError::RebootRequired(_)
+                | TransferError::ReplacementDeferred(_)
                 | TransferError::PendingReplacement
                 | TransferError::Cancelled
                 | TransferError::NeedsCleanupConfirmation(_)
@@ -112,7 +113,7 @@ impl QueueReport {
             }
             TransferError::NoSpace { .. } => Some("no_disk_space"),
             TransferError::AntivirusBlocked(_) => Some("sync_security_blocked"),
-            TransferError::RebootRequired(_) => Some("reboot_required"),
+            TransferError::ReplacementDeferred(_) => Some("replacement_deferred"),
             TransferError::PendingReplacement => Some("pending_replacement"),
             TransferError::Integrity(_) => Some("hash_mismatch"),
             TransferError::Io(_) => Some("sync_io"),
@@ -172,8 +173,10 @@ impl DownloadQueue {
             }
         };
         for item in &mut items {
-            item.request.approved_cleanup_paths.clear();
-            if !item.state.terminal() && item.state != QueueState::NeedsConfirmation {
+            item.request.approved_cleanup_files.clear();
+            if !item.state.terminal()
+                && (item.state != QueueState::NeedsConfirmation || item.cleanup_files.is_empty())
+            {
                 item.state = QueueState::Paused;
             }
         }
@@ -264,8 +267,11 @@ impl DownloadQueue {
         // Adopt that queue on pause rather than replace healthy work with [] .
         if let Ok(mut items) = read_items(&self.shared.path) {
             for item in &mut items {
-                item.request.approved_cleanup_paths.clear();
-                if !item.state.terminal() && item.state != QueueState::NeedsConfirmation {
+                item.request.approved_cleanup_files.clear();
+                if !item.state.terminal()
+                    && (item.state != QueueState::NeedsConfirmation
+                        || item.cleanup_files.is_empty())
+                {
                     item.state = QueueState::Paused;
                 }
             }
@@ -365,7 +371,7 @@ impl DownloadQueue {
             progress: None,
             outcome: None,
             error: None,
-            cleanup_paths: vec![],
+            cleanup_files: vec![],
             report: QueueReport::default(),
         });
         if let Err(e) = persist(&self.shared.path, &mut state) {
@@ -391,28 +397,41 @@ impl DownloadQueue {
             if let Some(active) = state.active.as_mut().filter(|a| a.id == id) {
                 if state.items[index].state == QueueState::Pausing {
                     active.requeue = true;
-                    state.items[index].request.approved_cleanup_paths.clear();
+                    state.items[index].request.approved_cleanup_files.clear();
                 }
             } else if matches!(
                 state.items[index].state,
                 QueueState::Paused | QueueState::Failed | QueueState::Cancelled
             ) {
                 state.items[index].state = QueueState::Waiting;
-                state.items[index].request.approved_cleanup_paths.clear();
+                state.items[index].request.approved_cleanup_files.clear();
                 state.items[index].error = None;
                 state.items[index].progress = None;
             }
         })
     }
-    pub fn confirm_cleanup(&self, id: &str) -> Result<(), TransferError> {
+    pub fn confirm_cleanup(
+        &self,
+        id: &str,
+        displayed: &[CleanupFile],
+    ) -> Result<(), TransferError> {
+        let mut confirmed = false;
         self.change(id, |state, index| {
-            if state.items[index].state == QueueState::NeedsConfirmation {
-                state.items[index].request.approved_cleanup_paths =
-                    state.items[index].cleanup_paths.clone();
-                state.items[index].state = QueueState::Waiting;
-                state.items[index].error = None;
+            let item = &mut state.items[index];
+            if item.state == QueueState::NeedsConfirmation
+                && !displayed.is_empty()
+                && item.cleanup_files == displayed
+            {
+                item.request.approved_cleanup_files = std::mem::take(&mut item.cleanup_files);
+                item.state = QueueState::Waiting;
+                item.error = None;
+                confirmed = true;
             }
-        })
+        })?;
+        if !confirmed {
+            return Err(TransferError::CleanupConfirmationChanged);
+        }
+        Ok(())
     }
     pub fn cancel(&self, id: &str) -> Result<(), TransferError> {
         self.change(id, |state, index| {
@@ -613,7 +632,7 @@ fn require_writable(state: &State) -> Result<(), TransferError> {
     }
 }
 fn clear_completed_paths(item: &mut QueueItem) {
-    item.request.approved_cleanup_paths = Vec::new();
+    item.request.approved_cleanup_files = Vec::new();
     item.request.previous_owned_paths = Vec::new();
     item.request.foreign_paths = Vec::new();
     item.request.preserve_paths = Vec::new();
@@ -632,7 +651,7 @@ fn compact_completed(items: &mut Vec<QueueItem>) {
         }
         clear_completed_paths(item);
         item.progress = None;
-        item.cleanup_paths = Vec::new();
+        item.cleanup_files = Vec::new();
         if remaining == 0 {
             return true;
         }
@@ -678,7 +697,7 @@ fn persist(path: &Path, state: &mut State) -> Result<(), TransferError> {
 fn publish_finished(state: &mut State, mut item: QueueItem) {
     // Terminal events keep outcome/progress for metrics, but not file inventories.
     clear_completed_paths(&mut item);
-    item.cleanup_paths = Vec::new();
+    item.cleanup_files = Vec::new();
     let event = QueueEvent::Finished(Box::new(item));
     state
         .subscribers
@@ -749,7 +768,7 @@ fn work(shared: Arc<Shared>, engine: TransferEngine) {
             let request = item.request.clone();
             // Consent belongs to this attempt only. A retry or automatic
             // requeue must not delete a file recreated under an approved name.
-            item.request.approved_cleanup_paths.clear();
+            item.request.approved_cleanup_files.clear();
             let control = TransferControl::default();
             if let Some(limit) = state.speed_limit {
                 control.set_speed_limit(limit);
@@ -827,36 +846,7 @@ fn work(shared: Arc<Shared>, engine: TransferEngine) {
         let mut finished = None;
         if let Some(item) = state.items.iter_mut().find(|i| i.id == id) {
             item.report.duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-            if let Err(error) = &result {
-                item.report.failure(error);
-            }
-            if stopping {
-                item.state = QueueState::Paused;
-            } else if requeue {
-                item.state = QueueState::Waiting;
-                item.error = None;
-            } else if item.state == QueueState::Pausing {
-                item.state = QueueState::Paused;
-            } else if item.state == QueueState::Cancelling {
-                item.state = QueueState::Cancelled;
-            } else {
-                match result {
-                    Ok(outcome) => {
-                        item.state = QueueState::Completed;
-                        item.outcome = Some(outcome);
-                        item.cleanup_paths.clear();
-                    }
-                    Err(TransferError::NeedsCleanupConfirmation(paths)) => {
-                        item.state = QueueState::NeedsConfirmation;
-                        item.cleanup_paths = paths;
-                    }
-                    Err(TransferError::Cancelled) => item.state = QueueState::Cancelled,
-                    Err(error) => {
-                        item.state = QueueState::Failed;
-                        item.error = Some(error.to_string());
-                    }
-                }
-            }
+            finish_attempt(item, result, stopping, requeue);
             if item.state.terminal() {
                 finished = Some(item.clone());
             }
@@ -864,6 +854,48 @@ fn work(shared: Arc<Shared>, engine: TransferEngine) {
         save_and_publish(&shared, &mut state);
         if let Some(item) = finished {
             publish_finished(&mut state, item);
+        }
+    }
+}
+
+fn finish_attempt(
+    item: &mut QueueItem,
+    result: Result<TransferOutcome, TransferError>,
+    stopping: bool,
+    requeue: bool,
+) {
+    let error = match result {
+        Ok(outcome) => {
+            // A successful transfer has already written its installation markers.
+            item.state = QueueState::Completed;
+            item.outcome = Some(outcome);
+            item.error = None;
+            item.cleanup_files.clear();
+            return;
+        }
+        Err(error) => error,
+    };
+    item.report.failure(&error);
+    if stopping {
+        item.state = QueueState::Paused;
+    } else if requeue {
+        item.state = QueueState::Waiting;
+        item.error = None;
+    } else if item.state == QueueState::Pausing {
+        item.state = QueueState::Paused;
+    } else if item.state == QueueState::Cancelling {
+        item.state = QueueState::Cancelled;
+    } else {
+        match error {
+            TransferError::NeedsCleanupConfirmation(paths) => {
+                item.state = QueueState::NeedsConfirmation;
+                item.cleanup_files = paths;
+            }
+            TransferError::Cancelled => item.state = QueueState::Cancelled,
+            error => {
+                item.state = QueueState::Failed;
+                item.error = Some(error.to_string());
+            }
         }
     }
 }

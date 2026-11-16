@@ -22,9 +22,14 @@ fn stage(
     root: &Path,
     part: &Path,
     file: &ManifestFile,
-    scheduler: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    inspect: impl FnOnce(&Path, &Path) -> io::Result<()>,
 ) -> Result<()> {
-    super::stage(&request(root), part, file, scheduler)
+    let result = super::save_pending(&request(root), part, file);
+    if matches!(result, Err(TransferError::ReplacementDeferred(_))) {
+        let entry: Entry = serde_json::from_slice(&fs::read(journal_path(root))?).unwrap();
+        inspect(&root.join(entry.payload), &root.join(&file.path))?;
+    }
+    result
 }
 fn recover(root: &Path, control: &TransferControl) -> Result<bool> {
     super::recover(&request(root), &expected().files, control)
@@ -43,7 +48,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, ManifestFile) {
     (temp, part, file)
 }
 #[test]
-fn scheduled_payload_is_unique_and_recovered_before_next_plan() {
+fn pending_payload_is_unique_and_recovered_before_next_plan() {
     let (temp, part, file) = fixture();
     let result = stage(temp.path(), &part, &file, |source, target| {
         assert_ne!(source, part);
@@ -51,7 +56,7 @@ fn scheduled_payload_is_unique_and_recovered_before_next_plan() {
         assert_eq!(target, temp.path().join("game.dll"));
         Ok(())
     });
-    assert!(matches!(result, Err(TransferError::RebootRequired(_))));
+    assert!(matches!(result, Err(TransferError::ReplacementDeferred(_))));
     assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
     recover(temp.path(), &TransferControl::default()).unwrap();
     assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"new");
@@ -59,18 +64,16 @@ fn scheduled_payload_is_unique_and_recovered_before_next_plan() {
     assert!(!part.exists());
 }
 #[test]
-fn denied_scheduler_restores_partial_and_does_not_report_success() {
+fn failed_pending_storage_preserves_partial_and_does_not_report_success() {
     let (temp, part, file) = fixture();
-    assert!(matches!(
-        stage(temp.path(), &part, &file, |_, _| Err(
-            io::Error::from_raw_os_error(5)
-        )),
-        Err(TransferError::Io(_))
-    ));
+    fs::write(temp.path().join(DIRECTORY), b"unexpected file").unwrap();
+    assert!(super::save_pending(&request(temp.path()), &part, &file).is_err());
     assert_eq!(fs::read(part).unwrap(), b"new");
     assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
-    recover(temp.path(), &TransferControl::default()).unwrap();
-    assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
+    assert_eq!(
+        fs::read(temp.path().join(DIRECTORY)).unwrap(),
+        b"unexpected file"
+    );
 }
 #[test]
 fn tampered_pending_payload_cannot_be_promoted() {
@@ -109,7 +112,28 @@ fn journal_path(root: &Path) -> PathBuf {
 }
 
 #[test]
-fn missing_payload_after_boot_leaves_destination_for_regular_verification() {
+fn large_optional_block_metadata_never_makes_our_recovery_journal_unreadable() {
+    let (temp, part, mut file) = fixture();
+    // Optional block signatures are opaque to whole-file verification. Use a
+    // bounded small payload to test the metadata boundary without a 3 GiB file.
+    file.blocks = Some("A".repeat(96 * 1024));
+    assert!(matches!(
+        stage(temp.path(), &part, &file, |_, _| Ok(())),
+        Err(TransferError::ReplacementDeferred(_))
+    ));
+    let journal = journal_path(temp.path());
+    let bytes = fs::read(&journal).unwrap();
+    assert!(bytes.len() < 64 * 1024);
+    let saved: Entry = serde_json::from_slice(&bytes).unwrap();
+    assert!(saved.file.blocks.is_none());
+    assert_eq!(file.blocks.as_ref().unwrap().len(), 96 * 1024);
+    assert!(recover(temp.path(), &TransferControl::default()).unwrap());
+    assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"new");
+    assert!(!journal.exists());
+}
+
+#[test]
+fn missing_payload_after_interruption_leaves_destination_for_regular_verification() {
     let (temp, part, file) = fixture();
     let mut saved = None;
     let _ = stage(temp.path(), &part, &file, |source, _| {
@@ -228,7 +252,7 @@ fn superseded_versions_and_digests_never_promote_old_payloads() {
             b"old",
             "{change}"
         );
-        // No source remains for an old registered boot move.
+        // Superseded verified bytes no longer occupy the pending cache.
         assert_eq!(
             fs::read_dir(temp.path().join(DIRECTORY)).unwrap().count(),
             0

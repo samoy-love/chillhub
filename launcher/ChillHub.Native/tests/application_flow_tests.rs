@@ -959,7 +959,7 @@ fn removing_completed_dependency_keeps_mods_runnable_but_removing_failed_one_doe
                 progress: None,
                 outcome: None,
                 error: None,
-                cleanup_paths: vec![],
+                cleanup_files: vec![],
                 report: Default::default(),
             },
             QueueItem {
@@ -978,7 +978,7 @@ fn removing_completed_dependency_keeps_mods_runnable_but_removing_failed_one_doe
                 progress: None,
                 outcome: None,
                 error: None,
-                cleanup_paths: vec![],
+                cleanup_files: vec![],
                 report: Default::default(),
             },
         ];

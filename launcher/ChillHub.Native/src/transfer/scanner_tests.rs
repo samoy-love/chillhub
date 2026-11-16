@@ -99,6 +99,108 @@ fn blocks(bytes: &[u8]) -> Blocks {
 }
 
 #[test]
+fn resumed_partial_retains_only_complete_verified_prefix_including_short_tail() {
+    let temp = tempfile::tempdir().unwrap();
+    let part = temp.path().join("game.bin.part");
+    let wanted: Vec<u8> = (0..BLOCK * 2 + 17)
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let block_map = blocks(&wanted);
+    for (length, good) in [
+        (0, 0),
+        (BLOCK - 1, 0),
+        (BLOCK, 1),
+        (BLOCK + 7, 1),
+        (BLOCK * 2, 2),
+        (wanted.len() - 1, 2),
+        (wanted.len(), 3),
+    ] {
+        fs::write(&part, &wanted[..length]).unwrap();
+        assert_eq!(
+            block_map
+                .verify_prefix(&part, &TransferControl::default())
+                .unwrap(),
+            good,
+            "partial length {length}"
+        );
+        assert_eq!(
+            fs::read(&part).unwrap(),
+            wanted[..block_map.offset(good) as usize]
+        );
+    }
+    let mut overlong = wanted.clone();
+    overlong.extend_from_slice(b"unverified suffix");
+    fs::write(&part, overlong).unwrap();
+    assert_eq!(
+        block_map
+            .verify_prefix(&part, &TransferControl::default())
+            .unwrap(),
+        3
+    );
+    assert_eq!(fs::read(&part).unwrap(), wanted);
+
+    for (corrupt_at, good) in [(0, 0), (BLOCK + 5, 1), (BLOCK * 2 + 3, 2)] {
+        let mut corrupt = wanted.clone();
+        corrupt[corrupt_at] ^= 0xff;
+        fs::write(&part, corrupt).unwrap();
+        assert_eq!(
+            block_map
+                .verify_prefix(&part, &TransferControl::default())
+                .unwrap(),
+            good
+        );
+        assert_eq!(
+            fs::read(&part).unwrap(),
+            wanted[..block_map.offset(good) as usize]
+        );
+    }
+}
+
+#[test]
+fn prefix_verification_never_creates_missing_file_or_truncates_on_cancel() {
+    let temp = tempfile::tempdir().unwrap();
+    let part = temp.path().join("game.bin.part");
+    let bytes = vec![0x52; BLOCK * 2 + 17];
+    let block_map = blocks(&bytes);
+    assert_eq!(
+        block_map
+            .verify_prefix(&part, &TransferControl::default())
+            .unwrap(),
+        0
+    );
+    assert!(!part.exists());
+    let mut corrupt = bytes;
+    corrupt[BLOCK] ^= 0xff;
+    fs::write(&part, &corrupt).unwrap();
+    let cancelled = TransferControl::default();
+    cancelled.cancel();
+    assert!(matches!(
+        block_map.verify_prefix(&part, &cancelled),
+        Err(TransferError::Cancelled)
+    ));
+    assert_eq!(fs::read(&part).unwrap(), corrupt);
+}
+
+#[cfg(windows)]
+#[test]
+fn prefix_repair_rejects_hard_link_before_truncating_external_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_file = temp.path().join("user-save.bin");
+    let part = temp.path().join("game.bin.part");
+    let saved = b"user-owned data that does not match a game block";
+    fs::write(&user_file, saved).unwrap();
+    fs::hard_link(&user_file, &part).unwrap();
+    let block_map = blocks(&vec![0x33; BLOCK * 2]);
+    assert!(
+        block_map
+            .verify_prefix(&part, &TransferControl::default())
+            .is_err()
+    );
+    assert_eq!(fs::read(&user_file).unwrap(), saved);
+    assert_eq!(fs::read(&part).unwrap(), saved);
+}
+
+#[test]
 fn repeated_blocks_are_resolved_as_one_group_and_scan_finishes_early() {
     let temp = tempfile::tempdir().unwrap();
     let old = temp.path().join("old.bin");
