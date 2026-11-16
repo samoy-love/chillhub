@@ -5,7 +5,6 @@ use chillhub_native::{
     update,
 };
 use slint::ComponentHandle;
-use std::path::PathBuf;
 
 fn main() -> Result<(), String> {
     if std::env::args().nth(1).as_deref() == Some("--setup-ui") {
@@ -46,6 +45,11 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     helper_runtime::select_renderer()?;
     let ui = AuxiliaryWindow::new().map_err(|e| e.to_string())?;
     helper_runtime::style_window(ui.window());
+    start(&ui, std::env::args().skip(1).collect(), log);
+    ui.run().map_err(|e| e.to_string())
+}
+
+fn start(ui: &AuxiliaryWindow, args: Vec<String>, log: Result<HelperLog, String>) {
     ui.set_window_title("Обновление · Chill Hub".into());
     ui.set_heading("Обновление Chill Hub".into());
     ui.set_subtitle("Обновляем лаунчер. Игры и настройки сохранятся.".into());
@@ -69,15 +73,11 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     ui.on_close_requested(|| {
         let _ = slint::quit_event_loop();
     });
-    let args: Vec<_> = std::env::args().skip(1).collect();
     let weak = ui.as_weak();
     let worker_log = log.clone();
     let spawn = std::thread::Builder::new().name("chillhub-update".into()).spawn(move || {
         let result = helper_runtime::caught(|| {
-            if args.len() != 4 || args[0] != "--job" || args[2] != "--sha256" {
-                return Err("Обновление запускается из лаунчера. Откройте Chill Hub и проверьте обновления.".to_owned());
-            }
-            let job = update::read_job(&PathBuf::from(&args[1]), &args[3])?;
+            let job = update::job_from_args(&args)?;
             let recovery = job.mode == update::UpdateMode::Recovery;
             let details = if recovery {
                 format!("Восстанавливаем версию {} из резервной копии. Настройки и игры сохранятся.", job.staged.current_version)
@@ -109,44 +109,13 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     });
     if let Err(error) = spawn {
         finish(
-            &ui,
+            ui,
             Err(format!("Не удалось начать обновление: {error}")),
             &log,
         );
     }
-    ui.run().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn update_failure_unlocks_window_and_points_to_actual_log() {
-        i_slint_backend_testing::init_integration_test_with_system_time();
-        let temp = tempfile::tempdir().unwrap();
-        let log = HelperLog::in_directory(temp.path(), HelperKind::Updater).unwrap();
-        let ui = AuxiliaryWindow::new().unwrap();
-        ui.set_busy(true);
-        ui.set_can_close(false);
-        finish(
-            &ui,
-            Err("fixture: invalid update job".into()),
-            &Ok(log.clone()),
-        );
-        assert!(!ui.get_busy());
-        assert!(ui.get_can_close());
-        assert!(ui.get_details().contains("invalid update job"));
-        assert!(ui.get_status().contains(log.path().to_str().unwrap()));
-        assert!(
-            std::fs::read_to_string(log.path())
-                .unwrap()
-                .contains("invalid update job")
-        );
-        finish(
-            &ui,
-            Err("fixture error".into()),
-            &Err("fixture log unavailable".into()),
-        );
-        assert!(ui.get_status().contains("Журнал недоступен"));
-    }
-}
+#[path = "tests/updater_tests.rs"]
+mod tests;

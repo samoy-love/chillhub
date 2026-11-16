@@ -8,7 +8,9 @@ runs:
   using: composite
   steps:
     - shell: pwsh
-      run: ./scripts/ci/ensure-native-rust.ps1
+      env:
+        CACHE_SCOPE: ${{ inputs.cache-scope }}
+      run: ./scripts/ci/ensure-native-rust.ps1 -Coverage:($env:CACHE_SCOPE -eq 'coverage')
     - id: paths
       shell: pwsh
       env:
@@ -23,7 +25,7 @@ runs:
         path: |
           ${{ steps.paths.outputs.target }}
           ${{ steps.paths.outputs.registry }}
-        key: native-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ inputs.cache-scope }}-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-${{ hashFiles('launcher/ChillHub.Native/src/**', 'launcher/ChillHub.Native/ui/**', 'launcher/ChillHub.Native/tests/**', 'launcher/ChillHub.Native/vendor/**', 'launcher/ChillHub.Native/build.rs', 'launcher/ChillHub.Native/Cargo.toml') }}
+        key: native-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ inputs.cache-scope }}-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-${{ hashFiles('launcher/ChillHub.Native/src/**', 'launcher/ChillHub.Native/ui/**', 'launcher/ChillHub.Native/tests/**', 'launcher/ChillHub.Native/vendor/**', 'launcher/ChillHub.Native/build.rs', 'launcher/ChillHub.Native/Cargo.toml') }}
         restore-keys: |
-          native-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ inputs.cache-scope }}-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-
-          native-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ inputs.cache-scope }}-
+          native-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ inputs.cache-scope }}-${{ hashFiles('launcher/ChillHub.Native/Cargo.lock') }}-
+          native-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ inputs.cache-scope }}-

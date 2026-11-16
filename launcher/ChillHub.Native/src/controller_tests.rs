@@ -466,7 +466,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     // The event loop must survive a hidden last window (tray use).
                     ui.show().map_err(|e| e.to_string())?;
                     if ui.get_game_title() != "Без дополнений" { return Err("virtual window lost state while hidden".into()); }
-                    controller::test_background_failure(&ui);
+                    test_background_failure(&ui);
                     *stage.borrow_mut() = (8, 0);
                 }
                 8 if !ui.get_operation_busy() => {
@@ -532,8 +532,16 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     if ui.get_can_play()||ui.get_play_label()!="В очереди" {
                         return Err("paused queue task became invisible through a filesystem alias".into());
                     }
+                    ui.invoke_action_requested("delete-game".into());
+                    if ui.get_panel_kind() != "confirm" || !ui.get_panel_body().contains("plain") {
+                        return Err("delete action did not name the selected local copy".into());
+                    }
+                    ui.invoke_action_requested("cancel-action".into());
+                    if captured.borrow().pending.is_some() || !ui.get_panel_kind().is_empty() {
+                        return Err("cancelling deletion retained a pending action".into());
+                    }
                     ui.set_panel_kind("gallery".into());
-                    controller::test_empty_catalog(&ui, &captured);
+                    test_empty_catalog(&ui, &captured);
                     if !ui.get_panel_kind().is_empty() || !ui.get_game_title().is_empty() || ui.get_can_play() {
                         return Err("empty live catalog retained a stale game or gallery".into());
                     }
@@ -631,6 +639,105 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     {
                         return Err("the gallery did not return from the second video to the image".into());
                     }
+                    captured.borrow_mut().launching.insert(("fixture".into(), false));
+                    for action in ["update-install", "update-verify"] {
+                        ui.invoke_action_requested(action.into());
+                        if ui.get_operation_busy() || !ui.get_toast().contains("Дождитесь запуска") {
+                            return Err("an update could interrupt a pending game launch".into());
+                        }
+                    }
+                    captured.borrow_mut().launching.clear();
+                    ui.invoke_action_requested("update-verify".into());
+                    if ui.get_operation_busy() || !ui.get_toast().contains("Сначала проверьте") {
+                        return Err("verification accepted a missing release".into());
+                    }
+                    captured.borrow_mut().update = Some(chillhub_native::update::UpdateRelease {
+                        version: "99.0.0".into(),
+                        manifest_url: "http://127.0.0.1:1/invalid.json".into(),
+                        content_base_url: "http://127.0.0.1:1/files/".into(),
+                    });
+                    ui.invoke_action_requested("update-verify".into());
+                    *stage.borrow_mut() = (86, 0);
+                }
+                86 if !ui.get_operation_busy() => {
+                    if !ui.get_update_error() || ui.get_task_status().is_empty() {
+                        return Err("verification did not surface an unsafe update origin".into());
+                    }
+                    ui.invoke_action_requested("update-install".into());
+                    *stage.borrow_mut() = (87, 0);
+                }
+                87 if !ui.get_operation_busy() => {
+                    if !ui.get_update_error() || !ui.get_task_status().contains("Проверить установку") {
+                        return Err("failed update did not offer an installation check".into());
+                    }
+                    ui.invoke_panel_closed();
+                    ui.invoke_panel_requested("settings".into());
+                    ui.set_settings_speed(4);
+                    ui.invoke_settings_live_changed();
+                    *stage.borrow_mut() = (88, 0);
+                }
+                88 if ui.get_settings_save_status() == "Сохранено" => {
+                    let saved = captured.borrow().services.config.load()?;
+                    if saved.speed_limit_mbps != 4 || saved.download_threads != 5 || saved.games_path != original_games {
+                        return Err("saving a live setting changed an unrelated preference".into());
+                    }
+                    ui.invoke_settings_leave("feedback".into());
+                    if ui.get_panel_kind() != "feedback" {
+                        return Err("saving settings did not open the requested panel".into());
+                    }
+                    ui.invoke_feedback_send("".into(), "".into(), "bug".into(), "".into(), false);
+                    *stage.borrow_mut() = (89, 0);
+                }
+                89 if !ui.get_operation_busy() => {
+                    if ui.get_panel_kind() != "feedback" || ui.get_toast().is_empty() {
+                        return Err("invalid feedback cleared the user's form or hid the error".into());
+                    }
+                    let now = Instant::now();
+                    captured.borrow_mut().catalog_checked_at = now - Duration::from_secs(301);
+                    controller::refresh_focused(&ui, &captured, now);
+                    if captured.borrow().catalog_poll_inflight {
+                        return Err("background refresh could replace a visible draft".into());
+                    }
+                    ui.invoke_panel_closed();
+                    controller::refresh_focused(&ui, &captured, now + Duration::from_secs(1));
+                    if captured.borrow().catalog_poll_inflight {
+                        return Err("repeated focus event bypassed the refresh interval".into());
+                    }
+                    controller::refresh_focused(&ui, &captured, now + Duration::from_secs(11));
+                    if !captured.borrow().catalog_poll_inflight {
+                        return Err("focus did not refresh the stale catalog".into());
+                    }
+                    *stage.borrow_mut() = (90, 0);
+                }
+                90 if !captured.borrow().catalog_poll_inflight => {
+                    if captured.borrow().records.len() != 2 || captured.borrow().offline {
+                        return Err("quiet refresh did not apply the new catalog".into());
+                    }
+                    let queue_path = captured.borrow().services.paths.data_dir.join("controller-recovery.json");
+                    let corrupt = b"{fixture unreadable queue";
+                    fs::write(&queue_path, corrupt).map_err(|error| error.to_string())?;
+                    let broken = Arc::new(chillhub_native::queue::DownloadQueue::new(queue_path.clone()).map_err(|error| error.to_string())?);
+                    let previous = std::mem::replace(&mut captured.borrow_mut().services.queue, broken);
+                    previous.shutdown();
+                    ui.invoke_panel_requested("downloads".into());
+                    ui.invoke_queue_action("".into(), "reset".into());
+                    if ui.get_panel_kind() != "confirm" || !ui.get_panel_title().contains("очередь") {
+                        return Err("resetting an unreadable queue did not ask for confirmation".into());
+                    }
+                    ui.invoke_action_requested("cancel-action".into());
+                    if fs::read(&queue_path).map_err(|error| error.to_string())? != corrupt {
+                        return Err("cancelled reset modified the saved queue".into());
+                    }
+                    ui.invoke_queue_action("".into(), "reset".into());
+                    ui.invoke_action_requested("confirm-action".into());
+                    *stage.borrow_mut() = (91, 0);
+                }
+                91 if !ui.get_operation_busy() => {
+                    let queue = captured.borrow().services.queue.clone();
+                    if queue.recovery_error().is_some() || !queue.snapshot().is_empty()
+                        || ui.get_toast() != "Очередь загрузок восстановлена" {
+                        return Err("confirmed queue reset did not recover an empty queue".into());
+                    }
                     return Ok(true);
                 }
                 _ => {}
@@ -719,4 +826,31 @@ fn image_with_valid_header_and_corrupt_pixels_is_refetched_once() {
     assert_eq!((pixels.width(), pixels.height()), (64, 64));
     worker.join().unwrap();
     assert_eq!(fs::read(path).unwrap(), bytes);
+}
+
+fn test_background_failure(ui: &AppWindow) {
+    ui.set_operation_busy(true);
+    controller::background_for(
+        ui,
+        controller::Activity::Operation,
+        || panic!("controlled worker failure"),
+        |_, _, _: ()| unreachable!(),
+    );
+}
+fn test_empty_catalog(ui: &AppWindow, state: &State) {
+    let generation = state.borrow().catalog_generation;
+    controller::apply_catalog(
+        ui,
+        state,
+        generation,
+        Ok((
+            chillhub_native::net::CatalogSnapshot {
+                library: Default::default(),
+                offline: false,
+                fetched_at: String::new(),
+                warning: None,
+            },
+            vec![],
+        )),
+    );
 }

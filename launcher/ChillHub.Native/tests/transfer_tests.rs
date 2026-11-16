@@ -190,7 +190,7 @@ impl Server {
             root: root.path().join("game"),
             manifest_url: format!("{}/manifest", self.base),
             content_base_url: format!("{}/content", self.base),
-            allow_cleanup: true,
+            approved_cleanup_paths: vec![],
             max_parallel: 2,
             ..Default::default()
         }
@@ -361,10 +361,12 @@ fn wrong_content_range_never_promotes_or_deletes_existing_files() {
     fs::write(root.path().join("game/game.bin.part"), &bytes[..4000]).unwrap();
     fs::write(root.path().join("game/extra.sav"), b"save").unwrap();
     fs::write(root.path().join("game/.version"), b"1").unwrap();
+    let mut request = server.request(&root);
+    request.approved_cleanup_paths = vec!["extra.sav".into()];
     assert!(
         TransferEngine::new()
             .unwrap()
-            .run(&server.request(&root), &TransferControl::default(), &|_| {})
+            .run(&request, &TransferControl::default(), &|_| {})
             .is_err()
     );
     assert!(!root.path().join("game/game.bin").exists());
@@ -467,7 +469,7 @@ fn cleanup_requires_confirmation_and_preserves_foreign_and_service_files() {
     fs::create_dir(root.path().join("game/freetp")).unwrap();
     fs::write(root.path().join("game/freetp/.hash"), b"keep").unwrap();
     let mut request = server.request(&root);
-    request.allow_cleanup = false;
+    request.approved_cleanup_paths.clear();
     request.foreign_paths = vec!["mod.dll".into()];
     let engine = TransferEngine::new().unwrap();
     let result = engine.run(&request, &TransferControl::default(), &|_| {});
@@ -476,7 +478,7 @@ fn cleanup_requires_confirmation_and_preserves_foreign_and_service_files() {
     );
     assert!(!root.path().join("game/game.bin").exists());
     assert!(!root.path().join("game/.updating").exists());
-    request.allow_cleanup = true;
+    request.approved_cleanup_paths = vec!["old.bin".into()];
     engine
         .run(&request, &TransferControl::default(), &|_| {})
         .unwrap();
@@ -506,6 +508,7 @@ fn modpack_cleanup_owns_only_previous_manifest_and_uses_verified_donor() {
     let mut request = server.request(&root);
     request.scope = SyncScope::OwnFilesOnly;
     request.previous_owned_paths = vec!["oldmod.dll".into()];
+    request.approved_cleanup_paths = vec!["oldmod.dll".into()];
     request.donor_roots = vec![donor.path().to_owned()];
     request.preserve_paths = vec!["doorstop_config.ini".into()];
     let outcome = TransferEngine::new()
@@ -519,6 +522,88 @@ fn modpack_cleanup_owns_only_previous_manifest_and_uses_verified_donor() {
     assert!(!root.path().join("game/oldmod.dll").exists());
     assert!(root.path().join("game/.mods.manifest.json").exists());
     assert!(!root.path().join("game/.version").exists());
+}
+
+#[test]
+fn cleanup_consent_cannot_expand_when_the_queue_replans_or_restarts() {
+    let bytes = data(100);
+    let server = Server::start(manifest(&bytes), bytes, Behavior::Normal);
+    let root = TempDir::new().unwrap();
+    prepare(&root);
+    fs::write(root.path().join("game/old-extra.txt"), b"old").unwrap();
+    let state_file = root.path().join("queue.json");
+    let queue = DownloadQueue::new(&state_file).unwrap();
+    let id = queue.enqueue(server.request(&root)).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
+    assert_eq!(queue.snapshot()[0].cleanup_paths, vec!["old-extra.txt"]);
+    fs::write(root.path().join("game/new-save.txt"), b"new save").unwrap();
+    queue.confirm_cleanup(&id).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
+    assert!(root.path().join("game/old-extra.txt").exists());
+    assert_eq!(
+        fs::read(root.path().join("game/new-save.txt")).unwrap(),
+        b"new save"
+    );
+    assert_eq!(
+        queue.snapshot()[0].cleanup_paths,
+        vec!["new-save.txt", "old-extra.txt"]
+    );
+    queue.shutdown();
+    drop(queue);
+    let restored = DownloadQueue::new(&state_file).unwrap();
+    fs::write(root.path().join("game/third-save.txt"), b"third").unwrap();
+    restored.confirm_cleanup(&id).unwrap();
+    wait_until(|| restored.snapshot()[0].state == QueueState::NeedsConfirmation);
+    assert_eq!(
+        fs::read(root.path().join("game/third-save.txt")).unwrap(),
+        b"third"
+    );
+    restored.confirm_cleanup(&id).unwrap();
+    wait_until(|| restored.snapshot()[0].state == QueueState::Completed);
+    assert!(!root.path().join("game/old-extra.txt").exists());
+    assert!(!root.path().join("game/new-save.txt").exists());
+    assert!(!root.path().join("game/third-save.txt").exists());
+}
+
+#[test]
+fn legacy_unbounded_cleanup_flag_never_authorizes_a_new_deletion() {
+    let mut value = serde_json::to_value(TransferRequest::default()).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("approved_cleanup_paths");
+    value["allow_cleanup"] = true.into();
+    let request: TransferRequest = serde_json::from_value(value).unwrap();
+    assert!(request.approved_cleanup_paths.is_empty());
+}
+
+#[test]
+fn a_failed_attempt_cannot_reuse_consent_for_a_recreated_save() {
+    let bytes = data(100);
+    let server = Server::start(manifest(&bytes), bytes, Behavior::Corrupt);
+    let root = TempDir::new().unwrap();
+    prepare(&root);
+    let save = root.path().join("game/save.dat");
+    fs::write(&save, b"old save").unwrap();
+    let queue = DownloadQueue::new(root.path().join("queue.json")).unwrap();
+    let id = queue.enqueue(server.request(&root)).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
+    queue.confirm_cleanup(&id).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::Failed);
+    assert!(
+        queue.snapshot()[0]
+            .request
+            .approved_cleanup_paths
+            .is_empty()
+    );
+    fs::write(&save, b"new save from another game session").unwrap();
+    queue.resume(&id).unwrap();
+    wait_until(|| queue.snapshot()[0].state == QueueState::NeedsConfirmation);
+    assert_eq!(
+        fs::read(save).unwrap(),
+        b"new save from another game session"
+    );
+    queue.shutdown();
 }
 
 #[test]

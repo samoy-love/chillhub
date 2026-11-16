@@ -123,3 +123,7 @@ stage-*/
 # Инструменты сборки, которые скрипты добывают сами (портативный NSIS —
 # см. scripts/ci/ensure-nsis.ps1). В CI этот каталог кэшируется.
 .tools/
+
+# LLVM instrumentation produced by coverage and mutation diagnostics
+*.profraw
+*.profdata

@@ -1,16 +1,25 @@
+mod doorstop;
+mod loader_session;
+mod steam_handoff;
+pub use doorstop::{doorstop_config_valid, set_doorstop_enabled};
+
 use crate::{
     config::{ConfigStore, LaunchTarget},
+    diagnostics,
     model::{GameRecord, ModsRecord},
     paths::{AppPaths, atomic_write, contained_path, relative_path, validate_game_id},
     playtime::{PlaytimeStore, ProcessIdentity, SessionHandle, processes_in},
 };
+use loader_session::LaunchLocks;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::mpsc::{self, Receiver},
     time::{Duration, Instant},
 };
+use steam_handoff::{SteamWait, find_game_process, wait_for_game};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SteamLookup {
@@ -447,88 +456,6 @@ fn is_exe(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
 }
 
-/// Existing self-managed loader settings are preserved only while usable. The
-/// enabled flag intentionally differs from the published hash between sessions.
-pub fn doorstop_config_valid(root: &Path) -> bool {
-    let Ok(path) = contained_path(root, Path::new("doorstop_config.ini")) else {
-        return false;
-    };
-    let Ok(bytes) = read_limited(&path, 256 * 1024) else {
-        return false;
-    };
-    let Ok(text) = String::from_utf8(bytes) else {
-        return false;
-    };
-    text.lines()
-        .find_map(|line| {
-            let line = line.trim_start_matches('\u{feff}').trim_start();
-            if line.starts_with([';', '#', '[']) {
-                return None;
-            }
-            let (key, value) = line.split_once('=')?;
-            if !key.trim().eq_ignore_ascii_case("enabled") {
-                return None;
-            }
-            let value = value.split([';', '#']).next().unwrap_or_default().trim();
-            Some(value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false"))
-        })
-        .unwrap_or(false)
-}
-
-pub fn set_doorstop_enabled(root: &Path, enabled: bool) -> Result<(), String> {
-    let path = contained_path(root, Path::new("doorstop_config.ini"))?;
-    if !path.exists() {
-        return if enabled {
-            Err("Загрузчик модов не установлен".into())
-        } else {
-            Ok(())
-        };
-    }
-    let bytes = read_limited(&path, 256 * 1024)?;
-    let text =
-        String::from_utf8(bytes).map_err(|_| "Не удалось прочитать настройки загрузчика модов")?;
-    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut found = false;
-    let mut output = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim_start_matches('\u{feff}').trim_start();
-        if !found
-            && !trimmed.starts_with([';', '#', '['])
-            && let Some((key, value)) = trimmed.split_once('=')
-            && key.trim().eq_ignore_ascii_case("enabled")
-        {
-            let eq = line.find('=').unwrap();
-            let padding = value.len() - value.trim_start_matches([' ', '\t']).len();
-            let comment = value
-                .find([';', '#'])
-                .map(|i| format!(" {}", value[i..].trim_end()))
-                .unwrap_or_default();
-            output.push(format!(
-                "{}{}{}{comment}",
-                &line[..=eq],
-                &value[..padding],
-                if enabled { "true" } else { "false" }
-            ));
-            found = true;
-            continue;
-        }
-        output.push(line.to_owned());
-    }
-    if !found {
-        return Err(
-            "В настройках загрузчика модов нет параметра enabled. Восстановите моды".into(),
-        );
-    }
-    let mut rewritten = output.join(newline);
-    if text.ends_with('\n') {
-        rewritten.push_str(newline);
-    }
-    if rewritten != text {
-        atomic_write(&path, rewritten.as_bytes()).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 #[derive(Clone, Debug)]
 pub struct LaunchPlan {
     pub game_id: String,
@@ -538,6 +465,15 @@ pub struct LaunchPlan {
     pub working_directory: PathBuf,
     pub game_directory: PathBuf,
     pub game_executable: PathBuf,
+}
+
+#[derive(Debug)]
+pub enum LaunchOutcome {
+    Started(SessionHandle),
+    SteamPending {
+        warning: &'static str,
+        late_session: Receiver<SessionHandle>,
+    },
 }
 
 #[derive(Clone)]
@@ -615,10 +551,14 @@ impl LaunchService {
         })
     }
 
-    /// Blocking: invoke on a worker. Steam startup can take up to three minutes.
-    pub fn launch(&self, game: &GameRecord, target: LaunchTarget) -> Result<SessionHandle, String> {
+    pub fn recover_loader_sessions(&self) -> Result<(), String> {
+        loader_session::recover_loader_sessions(&self.paths.data_dir)
+    }
+
+    /// Blocking: invoke on a worker. A slow Steam handoff continues in the background.
+    pub fn launch(&self, game: &GameRecord, target: LaunchTarget) -> Result<LaunchOutcome, String> {
         let plan = self.plan(game, target)?;
-        self.execute_plan(game, target, plan)
+        self.execute_plan(plan, SteamWait::default())
     }
     pub fn launch_shortcut(&self, request: &ShortcutRequest) -> Result<SessionHandle, String> {
         let executable = request.allowed_fallback(&self.paths)?;
@@ -647,142 +587,164 @@ impl LaunchService {
             game_directory: directory,
             game_executable: executable,
         };
-        let game = GameRecord {
-            game_id: request.game_id.clone(),
-            title: request.title.clone(),
-            ..Default::default()
-        };
-        self.execute_plan(&game, target, plan)
+        match self.execute_plan(plan, SteamWait::default())? {
+            LaunchOutcome::Started(session) => Ok(session),
+            LaunchOutcome::SteamPending { .. } => unreachable!("Steam shortcuts are checked above"),
+        }
     }
+
     fn execute_plan(
         &self,
-        game: &GameRecord,
-        target: LaunchTarget,
         plan: LaunchPlan,
-    ) -> Result<SessionHandle, String> {
-        let lock_dir = self.paths.data_dir.join("launch-locks");
-        fs::create_dir_all(&lock_dir).map_err(|e| e.to_string())?;
-        let canonical = fs::canonicalize(&plan.game_directory).map_err(|e| e.to_string())?;
-        let key = blake3::hash(canonical.to_string_lossy().to_lowercase().as_bytes()).to_hex();
-        let lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(lock_dir.join(format!("{key}.lock")))
-            .map_err(|e| e.to_string())?;
-        fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| "Игра уже запускается или запущена")?;
-        let operation_lock_path =
-            contained_path(&plan.game_directory, Path::new(".chillhub.lock"))?;
-        let operation_lock = if operation_lock_path.exists() {
-            Some(
-                fs::OpenOptions::new()
-                    .read(true)
-                    .open(&operation_lock_path)
-                    .map_err(|e| e.to_string())?,
-            )
-        } else {
-            match fs::OpenOptions::new()
-                .create_new(true)
-                .read(true)
-                .write(true)
-                .open(&operation_lock_path)
-            {
-                Ok(file) => Some(file),
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::PermissionDenied
-                        && !target.modded()
-                        && !plan.game_directory.join("doorstop_config.ini").exists() =>
-                {
-                    None
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "Не удалось защитить файлы игры на время запуска: {e}"
-                    ));
-                }
-            }
-        };
-        if let Some(file) = &operation_lock {
-            fs2::FileExt::try_lock_exclusive(file)
-                .map_err(|_| "Файлы игры сейчас обновляются или игра уже запущена")?;
-        }
+        steam_wait: SteamWait,
+    ) -> Result<LaunchOutcome, String> {
+        let target = plan.target;
+        let locks =
+            LaunchLocks::acquire(&self.paths.data_dir, &plan.game_directory, !target.modded())?;
         if plan.game_directory.join(".updating").exists() {
             return Err("Обновление не завершено. Восстановите игру".into());
         }
         if !processes_in(&plan.game_directory)?.is_empty() {
             return Err("Игра уже запущена. Закройте её перед сменой режима".into());
         }
-        self.playtime.recover_commit()?;
-        self.playtime.reconcile()?;
-        set_doorstop_enabled(&plan.game_directory, target.modded())?;
-        let started = (|| {
-            self.config.update(|c| {
-                c.remember(&game.game_id, target);
-                c.last_game_id = game.game_id.clone();
-            })?;
-            let child = Command::new(&plan.executable)
-                .args(&plan.arguments)
-                .current_dir(&plan.working_directory)
-                .spawn()
-                .map_err(|e| format!("Не удалось запустить игру: {e}"))?;
-            let process = if target.via_steam() {
-                drop(child);
-                let deadline = Instant::now() + Duration::from_secs(180);
-                loop {
-                    if let Some(process) = processes_in(&plan.game_directory)?
-                        .into_iter()
-                        .find(|p| path_equal(&p.exe_path, &plan.game_executable))
-                    {
-                        break process;
-                    }
-                    if Instant::now() >= deadline {
-                        return Err(
-                            "Steam не запустил игру. Проверьте окно Steam и попробуйте снова"
-                                .into(),
-                        );
-                    }
-                    std::thread::sleep(Duration::from_secs(1));
+        let accounting_error = self.playtime.reconcile_for_launch(target)?;
+        let steam_start = Instant::now();
+        let wait_until = target
+            .via_steam()
+            .then(|| chrono::Utc::now() + (steam_wait.report_after + steam_wait.watch_after));
+        locks.prepare_loader(target.modded(), wait_until)?;
+        let mut child = match Command::new(&plan.executable)
+            .args(&plan.arguments)
+            .current_dir(&plan.working_directory)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                self.restore_session_loader(&locks, target);
+                return Err(format!("Не удалось запустить игру: {error}"));
+            }
+        };
+        if !target.via_steam() {
+            let process = match ProcessIdentity::capture(child.id()) {
+                Ok(process) => process,
+                Err(error) => {
+                    let service = self.clone();
+                    std::thread::spawn(move || {
+                        if child.wait().is_ok() {
+                            service.restore_session_loader(&locks, target);
+                        }
+                    });
+                    return Err(format!("Не удалось определить процесс игры: {error}"));
                 }
-            } else {
-                let pid = child.id();
-                drop(child);
-                ProcessIdentity::capture(pid)?
             };
-            let session = self
-                .playtime
-                .begin(
-                    &game.game_id,
-                    target,
-                    process.clone(),
-                    target.modded().then_some(plan.game_directory.as_path()),
-                )
-                .unwrap_or_else(|error| SessionHandle {
-                    game_id: game.game_id.clone(),
-                    target,
-                    process: process.clone(),
-                    warning: Some(format!(
-                        "Игра запущена, но время игры не удалось сохранить: {error}"
-                    )),
-                });
-            let cleanup_dir = plan.game_directory.clone();
-            // Keep the per-copy lock while the game is alive, including Steam's startup handoff.
-            std::thread::spawn(move || {
-                while process.is_running() {
-                    std::thread::sleep(Duration::from_secs(1));
-                }
-                if target.modded() {
-                    let _ = set_doorstop_enabled(&cleanup_dir, false);
-                }
-                drop(operation_lock);
-                drop(lock);
-            });
-            Ok(session)
-        })();
-        if started.is_err() && target.modded() {
-            let _ = set_doorstop_enabled(&plan.game_directory, false);
+            let session = self.track_session(&plan, locks, process, accounting_error);
+            self.remember_choice(&plan);
+            return Ok(LaunchOutcome::Started(session));
         }
-        started
+
+        drop(child);
+        let report_at = steam_start + steam_wait.report_after;
+        let watch_until = report_at + steam_wait.watch_after;
+        if let Some(process) = self.wait_for_steam(&plan, report_at, steam_wait.interval) {
+            let session = self.track_session(&plan, locks, process, accounting_error);
+            self.remember_choice(&plan);
+            return Ok(LaunchOutcome::Started(session));
+        }
+
+        let service = self.clone();
+        let pending_plan = plan.clone();
+        let warning = "Команда отправлена в Steam. Проверьте, что происходит в окне Steam";
+        diagnostics::log(&self.paths.data_dir, "steam-launch-pending", warning);
+        let (late_started, late_session) = mpsc::channel();
+        std::thread::spawn(move || {
+            if let Some(process) =
+                service.wait_for_steam(&pending_plan, watch_until, steam_wait.interval)
+            {
+                let session =
+                    service.track_session(&pending_plan, locks, process, accounting_error);
+                if let Some(warning) = &session.warning {
+                    diagnostics::log(&service.paths.data_dir, "playtime", warning);
+                }
+                let _ = late_started.send(session);
+            }
+            // Without a game process we cannot tell when Steam will start it.
+            // Retain the selected loader state and its recovery record.
+        });
+        self.remember_choice(&plan);
+        Ok(LaunchOutcome::SteamPending {
+            warning,
+            late_session,
+        })
+    }
+
+    fn wait_for_steam(
+        &self,
+        plan: &LaunchPlan,
+        deadline: Instant,
+        interval: Duration,
+    ) -> Option<ProcessIdentity> {
+        wait_for_game(deadline, interval, || {
+            match find_game_process(&plan.game_directory, &plan.game_executable) {
+                Ok(process) => process,
+                Err(error) => {
+                    diagnostics::log(&self.paths.data_dir, "steam-process-lookup", &error);
+                    None
+                }
+            }
+        })
+    }
+
+    fn remember_choice(&self, plan: &LaunchPlan) {
+        if let Err(error) = self.config.update(|config| {
+            config.remember(&plan.game_id, plan.target);
+            config.last_game_id.clone_from(&plan.game_id);
+        }) {
+            diagnostics::log(&self.paths.data_dir, "launch-choice", &error);
+        }
+    }
+
+    fn track_session(
+        &self,
+        plan: &LaunchPlan,
+        locks: LaunchLocks,
+        process: ProcessIdentity,
+        accounting_error: Option<String>,
+    ) -> SessionHandle {
+        // The loader journal is independent of playtime. Legacy sessions with
+        // ModdedDir are still recovered by PlaytimeStore.
+        let target = plan.target;
+        let warning = |error| format!("Игра запущена, но время игры не удалось сохранить: {error}");
+        let session = match self
+            .playtime
+            .begin(&plan.game_id, target, process.clone(), None)
+        {
+            Ok(mut session) => {
+                session.warning = accounting_error.map(warning);
+                session
+            }
+            Err(error) => SessionHandle {
+                game_id: plan.game_id.clone(),
+                target,
+                process: process.clone(),
+                warning: Some(warning(error)),
+            },
+        };
+        let service = self.clone();
+        std::thread::spawn(move || {
+            while process.is_running() {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            service.restore_session_loader(&locks, target);
+        });
+        session
+    }
+
+    fn restore_session_loader(&self, locks: &LaunchLocks, target: LaunchTarget) {
+        if target.modded()
+            && let Err(error) = locks.restore_loader()
+        {
+            diagnostics::log(&self.paths.data_dir, "loader-recovery", &error);
+        }
     }
 }
 
@@ -946,32 +908,15 @@ pub fn create_game_shortcut(
         .join(" ");
     #[cfg(windows)]
     {
-        use base64::Engine;
-        use std::os::windows::process::CommandExt;
-        let literal = |s: &str| format!("'{}'", s.replace('\'', "''"));
-        let script = format!(
-            "$ErrorActionPreference='Stop'\n$s=New-Object -ComObject WScript.Shell\n$l=$s.CreateShortcut({})\n$l.TargetPath={}\n$l.Arguments={}\n$l.WorkingDirectory={}\n$l.Description={}\n$l.Save()",
-            literal(&output.to_string_lossy()),
-            literal(&launcher.to_string_lossy()),
-            literal(&args),
-            literal(&launcher.parent().unwrap_or(Path::new("")).to_string_lossy()),
-            literal(&request.title)
-        );
-        let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
-        let powershell = std::env::var_os("SystemRoot")
-            .map(PathBuf::from)
-            .ok_or("Не найдена папка Windows")?
-            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-        let result = Command::new(powershell)
-            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
-            .creation_flags(0x08000000)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !result.status.success() || !output.is_file() {
-            return Err("Не удалось создать ярлык игры".into());
-        }
-        Ok(())
+        let working_directory = launcher.parent().ok_or("Не найдена папка лаунчера")?;
+        crate::shortcuts::native::write(
+            output,
+            launcher,
+            &args,
+            working_directory,
+            &request.title,
+            launcher,
+        )
     }
     #[cfg(not(windows))]
     {
@@ -1129,222 +1074,5 @@ fn parse_vdf(text: &str) -> Result<Vec<(String, VdfValue)>, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn fixture() -> (tempfile::TempDir, AppPaths, GameRecord, SteamGame) {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = AppPaths::isolated(temp.path());
-        let mut game = GameRecord {
-            game_id: "peak".into(),
-            latest_version: "1".into(),
-            exe_relative_path: "PEAK.exe".into(),
-            ..Default::default()
-        };
-        game.mods = Some(ModsRecord {
-            has_latest: true,
-            version: "pack1".into(),
-            revision: "abc".into(),
-            steam_app_id: "3527290".into(),
-            ..Default::default()
-        });
-        let steam_root = temp.path().join("steam");
-        fs::create_dir_all(&steam_root).unwrap();
-        fs::write(steam_root.join("steam.exe"), b"fixture only").unwrap();
-        let steam_game = steam_root.join("game");
-        for root in [paths.game_root("peak").unwrap(), steam_game.clone()] {
-            fs::create_dir_all(&root).unwrap();
-            for (name, contents) in [
-                ("PEAK.exe", "fixture only"),
-                (".version", "1"),
-                (".mods.version", "pack1"),
-                (".mods.revision", "abc"),
-                ("winhttp.dll", "fixture"),
-                ("doorstop_config.ini", "[General]\nenabled = false\n"),
-            ] {
-                fs::write(root.join(name), contents).unwrap();
-            }
-        }
-        let steam = SteamGame {
-            outcome: SteamLookup::Found,
-            game_dir: steam_game,
-            steam_exe: steam_root.join("steam.exe"),
-            trace: vec![],
-        };
-        (temp, paths, game, steam)
-    }
-    #[test]
-    fn four_plans_are_read_only_and_pick_correct_executables() {
-        let (_temp, paths, game, steam) = fixture();
-        let service = LaunchService::new(paths);
-        let before = fs::read(steam.game_dir.join("doorstop_config.ini")).unwrap();
-        for target in [
-            LaunchTarget::SteamModded,
-            LaunchTarget::SteamVanilla,
-            LaunchTarget::LocalModded,
-            LaunchTarget::LocalVanilla,
-        ] {
-            let plan = service
-                .plan_with_steam(&game, target, Some(&steam))
-                .unwrap();
-            assert_eq!(
-                plan.executable.file_name().unwrap(),
-                if target.via_steam() {
-                    "steam.exe"
-                } else {
-                    "PEAK.exe"
-                }
-            );
-            assert_eq!(
-                plan.arguments,
-                if target.via_steam() {
-                    vec!["-applaunch", "3527290"]
-                } else {
-                    vec![]
-                }
-            );
-        }
-        assert_eq!(
-            fs::read(steam.game_dir.join("doorstop_config.ini")).unwrap(),
-            before
-        );
-        assert!(!service.paths.config_path().exists());
-    }
-    #[test]
-    fn absent_exe_and_unfinished_update_cannot_be_launched() {
-        let (_temp, paths, game, steam) = fixture();
-        let local = paths.game_root("peak").unwrap();
-        let service = LaunchService::new(paths);
-        fs::remove_file(local.join("PEAK.exe")).unwrap();
-        assert!(
-            service
-                .plan_with_steam(&game, LaunchTarget::LocalVanilla, Some(&steam))
-                .is_err()
-        );
-        fs::write(steam.game_dir.join(".updating"), "1").unwrap();
-        assert!(
-            service
-                .plan_with_steam(&game, LaunchTarget::SteamVanilla, Some(&steam))
-                .is_err()
-        );
-    }
-    #[test]
-    fn mods_only_and_plain_only_have_correct_supported_targets() {
-        let (_temp, paths, mut game, steam) = fixture();
-        game.latest_version.clear();
-        let opts = options_with_steam(&game, &paths, Some(&steam)).unwrap();
-        assert_eq!(opts.len(), 2);
-        assert!(opts.iter().all(|o| o.target.via_steam()));
-        game.latest_version = "1".into();
-        game.mods = None;
-        let opts = options_with_steam(&game, &paths, None).unwrap();
-        assert_eq!(opts.len(), 1);
-        assert_eq!(opts[0].target, LaunchTarget::LocalVanilla);
-    }
-    #[test]
-    fn rebuilt_revision_requires_update_and_broken_loader_repair() {
-        let (_temp, paths, mut game, steam) = fixture();
-        game.mods.as_mut().unwrap().revision = "new".into();
-        assert_eq!(
-            options_with_steam(&game, &paths, Some(&steam)).unwrap()[0].action,
-            LaunchAction::UpdateMods
-        );
-        game.mods.as_mut().unwrap().revision = "abc".into();
-        fs::remove_file(steam.game_dir.join("winhttp.dll")).unwrap();
-        assert_eq!(
-            options_with_steam(&game, &paths, Some(&steam)).unwrap()[0].action,
-            LaunchAction::RepairMods
-        );
-    }
-    #[test]
-    fn doorstop_preserves_comments_and_rejects_missing_key() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("doorstop_config.ini");
-        fs::write(
-            &path,
-            "[General]\r\n#enabled=false\r\nenabled = true ; comment\r\nother=1\r\n",
-        )
-        .unwrap();
-        set_doorstop_enabled(temp.path(), false).unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "[General]\r\n#enabled=false\r\nenabled = false ; comment\r\nother=1\r\n"
-        );
-        fs::write(&path, "[General]\nother=1").unwrap();
-        assert!(set_doorstop_enabled(temp.path(), true).is_err());
-    }
-    #[test]
-    fn steam_discovers_legacy_and_modern_libraries_and_nested_game() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("Steam");
-        let library = temp.path().join("Библиотека");
-        fs::create_dir_all(root.join("steamapps")).unwrap();
-        fs::create_dir_all(library.join("steamapps/common/Outer/Inner")).unwrap();
-        fs::write(root.join("steam.exe"), "fixture").unwrap();
-        fs::write(
-            library.join("steamapps/appmanifest_123.acf"),
-            "\"AppState\" { \"installdir\" \"Outer\" }",
-        )
-        .unwrap();
-        let escaped = library.to_string_lossy().replace('\\', "\\\\");
-        for body in [
-            format!("\"LibraryFolders\" {{ \"1\" \"{escaped}\" }}"),
-            format!("\"libraryfolders\" {{ \"1\" {{ \"path\" \"{escaped}\" }} }}"),
-        ] {
-            fs::write(root.join("steamapps/libraryfolders.vdf"), body).unwrap();
-            let found = locate_steam_at(Some(&root), "123", "Outer/Inner");
-            assert!(found.available());
-            assert!(found.game_dir.ends_with("Outer/Inner"));
-        }
-        assert_eq!(
-            locate_steam_at(Some(&root), "../evil", "").outcome,
-            SteamLookup::NoAppId
-        );
-    }
-    #[test]
-    fn shortcut_rejects_path_escape_and_uri_command_injection() {
-        let (_temp, paths, _game, steam) = fixture();
-        let request = ShortcutRequest {
-            game_id: "peak".into(),
-            exe_path: Some(steam.steam_exe),
-            ..Default::default()
-        };
-        assert!(request.allowed_fallback(&paths).is_err());
-        assert!(ShortcutRequest::parse_uri("chillhub://game/peak?exe=C:/evil.exe").is_err());
-        assert_eq!(
-            ShortcutRequest::parse_uri("chillhub://game/peak?target=SteamVanilla")
-                .unwrap()
-                .target,
-            Some(LaunchTarget::SteamVanilla)
-        );
-        assert!(ShortcutRequest::parse_args(&["--game".into(), "../evil".into()]).is_err());
-        assert_eq!(quote_windows_argument("a\"b\\"), "\"a\\\"b\\\\\"");
-    }
-    #[test]
-    fn shortcut_legacy_keys_do_not_consume_the_next_option() {
-        let request = ShortcutRequest::parse_args(&[
-            "--TITLE".into(),
-            "--GAME".into(),
-            "peak".into(),
-            "--EXE=C:/Games/peak/game.exe".into(),
-        ])
-        .unwrap()
-        .unwrap();
-        assert_eq!(request.game_id, "peak");
-        assert!(request.title.is_empty());
-        assert_eq!(
-            request.exe_path,
-            Some(PathBuf::from("C:/Games/peak/game.exe"))
-        );
-        assert!(
-            ShortcutRequest::parse_args(&["--game".into()])
-                .unwrap()
-                .is_none()
-        );
-        assert!(ShortcutRequest::parse_args(&["--GAME=../escape".into()]).is_err());
-    }
-    #[test]
-    fn malformed_vdf_is_bounded_and_rejected() {
-        assert!(parse_vdf("\"a\" { \"b\"").is_err());
-        assert!(parse_vdf(&format!("{}{}", "\"a\" {".repeat(40), "}".repeat(40))).is_err());
-    }
-}
+#[path = "launch_tests.rs"]
+mod tests;

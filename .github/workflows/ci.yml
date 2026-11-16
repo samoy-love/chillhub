@@ -21,7 +21,7 @@ name: CI
 #   golangci-lint            v2.15.0
 #   govulncheck              v1.9.0
 #   Go toolchain             taken from server/go.mod (single source of truth)
-#   Rust toolchain           1.99.1 (Native, Windows MSVC)
+#   Rust toolchain           1.99.1 (Native, Windows MSVC), nightly-2026-11-14 (coverage)
 # ---------------------------------------------------------------------------
 
 # И16: минимальные права для GITHUB_TOKEN.
@@ -598,7 +598,7 @@ jobs:
       - name: Подготовить инструменты покрытия
         shell: pwsh
         run: ./scripts/ci/ensure-native-quality-tools.ps1 -Component Coverage
-      - name: Покрытие всех исполняемых приложений
+      - name: Покрытие строк и ветвей всех приложений
         shell: pwsh
         run: ./scripts/native-coverage.ps1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

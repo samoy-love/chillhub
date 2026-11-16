@@ -8,6 +8,7 @@ mod controller;
 mod controller_tests;
 mod desktop;
 mod frame_pacing;
+mod image_loader;
 mod install_ui;
 mod karaoke;
 mod orphan_ui;
@@ -27,6 +28,9 @@ use chillhub_native::{
     service::Services,
     ui::*,
 };
+use image_loader::{
+    IMAGE_REQUEST_EPOCH, from_pixels, image_pixels, image_pixels_for_epoch, source_image_pixels,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::{
     ComponentHandle, Image, Model, ModelRc, SharedPixelBuffer, SharedString, Timer, TimerMode,
@@ -42,8 +46,6 @@ use video::{VideoAction, VideoPlayer, VideoRect};
 type State = Rc<RefCell<AppState>>;
 static PANIC_CONTEXT: std::sync::OnceLock<(chillhub_native::net::ApiClient, PathBuf)> =
     std::sync::OnceLock::new();
-static IMAGE_DECODE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-static IMAGE_REQUEST_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static HERO_DISPLAY_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 struct AppState {
     catalog: Vec<Game>,
@@ -109,123 +111,18 @@ fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
     ))
     .into()
 }
-fn image_pixels(
-    path: &Path,
-    width: u32,
-    height: u32,
-) -> Result<SharedPixelBuffer<slint::Rgba8Pixel>, String> {
-    image_pixels_for_epoch(path, width, height, None)
-}
-fn image_pixels_for_epoch(
-    path: &Path,
-    width: u32,
-    height: u32,
-    epoch: Option<u64>,
-) -> Result<SharedPixelBuffer<slint::Rgba8Pixel>, String> {
-    // Large source images are decoded one at a time, including cancelled game
-    // selections. This bounds peak memory during rapid library navigation.
-    let _decode = IMAGE_DECODE_LOCK
-        .lock()
-        .map_err(|_| "Не удалось открыть изображение")?;
-    if epoch
-        .is_some_and(|epoch| IMAGE_REQUEST_EPOCH.load(std::sync::atomic::Ordering::SeqCst) != epoch)
-    {
-        return Err("Изображение больше не выбрано".into());
-    }
-    let decoded = image::ImageReader::open(path)
-        .map_err(|e| e.to_string())?
-        .with_guessed_format()
-        .map_err(|e| e.to_string())?
-        .decode()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    // Optimized assets already fit their display budget. Avoid resampling them
-    // and constructing an additional full-size image on every selection.
-    let mut rgba = if decoded.width() > width || decoded.height() > height {
-        decoded.thumbnail(width, height).into_rgba8()
-    } else {
-        decoded.into_rgba8()
-    };
-    // Convert alpha once on the decoding worker, rather than for every sampled
-    // texel in every animation/resize frame. Opaque photos are unchanged.
-    premultiply_image(rgba.as_mut());
-    Ok(SharedPixelBuffer::clone_from_slice(
-        rgba.as_raw(),
-        rgba.width(),
-        rgba.height(),
-    ))
-}
-fn premultiply_image(bytes: &mut [u8]) {
-    for pixel in bytes.as_chunks_mut::<4>().0 {
-        let alpha = pixel[3] as u16;
-        if alpha != 255 {
-            for channel in &mut pixel[..3] {
-                *channel = (*channel as u16 * alpha / 255) as u8;
-            }
-        }
-    }
-}
-#[test]
-fn decoded_images_preserve_opaque_pixels_and_premultiply_transparency() {
-    let mut pixels = [255, 80, 40, 255, 200, 100, 50, 128, 240, 10, 20, 0];
-    premultiply_image(&mut pixels);
-    assert_eq!(pixels, [255, 80, 40, 255, 100, 50, 25, 128, 0, 0, 0, 0]);
-}
-fn source_image_pixels(
-    value: &str,
-    bundle: &Path,
-    cache: &Path,
-    api: &chillhub_native::net::ApiClient,
-    width: u32,
-    height: u32,
-    epoch: Option<u64>,
-) -> Result<SharedPixelBuffer<slint::Rgba8Pixel>, String> {
-    let current = || {
-        epoch.is_none_or(|epoch| {
-            IMAGE_REQUEST_EPOCH.load(std::sync::atomic::Ordering::SeqCst) == epoch
-        })
-    };
-    let mut last_error = String::new();
-    for attempt in 1..=2 {
-        if !current() {
-            return Err("Изображение больше не выбрано".into());
-        }
-        let path = chillhub_native::media::image_path(value, bundle, cache, api)?;
-        match image_pixels_for_epoch(&path, width, height, epoch) {
-            Ok(pixels) => return Ok(pixels),
-            Err(error) => {
-                if !current() {
-                    return Err(error);
-                }
-                chillhub_native::media::invalidate_image(value, bundle, cache, api);
-                api.event(
-                    "image.decode_error",
-                    serde_json::json!({"attempt": attempt, "error": error}),
-                );
-                last_error = error;
-                if value.starts_with("Assets/") || value.starts_with("art/") {
-                    break;
-                }
-            }
-        }
-    }
-    Err(last_error)
-}
-fn from_pixels(pixels: SharedPixelBuffer<slint::Rgba8Pixel>) -> Image {
-    // Pixel ownership crosses the worker boundary; the UI does no large copies.
-    Image::from_rgba8_premultiplied(pixels)
-}
 fn roots() -> Result<(PathBuf, PathBuf), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let parent = exe.parent().unwrap();
     if parent.join("Data/games.json").is_file() {
         return Ok((parent.to_owned(), parent.join("art")));
     }
-    #[cfg(any(test, feature = "benchmark"))]
+    #[cfg(feature = "benchmark")]
     {
         let project = Path::new(env!("CARGO_MANIFEST_DIR"));
         Ok((project.to_owned(), project.join("art")))
     }
-    #[cfg(not(any(test, feature = "benchmark")))]
+    #[cfg(not(feature = "benchmark"))]
     Err("Не найдены файлы лаунчера. Переустановите Chill Hub.".into())
 }
 fn refresh_library(ui: &AppWindow, state: &State) {

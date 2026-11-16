@@ -40,7 +40,7 @@ same manifest, diff and rollback as a game build. All the player picks is what
 to launch: their own Steam copy or the Chill Hub build, with mods or without.
 Details are in [docs/modpacks.md](docs/modpacks.md).
 
-**The launcher updates itself from a separate executable** (`updater/`),
+**The launcher updates itself from a separate executable**,
 because a running process can't overwrite its own files. That's also why user
 data lives in `%APPDATA%\ChillHub` rather than next to the binaries.
 
@@ -53,9 +53,10 @@ integrity checks — are in [docs/spec.md](docs/spec.md).
 
 ## Stack
 
-**Client** — C# WPF on .NET 8, published self-contained, so no runtime has to
-be present on the user's machine. Distributed as a single NSIS installer built
-in CI.
+**Client** development uses Rust and Slint in `launcher/ChillHub.Native/`.
+This branch builds the launcher, a separate updater, and a security settings
+helper from that project. The production rollout of the Rust client is pending.
+The earlier C# WPF client and updater remain the compatibility reference.
 
 **Server** — Go, two independent binaries: the public API (games, versions,
 manifests, news) and the admin one (ZIP build uploads, game registry,
@@ -70,27 +71,28 @@ serves everything: `/` the landing page, `/api/*` the public API,
 
 ## Quick start
 
-Requires Go 1.26+, the .NET 8 SDK and PowerShell 7.
+Native development requires PowerShell 7, Rust for Windows MSVC, and the
+Windows SDK. The server uses Go 1.26+, and the web tests use Node 24.
 
 ```powershell
-scripts\run-dev.ps1     # api + admin + client, three windows
-scripts\run-admin.ps1   # admin only
-scripts\run-client.ps1  # client only
+.\launcher\ChillHub.Native\build.ps1
+.\scripts\run-admin.ps1
 ```
 
-Before pushing, the same gates CI runs:
+Run these checks from the repository root.
 
 ```powershell
-cd server; go vet ./...; go test ./... -race
-cd ..\launcher; dotnet test
+.\scripts\native-ci.ps1 -ValidationOnly
+npm ci
+node --test tests/web/*.test.js
 ```
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `launcher/` | Client: updates, launching games, news, integrity checks |
-| `updater/` | Self-update executable and the rules for preserving user files |
+| `launcher/ChillHub.Native/` | Rust and Slint client, updater, and security settings helper |
+| `launcher/ChillHub/`, `updater/` | Earlier C# client and updater for compatibility comparisons |
 | `server/cmd/api` | Public API |
 | `server/cmd/admin` | Admin API: build uploads, `latest` promotion, registry, modpacks, news, maintenance |
 | `server/admin_ui/` | Admin web UI |
@@ -102,20 +104,10 @@ cd ..\launcher; dotnet test
 
 ## Tests
 
-Close to two thousand tests on the client (xUnit), several hundred on the
-server (`go test -race`) and seven hundred on the web side
-(`node --test`); current coverage is on the codecov badge above. A red run
-stops the deployment.
-
-CI gates more than the test suites: golangci-lint and `go vet` on both Linux
-and Windows, a cross-compile to linux/arm64 as on production, `dotnet format
---verify-no-changes`, ESLint, Stylelint and HTMLHint for the landing page and
-admin UI, `node --test` for the whole site and panel — from response parsing
-to section markup in a real DOM — and govulncheck plus a vulnerable-NuGet
-scan. The hash seam between Go and C# is pinned
-separately (`hashvector_test.go` / `HashVectorTests.cs`), as is the launcher
-manifest against the updater's preserve rules — details in
-[docs/spec.md](docs/spec.md).
+CI checks formatting, Clippy, Rust tests, and Native installation on a clean
+Windows runner. The server runs `go vet`, `go test -race`, and golangci-lint.
+The web suites run `node --test`, ESLint, Stylelint, and HTMLHint. Coverage
+is published to Codecov. The xUnit tests cover the earlier client.
 
 ## Deployment
 
@@ -133,17 +125,13 @@ dk deploy --all --dry-run   # show the plan, touch nothing
 dk rollback chillhub-admin
 ```
 
-From CI: Actions → Deploy → Run workflow, with the target selectable there.
-`all` ships the four targets above but does NOT build the installer — that
-needs a separate run with `target=installer`. Tags trigger nothing: the only
-automatic entry point is a merge into `main`, and which targets it touches is
-worked out by the `changes` job, per target, from its own baseline.
+In Actions → Deploy → Run workflow, choose `installer` to publish it on its
+own. The `all` target includes the installer. When a merge reaches `main`,
+the `changes` job selects the affected targets.
 
-Touching `launcher/**`, `updater/**` or the pipeline itself requires bumping
-`<Version>` in `launcher/ChillHub/ChillHub.csproj`: a .NET build is not
-byte-reproducible, and the admin server refuses to publish a different set of
-files under a number that is already taken. The `Launcher version bump` gate
-checks this before the merge.
+When Native release inputs change, bump `version` in
+`launcher/ChillHub.Native/Cargo.toml`. The `Launcher version bump` gate checks
+that the number is still available.
 
 The admin password is stored as a hash in a systemd drop-in and set separately
 from deployment: it changes rarely, and carrying a secret through every deploy

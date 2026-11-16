@@ -1,5 +1,15 @@
 //! Shared native folder chooser, invoked on a dedicated STA thread.
 use std::path::{Path, PathBuf};
+
+#[cfg(windows)]
+fn dialog_accepted(result: windows::core::Result<()>) -> Result<bool, String> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(error) if error.code().0 as u32 == 0x800704c7 => Ok(false),
+        Err(error) => Err(format!("Не удалось открыть выбор папки: {error}")),
+    }
+}
+
 #[cfg(windows)]
 pub fn choose_folder(owner: isize, initial: &Path) -> Result<Option<PathBuf>, String> {
     use windows::{
@@ -48,15 +58,12 @@ pub fn choose_folder(owner: isize, initial: &Path) -> Result<Option<PathBuf>, St
                 let _ = dialog.SetFolder(&folder);
             }
         }
-        if let Err(e) = dialog.Show(if owner == 0 {
+        if !dialog_accepted(dialog.Show(if owner == 0 {
             None
         } else {
             Some(HWND(owner as *mut _))
-        }) {
-            if e.code().0 as u32 == 0x800704c7 {
-                return Ok(None);
-            }
-            return Err(format!("Не удалось открыть выбор папки: {e}"));
+        }))? {
+            return Ok(None);
         }
         let name = dialog
             .GetResult()
@@ -74,3 +81,7 @@ pub fn choose_folder(owner: isize, initial: &Path) -> Result<Option<PathBuf>, St
 pub fn choose_folder(_: isize, _: &Path) -> Result<Option<PathBuf>, String> {
     Err("Выбор папки доступен в Windows".into())
 }
+
+#[cfg(all(test, windows))]
+#[path = "folder_picker_tests.rs"]
+mod tests;

@@ -283,6 +283,17 @@ pub fn stage_update(
     let manifest = engine
         .fetch_manifest(&release.manifest_url, control)
         .map_err(|e| e.to_string())?;
+    stage_manifest(release, paths, &engine, manifest, control, progress)
+}
+
+fn stage_manifest(
+    release: &UpdateRelease,
+    paths: &UpdatePaths,
+    engine: &TransferEngine,
+    manifest: Manifest,
+    control: &TransferControl,
+    progress: &(dyn Fn(TransferEvent) + Sync),
+) -> Result<StagedUpdate, String> {
     if manifest.version != release.version
         || (!manifest.game_id.is_empty() && manifest.game_id != "launcher")
     {
@@ -294,17 +305,7 @@ pub fn stage_update(
     let payload = session.join("payload");
     fs::create_dir_all(&payload).map_err(|e| e.to_string())?;
     maintenance::reuse_verified_payload(paths, &files, &payload, control, progress)?;
-    let request = TransferRequest {
-        game_id: "launcher".into(),
-        version: release.version.clone(),
-        root: payload,
-        manifest_url: release.manifest_url.clone(),
-        content_base_url: release.content_base_url.clone(),
-        scope: SyncScope::OwnFilesOnly,
-        write_markers: false,
-        allow_cleanup: false,
-        ..Default::default()
-    };
+    let request = update_request(release, payload);
     let plan = engine
         .plan_manifest(&request, manifest, control, progress)
         .map_err(|e| e.to_string())?;
@@ -344,6 +345,19 @@ pub fn stage_update(
     stage_lease.prepared()?;
     let _ = cleanup_completed_sessions(paths);
     Ok(staged)
+}
+
+fn update_request(release: &UpdateRelease, payload: PathBuf) -> TransferRequest {
+    TransferRequest {
+        game_id: "launcher".into(),
+        version: release.version.clone(),
+        root: payload,
+        manifest_url: release.manifest_url.clone(),
+        content_base_url: release.content_base_url.clone(),
+        scope: SyncScope::OwnFilesOnly,
+        write_markers: false,
+        ..Default::default()
+    }
 }
 
 fn validate_staged(staged: &StagedUpdate) -> Result<(), String> {
@@ -493,7 +507,32 @@ fn launch_job(
     Err("Модуль обновления не подтвердил готовность. Лаунчер продолжает работать".into())
 }
 
+fn job_arguments(args: &[String]) -> Result<(&Path, &str), String> {
+    match args {
+        [job_flag, path, hash_flag, hash] if job_flag == "--job" && hash_flag == "--sha256" => {
+            Ok((Path::new(path), hash))
+        }
+        _ => Err(
+            "Обновление запускается из лаунчера. Откройте Chill Hub и проверьте обновления.".into(),
+        ),
+    }
+}
+
+pub fn job_from_args(args: &[String]) -> Result<UpdateJob, String> {
+    let (path, expected_hash) = job_arguments(args)?;
+    read_job(path, expected_hash)
+}
+
 pub fn read_job(path: &Path, expected_hash: &str) -> Result<UpdateJob, String> {
+    let job = decode_job(path, expected_hash)?;
+    let own = std::env::current_exe().map_err(|e| e.to_string())?;
+    if !same_path(&own, &job.staged.session.join("work").join(UPDATER_NAME)) {
+        return Err("Модуль запущен вне подготовленной сессии".into());
+    }
+    Ok(job)
+}
+
+fn decode_job(path: &Path, expected_hash: &str) -> Result<UpdateJob, String> {
     check_no_links(path).map_err(|e| e.to_string())?;
     let meta = fs::metadata(path).map_err(|e| e.to_string())?;
     if meta.len() > 16 * 1024 * 1024 {
@@ -516,10 +555,6 @@ pub fn read_job(path: &Path, expected_hash: &str) -> Result<UpdateJob, String> {
     {
         return Err("Некорректный запрос обновления".into());
     }
-    let own = std::env::current_exe().map_err(|e| e.to_string())?;
-    if !same_path(&own, &job.staged.session.join("work").join(UPDATER_NAME)) {
-        return Err("Модуль запущен вне подготовленной сессии".into());
-    }
     Ok(job)
 }
 
@@ -530,6 +565,13 @@ pub fn execute_job(job: &UpdateJob, progress: &(dyn Fn(&str, f32) + Sync)) -> Re
     let _security = ProcessLock::acquire("Local\\ChillHub.SecurityUi")?;
     let _security_lifetime = crate::security::update_lease(&job.staged.paths.config)?;
     let _session = maintenance::SessionLease::acquire(&job.staged.paths, &job.staged.session)?;
+    execute_with_parent(job, progress)
+}
+
+fn execute_with_parent(
+    job: &UpdateJob,
+    progress: &(dyn Fn(&str, f32) + Sync),
+) -> Result<(), String> {
     let parent = ParentProcess::open(job.parent_pid, &job.parent_executable)?;
     atomic_write(&job.staged.session.join("work/ready"), job.token.as_bytes())
         .map_err(|e| e.to_string())?;
@@ -1175,222 +1217,5 @@ impl ParentProcess {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[cfg(windows)]
-    #[test]
-    fn aliases_share_update_identity_and_cannot_bypass_separate_directories() {
-        let temp = tempfile::tempdir().unwrap();
-        let parent = temp.path().join("Long shared updater directory");
-        fs::create_dir(&parent).unwrap();
-        let short = crate::paths::short_test_path(&parent);
-        let canonical = fs::canonicalize(&parent).unwrap();
-        let install = canonical.join("Launcher installation");
-        fs::create_dir(&install).unwrap();
-        let aliased_install = short.join("Launcher installation");
-        assert_eq!(
-            update_mutex_name(&install).unwrap(),
-            update_mutex_name(&aliased_install).unwrap()
-        );
-        assert!(same_path(
-            &install.join("Missing.exe"),
-            &aliased_install.join("Missing.exe")
-        ));
-        assert!(!same_path(Path::new("relative"), Path::new("relative")));
-        assert!(update_mutex_name(Path::new("relative")).is_err());
-        let mut paths = UpdatePaths {
-            install: install.clone(),
-            config: canonical.join("Settings"),
-            games: short.join("Games"),
-            staging: short.join("Staging"),
-        };
-        assert!(paths.validate().is_ok());
-        paths.games = aliased_install.join("Future games");
-        assert!(paths.validate().is_err());
-        paths.games = short.join("Settings/Future games");
-        assert!(paths.validate().is_err());
-        paths.games = short.join("Games");
-        paths.staging = short.join("Settings/Future updates");
-        assert!(paths.validate().is_err());
-        assert!(!install.join("Future games").exists());
-        assert!(!paths.config.exists());
-    }
-
-    #[test]
-    fn downgrade_and_bad_versions() {
-        assert!(version_parts("1.7.20").unwrap() < version_parts("1.8.0").unwrap());
-        for s in ["../1.8.1", "1", "1.8.1.exe", "1.-2.3", " 1.8.1"] {
-            assert!(version_parts(s).is_err(), "{s}");
-        }
-    }
-    #[test]
-    fn legacy_version_shapes_remain_safe_for_update_paths() {
-        assert_eq!(version_parts("1.8").unwrap(), [1, 8, 0, 0]);
-        assert_eq!(version_parts("1.8.1-beta.2").unwrap(), [1, 8, 1, 0]);
-        assert_eq!(version_parts("1.8.1.9-preview").unwrap(), [1, 8, 1, 9]);
-        for invalid in [
-            "1.8-",
-            "1.8-.beta",
-            "1.8-beta/../other",
-            "1.8-beta\\other",
-            "1.8-beta?x=1",
-            "1.8-beta\"",
-            "1.8-beta-2",
-            "1.2.3.4.5",
-            "1000000.1",
-        ] {
-            assert!(version_parts(invalid).is_err(), "{invalid}");
-        }
-        assert!(version_parts(&format!("1.8-{}", "x".repeat(33))).is_err());
-        assert!(version_parts("1.8.1-beta").unwrap() > version_parts("1.8").unwrap());
-    }
-    #[test]
-    fn preserve_is_exact_root_path() {
-        assert!(is_preserved("CONFIG.JSON"));
-        assert!(!is_preserved("data/config.json"));
-        assert!(!is_preserved("config.json.bak"));
-    }
-    #[test]
-    fn only_trusted_https_updates() {
-        for s in [
-            "http://launcher.samoy.love/api",
-            "https://evil.invalid",
-            "https://launcher.samoy.love.evil.invalid/api",
-            "https://user@launcher.samoy.love/api",
-            "https://launcher.samoy.love/api#x",
-        ] {
-            assert!(trusted_url(s).is_err());
-        }
-        assert!(trusted_url("https://launcher.samoy.love/api").is_ok());
-    }
-    pub(super) fn package(root: &Path) -> StagedUpdate {
-        let paths = UpdatePaths {
-            install: root.join("install"),
-            config: root.join("config"),
-            games: root.join("games"),
-            staging: root.join("staging"),
-        };
-        fs::create_dir_all(&paths.install).unwrap();
-        let session = paths.staging.join("session");
-        fs::create_dir_all(session.join("payload")).unwrap();
-        let files = [LAUNCHER_NAME, UPDATER_NAME, "ChillHub.SecurityHelper.exe"]
-            .into_iter()
-            .map(|name| {
-                let bytes = format!("new {name}");
-                fs::write(session.join("payload").join(name), &bytes).unwrap();
-                fs::write(paths.install.join(name), "old").unwrap();
-                StagedFile {
-                    source: name.into(),
-                    target: name.into(),
-                    manifest: ManifestFile {
-                        path: name.into(),
-                        size: bytes.len() as u64,
-                        sha256: Some(format!("{:x}", Sha256::digest(bytes.as_bytes()))),
-                        ..Default::default()
-                    },
-                }
-            })
-            .collect();
-        StagedUpdate {
-            version: "1.8.1".into(),
-            current_version: "1.8.0".into(),
-            paths,
-            session,
-            files,
-            delete_paths: vec![],
-            empty_dirs: vec![],
-        }
-    }
-    #[test]
-    fn transaction_preserves_configuration_and_commits_marker() {
-        let temp = tempfile::tempdir().unwrap();
-        let staged = package(temp.path());
-        fs::write(staged.paths.install.join("config.json"), "private").unwrap();
-        apply_transaction(&staged, &|_, _| {}).unwrap();
-        assert_eq!(
-            fs::read_to_string(staged.paths.install.join("config.json")).unwrap(),
-            "private"
-        );
-        assert_eq!(
-            fs::read_to_string(staged.paths.install.join("launcher.version")).unwrap(),
-            "1.8.1"
-        );
-    }
-    #[test]
-    fn corrupted_payload_never_touches_installation() {
-        let temp = tempfile::tempdir().unwrap();
-        let staged = package(temp.path());
-        fs::write(staged.session.join("payload").join(LAUNCHER_NAME), "bad").unwrap();
-        assert!(apply_transaction(&staged, &|_, _| {}).is_err());
-        assert_eq!(
-            fs::read_to_string(staged.paths.install.join(LAUNCHER_NAME)).unwrap(),
-            "old"
-        );
-    }
-    #[test]
-    fn rejected_overlap_cannot_mutate_state() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut staged = package(temp.path());
-        staged.paths.config = staged.paths.install.join("data");
-        assert!(validate_staged(&staged).is_err());
-    }
-    #[test]
-    fn recovery_restores_original_and_removes_new_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let staged = package(temp.path());
-        fs::create_dir_all(staged.session.join("backup")).unwrap();
-        fs::write(
-            staged.session.join("backup").join(LAUNCHER_NAME),
-            "original",
-        )
-        .unwrap();
-        let journal = Journal {
-            committed: false,
-            recovered: false,
-            files: vec![
-                Backup {
-                    target: LAUNCHER_NAME.into(),
-                    existed: true,
-                    attributes: None,
-                },
-                Backup {
-                    target: UPDATER_NAME.into(),
-                    existed: false,
-                    attributes: None,
-                },
-            ],
-        };
-        atomic_write(
-            &staged.session.join("journal.json"),
-            &serde_json::to_vec(&journal).unwrap(),
-        )
-        .unwrap();
-        assert!(recover_interrupted(&staged).unwrap());
-        assert_eq!(
-            fs::read_to_string(staged.paths.install.join(LAUNCHER_NAME)).unwrap(),
-            "original"
-        );
-        assert!(!staged.paths.install.join(UPDATER_NAME).exists());
-    }
-
-    #[test]
-    fn error_after_file_replacement_rolls_back_all_files() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut staged = package(temp.path());
-        fs::write(staged.paths.install.join("occupied"), "user file").unwrap();
-        staged.empty_dirs.push("occupied".into());
-        assert!(apply_transaction(&staged, &|_, _| {}).is_err());
-        for name in [LAUNCHER_NAME, UPDATER_NAME, "ChillHub.SecurityHelper.exe"] {
-            assert_eq!(
-                fs::read_to_string(staged.paths.install.join(name)).unwrap(),
-                "old"
-            );
-        }
-        assert!(!staged.paths.install.join("launcher.version").exists());
-        assert_eq!(
-            fs::read_to_string(staged.paths.install.join("occupied")).unwrap(),
-            "user file"
-        );
-        assert!(safe_to_restart(&staged));
-    }
-}
+#[path = "update_tests.rs"]
+mod tests;

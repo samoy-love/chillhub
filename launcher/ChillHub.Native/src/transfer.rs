@@ -1,4 +1,6 @@
 //! Content synchronization. A failed or cancelled transfer cannot publish a version marker.
+mod cleanup;
+mod deferred;
 mod hash_cache;
 use crate::manifest::{self, DirectoryGuard, Manifest, ManifestFile, open_regular, safe_join};
 use base64::Engine as _;
@@ -38,6 +40,8 @@ pub enum TransferError {
     Protocol(String),
     Io(io::Error),
     AntivirusBlocked(String),
+    RebootRequired(String),
+    PendingReplacement,
     Busy,
     NoSpace {
         drive: String,
@@ -63,6 +67,14 @@ impl fmt::Display for TransferError {
                 "Антивирус заблокировал файл {path}. Откройте защиту Windows и проверьте историю защиты"
             ),
             Self::Busy => write!(f, "Эту папку уже обновляет другой процесс"),
+            Self::PendingReplacement => write!(
+                f,
+                "Сначала завершите предыдущую загрузку для этой папки и повторите действие"
+            ),
+            Self::RebootRequired(path) => write!(
+                f,
+                "Файл {path} занят. Закройте игру и повторите загрузку. Если это не поможет, перезагрузите компьютер: скачанный файл сохранён для замены."
+            ),
             Self::NoSpace {
                 drive,
                 available,
@@ -115,7 +127,7 @@ pub struct TransferRequest {
     pub preserve_paths: Vec<String>,
     pub donor_roots: Vec<PathBuf>,
     pub force_rehash: bool,
-    pub allow_cleanup: bool,
+    pub approved_cleanup_paths: Vec<String>,
     pub max_parallel: usize,
     pub bytes_per_second: u64,
     pub write_markers: bool,
@@ -135,7 +147,7 @@ impl Default for TransferRequest {
             preserve_paths: vec![],
             donor_roots: vec![],
             force_rehash: false,
-            allow_cleanup: false,
+            approved_cleanup_paths: vec![],
             max_parallel: 4,
             bytes_per_second: 0,
             write_markers: true,
@@ -480,8 +492,23 @@ impl TransferEngine {
         control: &TransferControl,
         event: &(dyn Fn(TransferEvent) + Sync),
     ) -> Result<TransferOutcome> {
-        let plan = self.plan(request, control, event)?;
+        let plan = self.prepare_plan(request, control, event)?;
         self.execute(request, &plan, control, event)
+    }
+    /// Fetch and validate the requested manifest before replaying an interrupted
+    /// replacement. Plain planning remains read-only with respect to game files.
+    pub fn prepare_plan(
+        &self,
+        request: &TransferRequest,
+        control: &TransferControl,
+        event: &(dyn Fn(TransferEvent) + Sync),
+    ) -> Result<TransferPlan> {
+        let plan = self.plan(request, control, event)?;
+        if deferred::recover(request, &plan.downloads, control)? {
+            self.plan_manifest(request, plan.manifest, control, event)
+        } else {
+            Ok(plan)
+        }
     }
     pub fn execute(
         &self,
@@ -503,14 +530,14 @@ impl TransferEngine {
         validate_request(request)?;
         // A UI may approve the same plan; changing roots/URLs/ownership requires a fresh plan.
         let mut approved = request.clone();
-        approved.allow_cleanup = plan.request.allow_cleanup;
+        approved.approved_cleanup_paths = plan.request.approved_cleanup_paths.clone();
         if serde_json::to_vec(&approved).ok() != serde_json::to_vec(&plan.request).ok() {
             return Err(TransferError::InvalidManifest(
                 "request changed after planning".into(),
             ));
         }
         manifest::validate_manifest(&plan.manifest).map_err(TransferError::InvalidManifest)?;
-        if !request.allow_cleanup && !plan.to_delete.is_empty() {
+        if !cleanup::is_approved(&plan.to_delete, &request.approved_cleanup_paths) {
             return Err(TransferError::NeedsCleanupConfirmation(
                 plan.to_delete.clone(),
             ));
@@ -518,8 +545,7 @@ impl TransferEngine {
         control.checkpoint()?;
         let _guard = DirectoryGuard::acquire(&request.root, true)
             .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
-        let lock = open_regular(&request.root.join(".chillhub.lock"), true, true, false)?;
-        lock.try_lock_exclusive().map_err(|_| TransferError::Busy)?;
+        let _lock = acquire_transfer_lock(&request.root)?;
         ensure_not_running(&request.root)?;
         let mut hashes = HashCache::load(self.hash_cache_dir.as_deref(), &request.root);
         // Drop old fingerprints before touching files, including failed/interrupted updates.
@@ -765,7 +791,12 @@ impl TransferEngine {
             return Err(TransferError::Integrity(file.path.clone()));
         }
         open_regular(&part, true, false, false)?.sync_all()?;
-        atomic_replace(&part, &destination)?;
+        if let Err(error) = atomic_replace(&part, &destination) {
+            if cfg!(windows) && deferred::is_locked(&error) {
+                return deferred::schedule(request, &part, file);
+            }
+            return Err(error);
+        }
         hashes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1256,6 +1287,23 @@ fn read_available(source: &mut fs::File, buffer: &mut [u8]) -> io::Result<usize>
 fn folded(paths: &[String]) -> HashSet<String> {
     paths.iter().map(|p| p.to_lowercase()).collect()
 }
+fn acquire_transfer_lock(root: &Path) -> Result<fs::File> {
+    let lock = open_regular(&root.join(".chillhub.lock"), true, true, false).map_err(|error| {
+        if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) {
+            TransferError::Busy
+        } else {
+            TransferError::Io(error)
+        }
+    })?;
+    lock.try_lock_exclusive().map_err(|error| {
+        if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+            TransferError::Busy
+        } else {
+            TransferError::Io(error)
+        }
+    })?;
+    Ok(lock)
+}
 fn ensure_not_running(root: &Path) -> Result<()> {
     #[cfg(windows)]
     {
@@ -1283,6 +1331,7 @@ fn validate_request(request: &TransferRequest) -> Result<()> {
         .iter()
         .chain(&request.foreign_paths)
         .chain(&request.preserve_paths)
+        .chain(&request.approved_cleanup_paths)
     {
         manifest::validate_relative(path).map_err(TransferError::UnsafePath)?;
     }
@@ -1639,180 +1688,5 @@ impl Progress {
 }
 
 #[cfg(test)]
-mod scanner_tests {
-    use super::*;
-    const BLOCK: usize = 64 * 1024;
-
-    #[cfg(windows)]
-    #[test]
-    fn antivirus_evidence_does_not_invent_quarantine_for_permissions_or_busy_files() {
-        for code in [225, 226] {
-            assert!(
-                matches!(antivirus_error(io::Error::from_raw_os_error(code).into(), "mod.dll"), TransferError::AntivirusBlocked(path) if path == "mod.dll")
-            );
-        }
-        for code in [5, 32, 33] {
-            assert!(matches!(
-                antivirus_error(io::Error::from_raw_os_error(code).into(), "mod.dll"),
-                TransferError::Io(_)
-            ));
-        }
-    }
-
-    #[test]
-    fn noncanonical_local_names_are_never_cleanup_candidates() {
-        let temp = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(temp.path()).unwrap();
-        let unusual = canonical.join("user-file.");
-        fs::write(&unusual, b"preserve this user file").unwrap();
-        fs::write(canonical.join("old.dll"), b"ordinary cleanup candidate").unwrap();
-        let candidates = collect_files(&canonical).unwrap();
-        assert_eq!(candidates, vec!["old.dll"]);
-        assert_eq!(fs::read(&unusual).unwrap(), b"preserve this user file");
-        assert!(manifest::validate_relative("user-file.").is_err());
-    }
-
-    #[test]
-    fn disk_full_is_classified_without_mislabeling_access_denied() {
-        let temp = tempfile::tempdir().unwrap();
-        let error = disk_error(
-            io::Error::from(io::ErrorKind::StorageFull).into(),
-            temp.path(),
-            2 * 1024 * 1024,
-        );
-        assert!(matches!(error, TransferError::NoSpace { .. }));
-        assert!(error.to_string().contains("2,0 МБ"));
-        assert!(error.to_string().contains(&drive_label(temp.path())));
-        assert!(matches!(
-            disk_error(
-                io::Error::from(io::ErrorKind::PermissionDenied).into(),
-                temp.path(),
-                123
-            ),
-            TransferError::Io(_)
-        ));
-        #[cfg(windows)]
-        for code in [39, 112] {
-            assert!(
-                matches!(disk_error(io::Error::from_raw_os_error(code).into(), temp.path(), 0), TransferError::NoSpace { required, available, .. } if required > available)
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn readonly_replacement_is_atomic_and_failed_replacement_preserves_permissions() {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("file.part");
-        let target = temp.path().join("file.dll");
-        fs::write(&source, b"verified new bytes").unwrap();
-        fs::write(&target, b"old bytes").unwrap();
-        let mut permissions = fs::metadata(&target).unwrap().permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&target, permissions).unwrap();
-        let held = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .open(&target)
-            .unwrap();
-        assert!(atomic_replace(&source, &target).is_err());
-        assert_eq!(fs::read(&target).unwrap(), b"old bytes");
-        assert!(fs::metadata(&target).unwrap().permissions().readonly());
-        assert!(source.is_file());
-        drop(held);
-        atomic_replace(&source, &target).unwrap();
-        assert_eq!(fs::read(&target).unwrap(), b"verified new bytes");
-        assert!(!source.exists());
-    }
-
-    fn blocks(bytes: &[u8]) -> Blocks {
-        let mut digests = Vec::new();
-        for chunk in bytes.chunks(BLOCK) {
-            digests.extend_from_slice(&rolling(chunk).to_le_bytes());
-            digests.extend_from_slice(&Sha256::digest(chunk)[..8]);
-        }
-        Blocks {
-            block_size: BLOCK,
-            file_size: bytes.len() as u64,
-            digests,
-        }
-    }
-
-    #[test]
-    fn repeated_blocks_are_resolved_as_one_group_and_scan_finishes_early() {
-        let temp = tempfile::tempdir().unwrap();
-        let old = temp.path().join("old.bin");
-        let bytes = vec![0; BLOCK * 256];
-        fs::write(&old, &bytes).unwrap();
-        let (offsets, windows) = blocks(&bytes)
-            .find_in_old_counted(&old, &TransferControl::default(), u64::MAX)
-            .unwrap();
-        assert!(offsets.iter().all(|offset| *offset == Some(0)));
-        assert_eq!(
-            windows, 1,
-            "resolved copies must not trigger a byte-by-byte scan"
-        );
-    }
-
-    #[test]
-    fn resolved_repeated_blocks_keep_block_steps_when_another_block_is_missing() {
-        let temp = tempfile::tempdir().unwrap();
-        let old = temp.path().join("old.bin");
-        let mut bytes = vec![0; BLOCK * 128];
-        fs::write(&old, &bytes).unwrap();
-        bytes.extend(vec![0x55; BLOCK]);
-        let (offsets, windows) = blocks(&bytes)
-            .find_in_old_counted(&old, &TransferControl::default(), u64::MAX)
-            .unwrap();
-        assert!(offsets[..128].iter().all(|offset| *offset == Some(0)));
-        assert_eq!(offsets[128], None);
-        assert_eq!(
-            windows, 128,
-            "each repeated block costs one lookup, regardless of group size"
-        );
-    }
-
-    #[test]
-    fn weak_collision_work_is_bounded_and_short_tail_does_not_rescan_the_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let old = temp.path().join("old.bin");
-        fs::write(&old, vec![0; BLOCK * 16 + 17]).unwrap();
-        let mut wanted = blocks(&vec![0; BLOCK * 2 + 17]);
-        // Keep a matching polynomial hash but make full-block SHA prefixes wrong.
-        wanted.digests[8..16].fill(0xff);
-        wanted.digests[24..32].fill(0xff);
-        let (offsets, windows) = wanted
-            .find_in_old_counted(&old, &TransferControl::default(), (BLOCK * 2) as u64)
-            .unwrap();
-        assert_eq!(&offsets[..2], &[None, None]);
-        assert_eq!(offsets[2], Some((BLOCK * 16) as u64));
-        assert!(
-            windows <= 18,
-            "false weak matches must switch to block steps: {windows}"
-        );
-    }
-
-    #[test]
-    fn changing_speed_limit_releases_a_waiting_transfer_without_restart() {
-        let control = TransferControl::default();
-        let worker_control = control.clone();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let progress = Progress::new(BUFFER as u64, 1, 1);
-            started_tx.send(()).unwrap();
-            let result = progress.received(BUFFER as u64, &worker_control);
-            done_tx.send(result).unwrap();
-        });
-        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(done_rx.recv_timeout(Duration::from_millis(80)).is_err());
-        control.set_speed_limit(0);
-        done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .unwrap();
-        worker.join().unwrap();
-    }
-}
+#[path = "transfer/scanner_tests.rs"]
+mod scanner_tests;

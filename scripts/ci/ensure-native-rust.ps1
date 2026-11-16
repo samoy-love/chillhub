@@ -1,12 +1,12 @@
 [CmdletBinding()]
-param([string]$ToolRoot)
+param([string]$ToolRoot, [switch]$Coverage)
 $ErrorActionPreference = 'Stop'
 # Dedicated CI tool directories; no changes to the user's default Rust or PATH.
 if (!$ToolRoot) { $ToolRoot = Join-Path $env:LOCALAPPDATA 'chillhub-tools/rust-native-msvc' }
 $ToolRoot = [IO.Path]::GetFullPath($ToolRoot)
 $env:RUSTUP_HOME = Join-Path $ToolRoot 'rustup'
 $env:CARGO_HOME = Join-Path $ToolRoot 'cargo'
-$env:RUSTUP_TOOLCHAIN = '1.99.1-x86_64-pc-windows-msvc'
+$env:RUSTUP_TOOLCHAIN = if ($Coverage) { 'nightly-2026-11-14-x86_64-pc-windows-msvc' } else { '1.99.1-x86_64-pc-windows-msvc' }
 $toolBin = Join-Path $env:CARGO_HOME 'bin'
 $rustup = Join-Path $toolBin 'rustup.exe'
 if (!(Test-Path -LiteralPath $rustup -PathType Leaf)) {
@@ -22,7 +22,8 @@ if (!(Test-Path -LiteralPath $rustup -PathType Leaf)) {
     if ($LASTEXITCODE) { throw 'Не удалось подготовить отдельный rustup для Native CI.' }
 }
 $env:PATH = "$toolBin;$env:PATH"
-& $rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rustfmt --component clippy
+$components = if ($Coverage) { @('--component', 'llvm-tools-preview') } else { @('--component', 'rustfmt', '--component', 'clippy') }
+& $rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal @components
 if ($LASTEXITCODE) { throw 'Не удалось установить закреплённый Rust toolchain.' }
 & (Join-Path $toolBin 'rustc.exe') -vV
 if ($LASTEXITCODE) { throw 'Rust toolchain недоступен.' }

@@ -1,11 +1,19 @@
+mod background;
+mod settings;
+
+pub(super) use background::{Activity, background, background_for};
+
 use super::*;
 use chillhub_native::{
-    feedback::{FeedbackDraft, FeedbackService, SendResult},
-    launch::{self, LaunchAction, LaunchService},
+    feedback::{FeedbackDraft, SendResult},
+    launch::{self, LaunchAction, LaunchOutcome, LaunchService},
     queue::{QueueEvent, QueueState},
     service,
     transfer::TransferControl,
     update::{self, UpdateCheck, UpdatePaths},
+};
+use settings::{
+    AfterSave, load as load_settings, save as save_settings, save_live as save_live_settings,
 };
 use std::sync::atomic::Ordering;
 
@@ -15,123 +23,16 @@ pub(super) enum Confirmation {
     DeleteOrphans(Vec<OrphanRow>),
     ChangeGamesFolder,
     Cleanup(String),
+    ResetQueue,
     Version(GameRecord, LaunchTarget, String),
     Security(Vec<PathBuf>),
     Recovery(update::StagedUpdate),
     Shortcut(ShortcutRequest),
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) enum Activity {
-    Quiet = 0,
-    Choice = 1,
-    Catalog = 2,
-    Operation = 3,
-    Poll = 4,
-    UpdateCheck = 5,
-}
-static JOB_EPOCHS: [std::sync::atomic::AtomicU64; 6] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 6];
 static ICON_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LIBRARY_STATE_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static LIVE_SETTINGS_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub(super) fn background<T: Send + 'static>(
-    ui: &AppWindow,
-    work: impl FnOnce() -> T + Send + 'static,
-    done: impl FnOnce(&AppWindow, &State, T) + Send + 'static,
-) {
-    background_for(ui, Activity::Quiet, work, done);
-}
-#[cfg(test)]
-pub(super) fn test_background_failure(ui: &AppWindow) {
-    ui.set_operation_busy(true);
-    background_for(
-        ui,
-        Activity::Operation,
-        || panic!("controlled worker failure"),
-        |_, _, _: ()| unreachable!(),
-    );
-}
-#[cfg(test)]
-pub(super) fn test_empty_catalog(ui: &AppWindow, state: &State) {
-    let generation = state.borrow().catalog_generation;
-    apply_catalog(
-        ui,
-        state,
-        generation,
-        Ok((
-            chillhub_native::net::CatalogSnapshot {
-                library: Default::default(),
-                offline: false,
-                fetched_at: String::new(),
-                warning: None,
-            },
-            vec![],
-        )),
-    );
-}
-pub(super) fn background_for<T: Send + 'static>(
-    ui: &AppWindow,
-    activity: Activity,
-    work: impl FnOnce() -> T + Send + 'static,
-    done: impl FnOnce(&AppWindow, &State, T) + Send + 'static,
-) {
-    let weak = ui.as_weak();
-    let epoch = JOB_EPOCHS[activity as usize].fetch_add(1, Ordering::SeqCst) + 1;
-    let diagnostic_api = PANIC_CONTEXT.get().map(|(api, _)| api.clone());
-    std::thread::spawn(move || {
-        let started = std::time::Instant::now();
-        if !matches!(activity, Activity::Quiet | Activity::Poll)
-            && let Some(api) = &diagnostic_api
-        {
-            api.event(
-                "worker.start",
-                serde_json::json!({"activity": format!("{activity:?}"), "id": epoch}),
-            );
-        }
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).map_err(|error| {
-                error
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| error.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "Неизвестная ошибка фоновой задачи".into())
-            });
-        if (!matches!(activity, Activity::Quiet | Activity::Poll) || result.is_err())
-            && let Some(api) = diagnostic_api
-        {
-            api.event(
-                "worker.finish",
-                serde_json::json!({"activity": format!("{activity:?}"), "id": epoch,
-                    "elapsedMs": started.elapsed().as_millis(), "panicked": result.is_err()}),
-            );
-        }
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                ACTIVE_STATE.with(|slot|{if let Some(state)=slot.borrow().as_ref(){
-            match result{
-                Ok(value)=>done(&ui,state,value),
-                Err(error)=>{
-                    let services=state.borrow().services.clone();
-                    chillhub_native::diagnostics::log(&services.paths.data_dir,"background-error",&error);
-                    if JOB_EPOCHS[activity as usize].load(Ordering::SeqCst)==epoch{
-                        match activity{
-                            Activity::Choice=>{ui.set_busy(false);ui.set_can_play(false);},
-                            Activity::Catalog=>{ui.set_loading(false);ui.set_load_error("Не удалось загрузить библиотеку. Попробуйте обновить её.".into());},
-                            Activity::Operation=>ui.set_operation_busy(false),
-                            Activity::Poll=>state.borrow_mut().poll_inflight=false,
-                            Activity::UpdateCheck=>state.borrow_mut().update_inflight=false,
-                            Activity::Quiet=>{}
-                        }
-                    }
-                    toast(&ui,state,"Действие не завершилось из-за внутренней ошибки. Подробности сохранены в журнале.");
-                }
-            }
-        }});
-            }
-        });
-    });
-}
+
 pub(super) fn selected(state: &State) -> Option<(GameRecord, LaunchTarget)> {
     let s = state.borrow();
     let game = s.records.get(s.selected)?.clone();
@@ -348,7 +249,7 @@ pub(super) fn queue_report_notice(
 }
 pub(super) fn initialize(ui: &AppWindow, state: &State) {
     crate::karaoke::bind(ui);
-    settings(ui, state);
+    load_settings(ui, state);
     let weak = ui.as_weak();
     chillhub_native::diagnostic_notifications::subscribe(
         &state.borrow().services.paths.data_dir,
@@ -369,18 +270,30 @@ pub(super) fn initialize(ui: &AppWindow, state: &State) {
     chillhub_native::installed_apps::refresh(&services.paths.games_dir, &services.paths.data_dir);
     background(
         ui,
-        move || services.playtime.reconcile(),
-        |ui, state, result| match result {
-            Ok(sessions) => {
-                for s in sessions {
-                    watch_game(ui, s);
-                }
+        move || {
+            let loaders = LaunchService::new(services.paths.clone()).recover_loader_sessions();
+            (loaders, services.playtime.reconcile())
+        },
+        |ui, state, (loaders, playtime)| {
+            if let Err(error) = loaders {
+                toast(
+                    ui,
+                    state,
+                    &format!("Не удалось восстановить состояние модов: {error}"),
+                );
             }
-            Err(e) => toast(
-                ui,
-                state,
-                &format!("Не удалось восстановить время игры: {e}"),
-            ),
+            match playtime {
+                Ok(sessions) => {
+                    for s in sessions {
+                        watch_game(ui, s);
+                    }
+                }
+                Err(e) => toast(
+                    ui,
+                    state,
+                    &format!("Не удалось восстановить время игры: {e}"),
+                ),
+            }
         },
     );
     let receiver = state.borrow().services.queue.subscribe();
@@ -434,12 +347,23 @@ pub(super) fn initialize(ui: &AppWindow, state: &State) {
                                             queue_finished(&ui, state, *task)
                                         }
                                         QueueEvent::PersistenceError(error) => {
-                                            ui.set_queue_error(error.clone().into());
-                                            toast(
-                                                &ui,
-                                                state,
-                                                &format!("Не удалось сохранить очередь: {error}"),
-                                            );
+                                            let services = state.borrow().services.clone();
+                                            let unreadable = services.queue.recovery_error().is_some();
+                                            ui.set_queue_recovery_needed(unreadable);
+                                            if unreadable {
+                                                ui.set_queue_error("Не удалось открыть сохранённую очередь загрузок.".into());
+                                                chillhub_native::diagnostics::log(
+                                                    &services.paths.data_dir, "queue-recovery", &error,
+                                                );
+                                                toast(&ui, state, "Очередь повреждена. Её можно сбросить в разделе «Загрузки».");
+                                            } else {
+                                                ui.set_queue_error(error.clone().into());
+                                                toast(
+                                                    &ui,
+                                                    state,
+                                                    &format!("Не удалось сохранить очередь: {error}"),
+                                                );
+                                            }
                                         }
                                         QueueEvent::Changed(_) => unreachable!(),
                                     }
@@ -610,20 +534,7 @@ pub(super) fn install_window_refresh(ui: &AppWindow) {
                 if let Some(ui) = weak.upgrade() {
                     ACTIVE_STATE.with(|slot| {
                         if let Some(state) = slot.borrow().as_ref() {
-                            let now = std::time::Instant::now();
-                            if state.borrow().last_activation.is_some_and(|last| {
-                                now.duration_since(last) < Duration::from_secs(10)
-                            }) {
-                                return;
-                            }
-                            state.borrow_mut().last_activation = Some(now);
-                            poll_services(&ui, state);
-                            refresh_catalog_quietly(&ui, state);
-                            refresh_disk(&ui, state);
-                            if !ui.get_busy() && !ui.get_operation_busy() {
-                                refresh_choice(&ui, state);
-                                refresh_library_states(&ui, state);
-                            }
+                            refresh_focused(&ui, state, std::time::Instant::now());
                         }
                     });
                 }
@@ -632,6 +543,25 @@ pub(super) fn install_window_refresh(ui: &AppWindow) {
         EventResult::Propagate
     });
 }
+
+pub(super) fn refresh_focused(ui: &AppWindow, state: &State, now: std::time::Instant) {
+    if state
+        .borrow()
+        .last_activation
+        .is_some_and(|last| now.duration_since(last) < Duration::from_secs(10))
+    {
+        return;
+    }
+    state.borrow_mut().last_activation = Some(now);
+    poll_services(ui, state);
+    refresh_catalog_quietly(ui, state);
+    refresh_disk(ui, state);
+    if !ui.get_busy() && !ui.get_operation_busy() {
+        refresh_choice(ui, state);
+        refresh_library_states(ui, state);
+    }
+}
+
 fn refresh_catalog_quietly(ui: &AppWindow, state: &State) {
     if !ui.window().is_visible()
         || ui.window().is_minimized()
@@ -791,271 +721,12 @@ fn offer_shortcut(ui: &AppWindow, state: &State, request: ShortcutRequest) {
         ),
     }
 }
-fn settings(ui: &AppWindow, state: &State) {
-    ui.set_settings_error("".into());
-    let s = state.borrow();
-    let c = &s.prefs;
-    ui.set_settings_path(
-        s.services
-            .paths
-            .games_dir
-            .to_string_lossy()
-            .into_owned()
-            .into(),
-    );
-    ui.set_settings_threads(c.download_threads);
-    ui.set_settings_speed(c.speed_limit_mbps);
-    ui.set_settings_api(c.api_base_url.clone().into());
-    ui.set_settings_tray(c.minimize_to_tray);
-    ui.set_karaoke_enabled(
-        c.extra
-            .get("KaraokeEnabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    );
-    ui.set_reduced_motion(
-        c.extra
-            .get("ReducedMotion")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    );
-    drop(s);
-    refresh_disk(ui, state);
-}
-fn save_live_settings(ui: &AppWindow, state: &State) {
-    let threads = ui.get_settings_threads();
-    let speed = ui.get_settings_speed();
-    let tray = ui.get_settings_tray();
-    let reduced = ui.get_reduced_motion();
-    let karaoke = ui.get_karaoke_enabled();
-    let s = state.borrow();
-    if s.prefs.download_threads == threads
-        && s.prefs
-            .extra
-            .get("KaraokeEnabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            == karaoke
-        && s.prefs.speed_limit_mbps == speed
-        && s.prefs.minimize_to_tray == tray
-        && s.prefs
-            .extra
-            .get("ReducedMotion")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            == reduced
-    {
-        return;
-    }
-    let services = s.services.clone();
-    drop(s);
-    let epoch = LIVE_SETTINGS_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
-    ui.set_settings_save_status("Сохраняем…".into());
-    background(
-        ui,
-        move || {
-            services.config.update(|c| {
-                if LIVE_SETTINGS_EPOCH.load(Ordering::SeqCst) == epoch {
-                    c.download_threads = threads;
-                    c.speed_limit_mbps = speed;
-                    c.minimize_to_tray = tray;
-                    c.extra.insert("ReducedMotion".into(), reduced.into());
-                    c.extra.insert("KaraokeEnabled".into(), karaoke.into());
-                }
-            })
-        },
-        move |ui, state, result| {
-            if LIVE_SETTINGS_EPOCH.load(Ordering::SeqCst) != epoch {
-                return;
-            }
-            match result {
-                Ok(saved) => {
-                    let mut s = state.borrow_mut();
-                    s.prefs.download_threads = saved.download_threads;
-                    s.prefs.speed_limit_mbps = saved.speed_limit_mbps;
-                    s.prefs.minimize_to_tray = saved.minimize_to_tray;
-                    s.prefs.extra.insert("ReducedMotion".into(), reduced.into());
-                    s.prefs
-                        .extra
-                        .insert("KaraokeEnabled".into(), karaoke.into());
-                    s.services
-                        .queue
-                        .set_speed_limit(saved.speed_limit_mbps.max(0) as u64 * 1024 * 1024);
-                    ui.set_settings_save_status("Сохранено".into());
-                }
-                Err(e) => {
-                    ui.set_settings_save_status("Не удалось сохранить".into());
-                    ui.set_settings_error(e.into());
-                }
-            }
-        },
-    );
-}
-fn save_settings(ui: &AppWindow, state: &State, next: String) {
-    if ui.get_operation_busy() {
-        return;
-    }
-    LIVE_SETTINGS_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let services = state.borrow().services.clone();
-    let path = settings_ui::normalize_games_path(ui.get_settings_path().as_str())
-        .to_string_lossy()
-        .into_owned();
-    let api = ui
-        .get_settings_api()
-        .trim()
-        .trim_end_matches('/')
-        .to_string();
-    let threads = ui.get_settings_threads();
-    let speed = ui.get_settings_speed();
-    let tray = ui.get_settings_tray();
-    let reduced = ui.get_reduced_motion();
-    let current = state.borrow().prefs.clone();
-    let karaoke = ui.get_karaoke_enabled();
-    let karaoke_changed = current
-        .extra
-        .get("KaraokeEnabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        != karaoke;
-    let paths_changed = !settings_ui::same_path(&path, &services.paths.games_dir.to_string_lossy());
-    let api_changed = api != current.api_base_url.trim_end_matches('/');
-    let reload_needed = paths_changed || api_changed;
-    let reduced_changed = current
-        .extra
-        .get("ReducedMotion")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        != reduced;
-    if !reload_needed
-        && current.download_threads == threads
-        && current.speed_limit_mbps == speed
-        && current.minimize_to_tray == tray
-        && !reduced_changed
-        && !karaoke_changed
-    {
-        finish_settings(ui, state, &next);
-        return;
-    }
-    ui.set_settings_error("".into());
-    if let Err(error) = settings_ui::validate_path_override(
-        &path,
-        std::env::var_os("CHILLHUB_GAMES_DIR").as_deref(),
-    ) {
-        ui.set_settings_error(error.into());
-        return;
-    }
-    if reload_needed && !state.borrow().launching.is_empty() {
-        ui.set_settings_error("Дождитесь запуска игр перед изменением папки или сервера.".into());
-        return;
-    }
-    ui.set_operation_busy(true);
-    background_for(
-        ui,
-        Activity::Operation,
-        move || -> Result<AppConfig, String> {
-            if reload_needed && !services.idle() {
-                return Err("Папку игр и адрес сервера можно изменить после завершения загрузок и игр. Скорость, потоки и поведение окна можно менять сейчас.".into());
-            }
-            if paths_changed {
-                let folder = PathBuf::from(&path);
-                let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-                chillhub_native::library::validate_games_location(
-                    &folder,
-                    &services.paths,
-                    executable.parent().ok_or("Папка лаунчера не найдена")?,
-                )?;
-            }
-            if api_changed {
-                chillhub_native::net::ApiClient::new(&api).map_err(|e| e.to_string())?;
-            }
-            let saved = services.config.update(|c| {
-                if paths_changed {
-                    c.games_path = path;
-                }
-                if api_changed {
-                    c.api_base_url = api;
-                }
-                c.download_threads = threads;
-                c.speed_limit_mbps = speed;
-                c.minimize_to_tray = tray;
-                c.extra
-                    .insert("ReducedMotion".into(), serde_json::Value::Bool(reduced));
-                c.extra.insert("KaraokeEnabled".into(), karaoke.into());
-            })?;
-            services
-                .queue
-                .set_speed_limit(saved.speed_limit_mbps.max(0) as u64 * 1024 * 1024);
-            if paths_changed {
-                chillhub_native::installed_apps::refresh(
-                    Path::new(&saved.games_path),
-                    &services.paths.data_dir,
-                );
-            }
-            Ok(saved)
-        },
-        move |ui, state, result| {
-            ui.set_operation_busy(false);
-            match result {
-                Ok(config) => {
-                    let mut s = state.borrow_mut();
-                    s.services.paths = config.apply_paths(&s.services.paths);
-                    if api_changed {
-                        match chillhub_native::net::ApiClient::new(&config.api_base_url) {
-                            Ok(api) => {
-                                s.services.api =
-                                    api.with_diagnostics(s.services.paths.data_dir.clone())
-                            }
-                            Err(e) => {
-                                drop(s);
-                                ui.set_settings_error(e.to_string().into());
-                                return;
-                            }
-                        }
-                        s.services.feedback = std::sync::Arc::new(FeedbackService::new(
-                            s.services.api.clone(),
-                            s.services.paths.data_dir.clone(),
-                        ));
-                    }
-                    s.prefs = config;
-                    drop(s);
-                    settings(ui, state);
-                    finish_settings(ui, state, &next);
-                    toast(
-                        ui,
-                        state,
-                        if paths_changed {
-                            "Настройки сохранены. Игры остались в прежней папке."
-                        } else {
-                            "Настройки сохранены"
-                        },
-                    );
-                    if reload_needed && next != "__quit" {
-                        reload(ui, state);
-                    }
-                }
-                Err(e) => {
-                    ui.set_settings_error(e.clone().into());
-                    toast(ui, state, &e);
-                }
-            }
-        },
-    );
-}
-fn finish_settings(ui: &AppWindow, state: &State, next: &str) {
-    close_panel(ui, state);
-    if next == "__quit" {
-        save_window(ui, state);
-        let _ = slint::quit_event_loop();
-    } else if !next.is_empty() {
-        open_panel(ui, state, next);
-    }
-}
 pub(super) fn request_exit(ui: &AppWindow, state: &State) {
     if ui.get_operation_busy() {
         return;
     }
     if ui.get_panel_kind() == "settings" {
-        save_settings(ui, state, "__quit".into());
+        save_settings(ui, state, AfterSave::Quit);
     } else {
         save_window(ui, state);
         let _ = slint::quit_event_loop();
@@ -1115,7 +786,7 @@ fn reload(ui: &AppWindow, state: &State) {
         move |ui, state, result| apply_catalog(ui, state, generation, result),
     );
 }
-fn apply_catalog(
+pub(super) fn apply_catalog(
     ui: &AppWindow,
     state: &State,
     generation: u64,
@@ -1652,6 +1323,10 @@ fn queue_changed(ui: &AppWindow, state: &State, tasks: Vec<QueueItem>) {
         format!("Chill Hub · {summary}")
     });
     ui.set_queue(Rc::new(VecModel::from(rows)).into());
+    if ui.get_queue_recovery_needed() && state.borrow().services.queue.recovery_error().is_none() {
+        ui.set_queue_recovery_needed(false);
+        ui.set_queue_error(Default::default());
+    }
     state.borrow_mut().tasks = tasks;
     sync_library_rows(ui, state);
     if changed {
@@ -1672,6 +1347,7 @@ pub(super) fn play(ui: &AppWindow, state: &State) {
     let shown_action = state.borrow().option.as_ref().map(|o| o.action.clone());
     let launching = shown_action == Some(LaunchAction::Play);
     let launch_key = (game.game_id.clone(), target.via_steam());
+    let late_version = game.latest_version.clone();
     if state.borrow().launching.contains(&launch_key) {
         return;
     }
@@ -1686,8 +1362,12 @@ pub(super) fn play(ui: &AppWindow, state: &State) {
     ui.set_can_play(false);
     background_for(
         ui,
-        if launching { Activity::Quiet } else { Activity::Operation },
-        move || -> Result<Option<chillhub_native::playtime::SessionHandle>, install_ui::PlayFailure> {
+        if launching {
+            Activity::Quiet
+        } else {
+            Activity::Operation
+        },
+        move || -> Result<Option<LaunchOutcome>, install_ui::PlayFailure> {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let option = services.option(&game, target)?;
             if option.action==LaunchAction::Play && shown_action.is_some_and(|shown|shown!=LaunchAction::Play) {
@@ -1701,17 +1381,9 @@ pub(super) fn play(ui: &AppWindow, state: &State) {
             }
             if option.action == LaunchAction::Play {
                 let launched = LaunchService::new(services.paths.clone()).launch(&game, target)?;
-                chillhub_native::diagnostics::metric(
-                    &services.api,
-                    &services.paths.data_dir,
-                    chillhub_native::diagnostics::Metric {
-                        event: "game_launch".into(),
-                        game_id: game.game_id,
-                        version: game.latest_version,
-                        result: "ok".into(),
-                        ..Default::default()
-                    },
-                );
+                if matches!(&launched, LaunchOutcome::Started(_)) {
+                    record_game_launch(&services, game.game_id, game.latest_version);
+                }
                 Ok(Some(launched))
             } else {
                 if !target.via_steam()
@@ -1734,24 +1406,82 @@ pub(super) fn play(ui: &AppWindow, state: &State) {
                 ui.set_operation_busy(false);
             }
             match result {
-                Ok(Some(session)) => {
-                    if let Some(warning) = &session.warning {
-                        toast(ui, state, warning);
-                    } else {
-                        toast(ui, state, "Игра запущена");
-                    }
-                    watch_game(ui, session);
+                Ok(Some(LaunchOutcome::Started(session))) => {
+                    show_game_started(ui, state, session);
+                }
+                Ok(Some(LaunchOutcome::SteamPending {
+                    warning,
+                    late_session,
+                })) => {
+                    toast(ui, state, warning);
+                    let services = state.borrow().services.clone();
+                    let version = late_version.clone();
+                    background(
+                        ui,
+                        move || {
+                            let session = late_session.recv().ok()?;
+                            record_game_launch(&services, session.game_id.clone(), version);
+                            Some(session)
+                        },
+                        |ui, state, session| {
+                            if let Some(session) = session {
+                                show_game_started(ui, state, session);
+                                refresh_choice(ui, state);
+                            }
+                        },
+                    );
                 }
                 Ok(None) => open_panel(ui, state, "downloads"),
-                Err(install_ui::PlayFailure::General(error)) => report_failure(ui, state, "launch", &error),
-                Err(install_ui::PlayFailure::Folder(path,error)) => {
-                    chillhub_native::diagnostics::log(&state.borrow().services.paths.data_dir,"install-path",&error);
-                    confirm(ui,state,Confirmation::ChangeGamesFolder,"В эту папку нельзя записать файлы",format!("Папка:\n{}\n\nВыберите другую папку для новых установок. Уже установленные игры не будут перемещены. После сохранения настроек нажмите «Установить» снова.",path.display()),"Выбрать другую папку");
+                Err(install_ui::PlayFailure::General(error)) => {
+                    report_failure(ui, state, "launch", &error)
+                }
+                Err(install_ui::PlayFailure::Folder(path, error)) => {
+                    chillhub_native::diagnostics::log(
+                        &state.borrow().services.paths.data_dir,
+                        "install-path",
+                        &error,
+                    );
+                    confirm(
+                        ui,
+                        state,
+                        Confirmation::ChangeGamesFolder,
+                        "В эту папку нельзя записать файлы",
+                        format!(
+                            "Папка:\n{}\n\nВыберите другую папку для новых установок. Уже установленные игры не будут перемещены. После сохранения настроек нажмите «Установить» снова.",
+                            path.display()
+                        ),
+                        "Выбрать другую папку",
+                    );
                 }
             }
             refresh_choice(ui, state);
         },
     );
+}
+fn record_game_launch(services: &Services, game_id: String, version: String) {
+    chillhub_native::diagnostics::metric(
+        &services.api,
+        &services.paths.data_dir,
+        chillhub_native::diagnostics::Metric {
+            event: "game_launch".into(),
+            game_id,
+            version,
+            result: "ok".into(),
+            ..Default::default()
+        },
+    );
+}
+fn show_game_started(
+    ui: &AppWindow,
+    state: &State,
+    session: chillhub_native::playtime::SessionHandle,
+) {
+    toast(
+        ui,
+        state,
+        session.warning.as_deref().unwrap_or("Игра запущена"),
+    );
+    watch_game(ui, session);
 }
 fn watch_game(ui: &AppWindow, session: chillhub_native::playtime::SessionHandle) {
     let services =
@@ -1798,7 +1528,7 @@ pub(super) fn prepare_panel(ui: &AppWindow, state: &State, kind: &str) {
         );
     }
     if kind == "settings" {
-        settings(ui, state);
+        load_settings(ui, state);
     }
     if kind == "changelog"
         && chillhub_native::changelog::should_show(
@@ -2052,6 +1782,13 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                         .confirm_cleanup(&id)
                         .map(|_| "Задача продолжена".into())
                         .map_err(|e| e.to_string())
+                }),
+                Some(Confirmation::ResetQueue) => operation(ui, state, move || {
+                    services
+                        .queue
+                        .reset_unreadable()
+                        .map(|()| "Очередь загрузок восстановлена".into())
+                        .map_err(|error| error.to_string())
                 }),
                 Some(Confirmation::Version(game, target, version)) => {
                     operation(ui, state, move || {
@@ -2523,6 +2260,19 @@ pub(super) fn bind(ui: &AppWindow, state: &State) {
     handler!(on_queue_action, |ui, state, id, value| {
         let id = id.to_string();
         let queue = state.borrow().services.queue.clone();
+        if value == "reset" {
+            if !ui.get_operation_busy() && queue.recovery_error().is_some() {
+                confirm(
+                    &ui,
+                    &state,
+                    Confirmation::ResetQueue,
+                    "Сбросить очередь загрузок?",
+                    "Лаунчер создаст пустую очередь и сохранит резервную копию старого списка. Игры и уже скачанные файлы останутся на диске.".into(),
+                    "Сбросить очередь",
+                );
+            }
+            return;
+        }
         if value == "security" {
             let task = state
                 .borrow()
@@ -2609,10 +2359,10 @@ pub(super) fn bind(ui: &AppWindow, state: &State) {
         ui.set_settings_api(api);
         ui.set_settings_tray(tray);
         ui.set_reduced_motion(reduced);
-        save_settings(&ui, &state, "".into());
+        save_settings(&ui, &state, AfterSave::Close);
     });
     handler!(on_settings_leave, |ui, state, next| {
-        save_settings(&ui, &state, next.to_string());
+        save_settings(&ui, &state, AfterSave::from_panel(next.as_str()));
     });
     handler!(on_settings_live_changed, |ui, state| {
         save_live_settings(&ui, &state);

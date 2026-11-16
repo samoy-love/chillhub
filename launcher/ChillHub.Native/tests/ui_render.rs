@@ -1324,6 +1324,22 @@ fn real_ui_headless_layout_and_actions() {
     if h.qa {
         h.ui.set_queue_error("Не удалось прочитать сохранённую очередь: файл слишком большой. Исходная очередь оставлена на месте. Новые загрузки пока недоступны. Уже установленные игры и сохранения не изменены. Если ошибка повторится после перезапуска, приложите журнал к сообщению в поддержку.".into());
         h.capture("queue-storage-error", 900, 500, 1.0);
+        assert!(
+            ElementHandle::find_by_accessible_label(&h.ui, "Сбросить очередь")
+                .next()
+                .is_none()
+        );
+        h.ui.set_queue_error("Не удалось открыть сохранённую очередь загрузок.".into());
+        h.ui.set_queue_recovery_needed(true);
+        h.capture("queue-storage-recovery", 900, 500, 1.0);
+        h.click("Сбросить очередь");
+        assert!(
+            h.actions
+                .borrow()
+                .iter()
+                .any(|action| action == "queue::reset")
+        );
+        h.ui.set_queue_recovery_needed(false);
         h.ui.set_queue_error("".into());
     }
     h.ui.set_orphans(original_orphans);
