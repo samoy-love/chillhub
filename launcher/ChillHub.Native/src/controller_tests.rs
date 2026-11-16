@@ -1,4 +1,7 @@
 //! Controller integration tests use the headless testing backend and loopback fixtures.
+#[path = "controller_ui_action_tests.rs"]
+mod ui_action_tests;
+
 use super::*;
 use crate::catalog::Media;
 use chillhub_native::{
@@ -334,6 +337,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
     ACTIVE_STATE.with(|slot| *slot.borrow_mut() = Some(state.clone()));
     let ui = AppWindow::new().unwrap();
     bind(&ui, &state);
+    ui_action_tests::check_unavailable_actions(&ui, &state);
     // This is the testing backend's virtual window, never winit/Win32.
     ui.show().unwrap();
     controller::initialize(&ui, &state);
@@ -346,6 +350,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
     let captured = state.clone();
     let base = server.base.clone();
     let hold_content = server.hold_content.clone();
+    let action_queue_ids = RefCell::new(Vec::new());
     let reject_catalog = server.reject_catalog.clone();
     let cleanup_root = paths.games_dir.join("confirmation-fixture");
     let cleanup_save = cleanup_root.join("save.dat");
@@ -483,6 +488,18 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                 }
                 5 if !ui.get_operation_busy() && ui.get_versions().row_count() == 2 => {
                     if ui.get_selected_version() != "0.9.0" { return Err("manage panel replaced pinned version with newest build".into()); }
+                    *action_queue_ids.borrow_mut() = ui_action_tests::start_local_verification(&ui, &captured)?;
+                    *stage.borrow_mut() = (50, 0);
+                }
+                50 if {
+                    let previous_ids = action_queue_ids.borrow();
+                    ui_action_tests::check_local_queue(&ui, &captured, &previous_ids, true)?
+                } => {
+                    *action_queue_ids.borrow_mut() = ui_action_tests::confirm_requested_version(&ui, &captured)?;
+                    *stage.borrow_mut() = (51, 0);
+                }
+                51 if ui_action_tests::check_local_queue(&ui, &captured, &action_queue_ids.borrow(), false)? => {
+                    captured.borrow_mut().choices.insert("fixture".into(), ("local".into(), "mods".into()));
                     ui.invoke_panel_closed();
                     ui.invoke_game_selected(0);
                     *stage.borrow_mut() = (6, 0);

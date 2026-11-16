@@ -1,5 +1,7 @@
 mod background;
+mod launch_presentation;
 mod settings;
+mod ui_action;
 
 pub(super) use background::{Activity, background, background_for};
 
@@ -12,10 +14,12 @@ use chillhub_native::{
     transfer::{CleanupFile, TransferControl},
     update::{self, UpdateCheck, UpdatePaths},
 };
+use launch_presentation::{InstalledCopyFacts, library_label};
 use settings::{
     AfterSave, load as load_settings, save as save_settings, save_live as save_live_settings,
 };
 use std::sync::atomic::Ordering;
+use ui_action::UiAction;
 
 #[derive(Clone)]
 pub(super) enum Confirmation {
@@ -53,6 +57,11 @@ pub(super) fn selected(state: &State) -> Option<(GameRecord, LaunchTarget)> {
         },
     ))
 }
+struct ChoiceProbe {
+    option: LaunchOption,
+    copy: InstalledCopyFacts,
+}
+
 pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
     let (game, target) = match selected(state) {
         Some(v) => v,
@@ -96,33 +105,33 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
         move || {
             let result = services.option(&game, target).map(|option| {
                 let running = chillhub_native::playtime::processes_in(&option.game_dir)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .next();
-                let version = launch::read_marker(&option.game_dir, ".version");
-                let exe = launch::resolve_game_exe(
+                    .is_ok_and(|processes| !processes.is_empty());
+                let version_marker = launch::read_marker(&option.game_dir, ".version");
+                let has_executable = launch::resolve_game_exe(
                     &option.game_dir,
                     &game.exe_relative_path,
-                    &game
-                        .mods
+                    game.mods
                         .as_ref()
-                        .map(|m| m.exe_names.clone())
+                        .map(|mods| mods.exe_names.as_slice())
                         .unwrap_or_default(),
                 )
                 .is_ok();
-                let files = [
-                    !target.via_steam() && service::can_verify_game(&game, &option.game_dir),
-                    service::can_verify_mods(&option.game_dir),
-                    option.game_dir.is_dir(),
-                    exe,
-                ];
-                let time = services
-                    .playtime
-                    .totals(&game.game_id)
-                    .unwrap_or_default()
-                    .total_seconds;
-                let queued = services.queue.has_pending_for_root(&option.game_dir);
-                (option, running, version, time, files, queued)
+                let copy = InstalledCopyFacts {
+                    can_verify_game: !target.via_steam()
+                        && service::can_verify_game(&game, &option.game_dir),
+                    can_verify_mods: service::can_verify_mods(&option.game_dir),
+                    has_game_files: option.game_dir.is_dir(),
+                    has_executable,
+                    running,
+                    version_marker,
+                    playtime_seconds: services
+                        .playtime
+                        .totals(&game.game_id)
+                        .unwrap_or_default()
+                        .total_seconds,
+                    queued: services.queue.has_pending_for_root(&option.game_dir),
+                };
+                ChoiceProbe { option, copy }
             });
             let saved = services.config.update(|c| {
                 if epoch.load(Ordering::SeqCst) == generation {
@@ -138,75 +147,29 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
             }
             ui.set_busy(false);
             match result {
-                Ok((option, running, version, time, files, queued)) => {
-                    let blocked = service::blocked(&state.borrow().maintenance, &option.action);
+                Ok(ChoiceProbe { option, copy }) => {
                     let launching = selected(state).is_some_and(|(game, target)| {
                         state
                             .borrow()
                             .launching
                             .contains(&(game.game_id, target.via_steam()))
                     });
-                    ui.set_can_verify_game(files[0] && !queued && running.is_none() && !launching);
-                    ui.set_can_verify_mods(files[1] && !queued && running.is_none() && !launching);
-                    ui.set_has_game_files(files[2]);
-                    ui.set_can_create_shortcut(files[3]);
-                    ui.set_can_play(
-                        option.available()
-                            && running.is_none()
-                            && !queued
-                            && !blocked
-                            && !launching,
+                    let presentation = launch_presentation::present(
+                        &option,
+                        &copy,
+                        &state.borrow().maintenance,
+                        launching,
                     );
-                    ui.set_play_label(
-                        if launching {
-                            "Запускаем…"
-                        } else if running.is_some() {
-                            "Игра запущена"
-                        } else if queued {
-                            "В очереди"
-                        } else if blocked {
-                            "Технические работы"
-                        } else {
-                            match option.action {
-                                LaunchAction::Play => "Играть",
-                                LaunchAction::InstallGame => "Установить",
-                                LaunchAction::UpdateGame => "Обновить",
-                                LaunchAction::InstallMods => "Установить моды",
-                                LaunchAction::UpdateMods => "Обновить моды",
-                                LaunchAction::RepairMods => "Восстановить моды",
-                                LaunchAction::Unavailable => "Недоступно",
-                            }
-                        }
-                        .into(),
-                    );
-                    ui.set_status(if launching {
-                        "Ожидаем запуска игры".into()
-                    } else if running.is_some() {
-                        "Игра уже запущена".into()
-                    } else if queued {
-                        "Откройте загрузки, чтобы продолжить или отменить задачу".into()
-                    } else if blocked {
-                        "Ожидаем завершения работ на сервере".into()
-                    } else if option.note.is_empty() {
-                        "Готово к запуску".into()
-                    } else {
-                        option.note.clone().into()
-                    });
-                    ui.set_installed_version(if target.via_steam() {
-                        "Версией управляет Steam".into()
-                    } else if version.is_empty() {
-                        "Не установлена".into()
-                    } else {
-                        format!("Установлена {version}").into()
-                    });
-                    ui.set_playtime_label(if time == 0 {
-                        "Ещё не играли".into()
-                    } else if time < 60 {
-                        "Сыграно меньше минуты".into()
-                    } else {
-                        format!("Сыграно {} ч {} мин", time / 3600, (time / 60) % 60).into()
-                    });
-                    let label = library_label(&option, running.is_some());
+                    ui.set_can_verify_game(presentation.can_verify_game);
+                    ui.set_can_verify_mods(presentation.can_verify_mods);
+                    ui.set_has_game_files(presentation.has_game_files);
+                    ui.set_can_create_shortcut(presentation.can_create_shortcut);
+                    ui.set_can_play(presentation.can_play);
+                    ui.set_play_label(presentation.play_label.into());
+                    ui.set_status(presentation.status.into());
+                    ui.set_installed_version(presentation.installed_version.into());
+                    ui.set_playtime_label(presentation.playtime_label.into());
+                    let label = library_label(&option.action, copy.running);
                     let id = state
                         .borrow()
                         .records
@@ -692,7 +655,7 @@ fn check_updates(ui: &AppWindow, state: &State, startup: bool) {
                 }
                 state.borrow_mut().update = Some(release);
                 open_panel(ui, state, "update");
-                action(ui, state, "update-install");
+                action(ui, state, UiAction::InstallUpdate);
             }
         },
     );
@@ -889,20 +852,6 @@ pub(super) fn apply_catalog(
         }
     }
 }
-fn library_label(option: &LaunchOption, running: bool) -> (String, String) {
-    if running {
-        return ("Игра запущена".into(), "active".into());
-    }
-    let (text, kind) = match option.action {
-        LaunchAction::Play => ("Установлена", "ready"),
-        LaunchAction::UpdateGame | LaunchAction::UpdateMods => ("Доступно обновление", "update"),
-        LaunchAction::RepairMods => ("Нужно восстановление", "update"),
-        LaunchAction::InstallGame => ("Не установлена", "idle"),
-        LaunchAction::InstallMods => ("Моды не установлены", "idle"),
-        LaunchAction::Unavailable => ("Копия недоступна", "idle"),
-    };
-    (text.into(), kind.into())
-}
 fn refresh_library_states(ui: &AppWindow, state: &State) {
     let epoch = LIBRARY_STATE_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
     let s = state.borrow();
@@ -938,7 +887,7 @@ fn refresh_library_states(ui: &AppWindow, state: &State) {
                         .map(|option| {
                             let running = chillhub_native::playtime::processes_in(&option.game_dir)
                                 .is_ok_and(|p| !p.is_empty());
-                            library_label(&option, running)
+                            library_label(&option.action, running)
                         })
                         .unwrap_or(("Не удалось проверить".into(), "error".into()));
                     (g.game_id, label)
@@ -1518,7 +1467,7 @@ pub(super) fn prepare_panel(ui: &AppWindow, state: &State, kind: &str) {
         ui.set_update_error(false);
         ui.set_task_status("".into());
         ui.set_task_progress(0.);
-        action(ui, state, "update-check");
+        action(ui, state, UiAction::CheckUpdate);
     }
     if kind == "mods" {
         ui.set_has_modpack_link(
@@ -1681,8 +1630,10 @@ fn report_failure(ui: &AppWindow, state: &State, kind: &str, error: &str) {
     );
     toast(ui, state, error);
 }
-fn action(ui: &AppWindow, state: &State, value: &str) {
-    if matches!(value, "update-install" | "update-verify") && !state.borrow().launching.is_empty() {
+fn action(ui: &AppWindow, state: &State, requested: UiAction) {
+    if matches!(requested, UiAction::InstallUpdate | UiAction::VerifyUpdate)
+        && !state.borrow().launching.is_empty()
+    {
         toast(
             ui,
             state,
@@ -1691,8 +1642,8 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
         return;
     }
     let services = state.borrow().services.clone();
-    match value {
-        "choose-games-folder" => {
+    match requested {
+        UiAction::ChooseGamesFolder => {
             if ui.get_operation_busy() || ui.get_panel_kind() != "settings" {
                 return;
             }
@@ -1721,7 +1672,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 },
             );
         }
-        "copy-game-path" => {
+        UiAction::CopyGamePath => {
             let path = ui.get_manage_path();
             if !path.is_empty() {
                 match settings_ui::copy_text(state.borrow().native_hwnd, &path) {
@@ -1730,7 +1681,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 }
             }
         }
-        "open-modpack-source" => {
+        UiAction::OpenModpackSource => {
             if let Some(url) = selected(state)
                 .and_then(|(g, _)| g.mods.as_ref().and_then(settings_ui::modpack_url))
                 && let Err(e) = settings_ui::open_package(&url)
@@ -1738,9 +1689,9 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 toast(ui, state, &e);
             }
         }
-        "retry-catalog" => reload(ui, state),
-        "delete-selected-orphans" => orphan_ui::confirm_selected(ui, state),
-        "open-logs" => {
+        UiAction::RetryCatalog => reload(ui, state),
+        UiAction::DeleteSelectedOrphans => orphan_ui::confirm_selected(ui, state),
+        UiAction::OpenLogs => {
             if let Some(directory) =
                 chillhub_native::diagnostics::existing_log_directory(&services.paths.data_dir)
             {
@@ -1752,12 +1703,12 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 toast(ui, state, e);
             }
         }
-        "feedback" | "changelog" | "update" | "security" => open_panel(ui, state, value),
-        "cancel-action" => {
+        UiAction::OpenPanel(panel) => open_panel(ui, state, panel.token()),
+        UiAction::Cancel => {
             state.borrow_mut().pending = None;
             close_panel(ui, state);
         }
-        "confirm-action" => {
+        UiAction::Confirm => {
             let pending = state.borrow_mut().pending.take();
             close_panel(ui, state);
             match pending {
@@ -1766,7 +1717,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 }
                 Some(Confirmation::ChangeGamesFolder) => {
                     open_panel(ui, state, "settings");
-                    action(ui, state, "choose-games-folder");
+                    action(ui, state, UiAction::ChooseGamesFolder);
                 }
                 Some(Confirmation::Delete(game)) => operation(ui, state, move || {
                     services.delete_local(&game)?;
@@ -1843,9 +1794,9 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 None => {}
             }
         }
-        "verify-game" | "verify-mods" => {
+        UiAction::VerifyGame | UiAction::VerifyMods => {
             if let Some((game, target)) = selected(state) {
-                let mods = value == "verify-mods";
+                let mods = requested == UiAction::VerifyMods;
                 if target.via_steam() && !mods {
                     toast(
                         ui,
@@ -1861,7 +1812,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 });
             }
         }
-        "open-game-folder" => {
+        UiAction::OpenGameFolder => {
             if let Some((game, target)) = selected(state) {
                 operation(ui, state, move || {
                     services
@@ -1871,7 +1822,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 });
             }
         }
-        "delete-game" => {
+        UiAction::DeleteGame => {
             if let Some((game, target)) = selected(state) {
                 if target.via_steam() {
                     toast(ui, state, "Steam-копия удаляется через библиотеку Steam");
@@ -1894,7 +1845,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 );
             }
         }
-        "version-install" => {
+        UiAction::InstallVersion => {
             if let Some((game, target)) = selected(state) {
                 if target.via_steam() {
                     toast(ui, state, "Версией Steam управляет Steam");
@@ -1913,7 +1864,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 );
             }
         }
-        "create-shortcut" => {
+        UiAction::CreateShortcut => {
             if let Some((game, target)) = selected(state) {
                 operation(ui, state, move || {
                     let option = services.option(&game, target)?;
@@ -1951,7 +1902,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 });
             }
         }
-        "security-check" | "security-diagnostics" => {
+        UiAction::CheckSecurity => {
             ui.set_operation_busy(true);
             ui.set_panel_body("Проверяем состояние защиты и последние блокировки…".into());
             background_for(
@@ -1970,7 +1921,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 },
             );
         }
-        "security-helper" => {
+        UiAction::OpenSecurityHelper => {
             if let Some((game, target)) = selected(state) {
                 match services.option(&game, target) {
                     // The helper shows the exact paths and owns confirmation.
@@ -1988,12 +1939,12 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 toast(ui, state, "Сначала выберите игру в библиотеке");
             }
         }
-        "security-open" | "windows-security" => {
+        UiAction::OpenWindowsSecurity => {
             if let Err(e) = chillhub_native::security::open_windows_security() {
                 toast(ui, state, &e);
             }
         }
-        "update-check" => {
+        UiAction::CheckUpdate => {
             state.borrow_mut().update = None;
             ui.set_operation_busy(true);
             ui.set_update_available(false);
@@ -2035,7 +1986,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 },
             );
         }
-        "update-verify" => {
+        UiAction::VerifyUpdate => {
             let Some(release) = state.borrow().update.clone() else {
                 toast(ui, state, "Сначала проверьте обновления");
                 return;
@@ -2100,7 +2051,7 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 },
             );
         }
-        "update-install" => {
+        UiAction::InstallUpdate => {
             let Some(release) = state.borrow().update.clone() else {
                 toast(ui, state, "Сначала проверьте обновления");
                 return;
@@ -2173,7 +2124,6 @@ fn action(ui: &AppWindow, state: &State, value: &str) {
                 },
             );
         }
-        _ => toast(ui, state, "Это действие сейчас недоступно"),
     }
 }
 pub(super) fn update_paths(services: &Services) -> Result<UpdatePaths, String> {
@@ -2207,7 +2157,11 @@ fn update_progress(weak: &slint::Weak<AppWindow>, e: chillhub_native::transfer::
 pub(super) fn bind(ui: &AppWindow, state: &State) {
     macro_rules! handler {($name:ident,|$u:ident,$s:ident $(,$a:ident)*|$body:block)=>{{let weak=ui.as_weak();let weak_state=Rc::downgrade(state);ui.$name(move|$($a),*|{if let(Some($u),Some($s))=(weak.upgrade(),weak_state.upgrade())$body});}};}
     handler!(on_action_requested, |ui, state, value| {
-        action(&ui, &state, value.as_str());
+        if let Some(requested) = UiAction::parse(value.as_str()) {
+            action(&ui, &state, requested);
+        } else {
+            toast(&ui, &state, "Это действие сейчас недоступно");
+        }
     });
     handler!(on_orphan_action, |ui, state, id, value| {
         if value == "toggle" {

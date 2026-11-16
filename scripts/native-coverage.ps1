@@ -81,6 +81,9 @@ try {
     $critical = [ordered]@{
         'main.rs' = @{ Lines = 36; Branches = 24 }
         'controller.rs' = @{ Lines = 54; Branches = 43 }
+        'controller/launch_presentation.rs' = @{ Lines = 95; Branches = 90 }
+        # LLVM gives the parser's string match arms line records.
+        'controller/ui_action.rs' = @{ Lines = 95 }
         'bin/security_helper.rs' = @{ Lines = 24; Branches = 29 }
         'bin/updater.rs' = @{ Lines = 39; Branches = 7 }
         'launch.rs' = @{ Lines = 89; Branches = 80 }
@@ -95,13 +98,21 @@ try {
     }
     $failures = foreach ($name in $critical.Keys) {
         $metrics = $files[$name]
-        if (!$metrics -or $metrics.lines.count -le 0 -or $metrics.branches.count -le 0) {
+        $floor = $critical[$name]
+        $requiresBranches = $floor.ContainsKey('Branches')
+        if (!$metrics -or $metrics.lines.count -le 0 -or ($requiresBranches -and $metrics.branches.count -le 0)) {
             throw "Отчёт не содержит измерений для $name."
         }
-        Write-Host ('{0,-24} {1,6:F2}% строк, {2,6:F2}% ветвей' -f $name, $metrics.lines.percent, $metrics.branches.percent)
-        $floor = $critical[$name]
-        if ($metrics.lines.percent -lt $floor.Lines -or $metrics.branches.percent -lt $floor.Branches) {
-            "$name (нужно $($floor.Lines)% строк и $($floor.Branches)% ветвей)"
+        $branches = if ($metrics.branches.count -gt 0) {
+            '{0,6:F2}% ветвей' -f $metrics.branches.percent
+        } else {
+            'ветви LLVM не измерены'
+        }
+        Write-Host ('{0,-35} {1,6:F2}% строк, {2}' -f $name, $metrics.lines.percent, $branches)
+        if ($metrics.lines.percent -lt $floor.Lines -or ($requiresBranches -and $metrics.branches.percent -lt $floor.Branches)) {
+            $required = "$($floor.Lines)% строк"
+            if ($requiresBranches) { $required += " и $($floor.Branches)% ветвей" }
+            "$name (нужно $required)"
         }
     }
     $report.totals | ConvertTo-Json -Depth 4
