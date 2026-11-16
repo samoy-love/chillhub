@@ -57,18 +57,26 @@ fn raw_response(
     keep_alive: bool,
 ) {
     use std::io::Write;
-    let stream = connection.get_mut();
     let connection_header = if keep_alive { "keep-alive" } else { "close" };
-    write!(
-        stream,
-        "HTTP/1.1 {status}\r\nConnection: {connection_header}\r\n"
-    )
-    .unwrap();
+    let mut response = format!("HTTP/1.1 {status}\r\nConnection: {connection_header}\r\n");
     if !status.starts_with("304 ") {
-        write!(stream, "Content-Length: {}\r\n", body.len()).unwrap();
+        response.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
-    write!(stream, "{headers}\r\n").unwrap();
-    stream.write_all(body).unwrap();
+    response.push_str(headers);
+    response.push_str("\r\n");
+    let mut response = response.into_bytes();
+    response.extend_from_slice(body);
+    let stream = connection.get_mut();
+    stream.write_all(&response).unwrap();
+    if !keep_alive {
+        // Deliver the complete response before closing the socket. Wait
+        // briefly for the client's end of the connection to close as well.
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        let _ = connection.read(&mut [0]);
+    }
 }
 
 fn raw_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
@@ -348,6 +356,7 @@ fn revalidate_stale_image(keep_alive: bool) {
         image_path("/fish.png", temp.path(), temp.path(), &api).unwrap(),
         path
     );
+    worker.join().unwrap();
     assert_eq!(fs::read(&path).unwrap(), FISH_ICON);
     assert!(
         fs::metadata(&path)
@@ -360,17 +369,32 @@ fn revalidate_stale_image(keep_alive: bool) {
         "Before revalidation: {after_stale}; after: {}",
         cache_diagnostics(temp.path(), &path)
     );
-    worker.join().unwrap();
 }
 
 #[cfg(windows)]
 #[test]
 fn temporary_validator_sharing_violation_keeps_conditional_request() {
     use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
     let temp = tempfile::tempdir().unwrap();
     let (server, api) = raw_image_server();
     let api = api.with_diagnostics(temp.path().join("profile"));
     let path = stale_image(&api, temp.path());
+    // Display or scanning can read the cached image while denying data
+    // writes. Renewing its timestamp after 304 must still work.
+    let image_reader = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&path)
+        .unwrap();
+    assert_eq!(
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap_err()
+            .raw_os_error(),
+        Some(32)
+    );
     let meta = Validators {
         etag: Some("\"fish-v1\"".into()),
         payload_hash: blake3::hash(FISH_ICON).to_hex().to_string(),
@@ -444,8 +468,11 @@ fn temporary_validator_sharing_violation_keeps_conditional_request() {
             .unwrap()
             .elapsed()
             .unwrap()
-            < CACHE_TTL
+            < CACHE_TTL,
+        "304 did not renew the cache: {}",
+        cache_diagnostics(temp.path(), &path)
     );
+    drop(image_reader);
 }
 
 #[test]

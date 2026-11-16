@@ -117,6 +117,23 @@ fn cached_image_result(path: &Path) -> std::io::Result<()> {
     })
 }
 
+fn renew_cached_image(path: &Path) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
+        // Other readers can prevent data writes while the file is open.
+        // A 304 only needs to update the last-write timestamp.
+        options.access_mode(FILE_WRITE_ATTRIBUTES);
+    }
+    #[cfg(not(windows))]
+    options.write(true);
+    options
+        .open(path)?
+        .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
+}
+
 /// Only catalog-authored bundled paths and public HTTPS media are accepted.
 pub fn location(value: &str, bundle: &Path, api: &ApiClient) -> Result<String, String> {
     if value.is_empty() {
@@ -260,12 +277,13 @@ fn image_path_with_read_observer(
             Ok(response) if response.status().as_u16() == 304 && cached => {
                 // A checked response renews freshness without downloading the
                 // full raster. Failure to touch only causes another validation.
-                let _ = fs::OpenOptions::new()
-                    .write(true)
-                    .open(&output)
-                    .and_then(|f| {
-                        f.set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
-                    });
+                if let Err(error) = renew_cached_image(&output) {
+                    api.event(
+                        "image.cache_touch_error",
+                        serde_json::json!({"path": path, "error": error.to_string(),
+                            "osCode": error.raw_os_error()}),
+                    );
+                }
                 api.event("image.not_modified", serde_json::json!({"path": path}));
                 return Ok(output);
             }
@@ -293,10 +311,17 @@ fn image_path_with_read_observer(
                 )),
                 response.status().is_server_error(),
             ),
-            Err(error) => (
-                Err("Не удалось связаться с сервером изображений".into()),
-                error.is_timeout() || error.is_connect() || error.is_body(),
-            ),
+            Err(error) => {
+                let retry = error.is_timeout() || error.is_connect() || error.is_body();
+                api.event(
+                    "image.request_error",
+                    serde_json::json!({"path": path, "cause": format!("{:?}", error.without_url())}),
+                );
+                (
+                    Err("Не удалось связаться с сервером изображений".into()),
+                    retry,
+                )
+            }
         };
         match bytes {
             Ok(bytes) => {
