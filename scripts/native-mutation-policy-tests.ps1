@@ -63,6 +63,12 @@ try {
         'error: failed to run custom build command (missing resource)' |
             Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
     } $false
+    Assert-Policy 'warning followed by a cache write failure' {param($d,$r)
+        $d.outcomes[1] | Add-Member -NotePropertyName log_path -NotePropertyValue 'log/mutant.log'
+        $d.outcomes[1].summary='Unviable'
+        @('warning: unused variable',' --> src/changelog.rs:10:2','error: failed to write cache: no space left on device') |
+            Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
+    } $false
     Assert-Policy 'unfinished run' {param($d,$r) $d.end_time=$null} $false
     Assert-Policy 'truncated results' {param($d,$r) $d.total_mutants=176} $false
     Assert-Policy 'changed tool' {param($d,$r) $d.cargo_mutants_version='0.0.0'} $false

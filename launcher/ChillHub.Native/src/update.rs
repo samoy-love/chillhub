@@ -155,11 +155,20 @@ pub fn check_release(
     let response = response
         .error_for_status()
         .map_err(|e| format!("Сервер обновлений недоступен: {e}"))?;
+    interpret_release(response.take(64 * 1024), base, current, current_parts)
+}
+
+fn interpret_release(
+    response: impl Read,
+    base: &str,
+    current: &str,
+    current_parts: [u32; 4],
+) -> Result<UpdateCheck, String> {
     #[derive(Deserialize)]
     struct Latest {
         version: String,
     }
-    let latest: Latest = serde_json::from_reader(response.take(64 * 1024))
+    let latest: Latest = serde_json::from_reader(response)
         .map_err(|_| "Сервер прислал некорректный номер версии")?;
     if version_parts(&latest.version)? <= current_parts {
         return Ok(UpdateCheck::Current {
@@ -441,7 +450,6 @@ fn launch_job(
     mode: UpdateMode,
 ) -> Result<Child, String> {
     validate_staged(staged)?;
-    let attempts_path = staged.paths.config.join("update-attempts.json");
     let count = update_attempt_count(&staged.paths, &staged.version)?;
     if mode == UpdateMode::Apply {
         ensure_update_allowed(&staged.paths, &staged.version)?;
@@ -449,17 +457,6 @@ fn launch_job(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     if !same_path(&exe, &staged.paths.install.join(LAUNCHER_NAME)) {
         return Err("Обновление доступно только для установленного ChillHub.exe".into());
-    }
-    let work = staged.session.join("work");
-    fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let source = safe_join(&staged.paths.install, UPDATER_NAME)?;
-    let updater = work.join(UPDATER_NAME);
-    if mode != UpdateMode::Recovery || !updater.is_file() {
-        fs::copy(&source, &updater)
-            .map_err(|e| format!("Не удалось подготовить модуль обновления: {e}"))?;
-        if hash_file(&source)? != hash_file(&updater)? {
-            return Err("Копия модуля обновления повреждена".into());
-        }
     }
     let job = UpdateJob {
         staged: staged.clone(),
@@ -469,32 +466,77 @@ fn launch_job(
         token: uuid::Uuid::new_v4().to_string(),
         mode,
     };
-    let bytes = serde_json::to_vec(&job).map_err(|e| e.to_string())?;
-    let job_path = work.join("job.json");
-    atomic_write(&job_path, &bytes).map_err(|e| e.to_string())?;
-    let mut child = Command::new(&updater)
+    let work = prepare_worker(&job)?;
+    let mut child = Command::new(&work.executable)
         .arg("--job")
-        .arg(&job_path)
+        .arg(&work.job_file)
         .arg("--sha256")
-        .arg(format!("{:x}", Sha256::digest(&bytes)))
+        .arg(&work.sha256)
         .spawn()
         .map_err(|e| format!("Не удалось запустить обновление: {e}"))?;
-    let ready = work.join("ready");
+    acknowledge_launch(&job, &mut child, count, Duration::from_secs(10))?;
+    Ok(child)
+}
+
+struct PreparedWorker {
+    executable: PathBuf,
+    job_file: PathBuf,
+    sha256: String,
+}
+
+fn prepare_worker(job: &UpdateJob) -> Result<PreparedWorker, String> {
+    let work = job.staged.session.join("work");
+    fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let source = safe_join(&job.staged.paths.install, UPDATER_NAME)?;
+    let executable = work.join(UPDATER_NAME);
+    if job.mode != UpdateMode::Recovery || !executable.is_file() {
+        fs::copy(&source, &executable)
+            .map_err(|e| format!("Не удалось подготовить модуль обновления: {e}"))?;
+        if hash_file(&source)? != hash_file(&executable)? {
+            return Err("Копия модуля обновления повреждена".into());
+        }
+    }
+    let bytes = serde_json::to_vec(job).map_err(|e| e.to_string())?;
+    let job_file = work.join("job.json");
+    atomic_write(&job_file, &bytes).map_err(|e| e.to_string())?;
+    Ok(PreparedWorker {
+        executable,
+        job_file,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+    })
+}
+
+fn acknowledge_launch(
+    job: &UpdateJob,
+    child: &mut Child,
+    previous_attempts: u32,
+    timeout: Duration,
+) -> Result<(), String> {
+    let staged = &job.staged;
+    let ready = staged.session.join("work/ready");
     let started = Instant::now();
-    while started.elapsed() < Duration::from_secs(10) {
-        if fs::read_to_string(&ready).ok().as_deref() == Some(&job.token) {
-            if mode == UpdateMode::Apply {
+    while started.elapsed() < timeout {
+        let mut receipt = String::new();
+        let is_ready = fs::File::open(&ready)
+            .and_then(|file| {
+                file.take(job.token.len() as u64 + 1)
+                    .read_to_string(&mut receipt)
+            })
+            .is_ok()
+            && receipt == job.token;
+        if is_ready {
+            if job.mode == UpdateMode::Apply {
                 let attempts = UpdateAttempts {
                     version: staged.version.clone(),
-                    count: count + 1,
+                    count: previous_attempts + 1,
                 };
                 atomic_write(
-                    &attempts_path,
+                    &staged.paths.config.join("update-attempts.json"),
                     &serde_json::to_vec(&attempts).map_err(|e| e.to_string())?,
                 )
                 .map_err(|e| format!("Не удалось сохранить состояние обновления: {e}"))?;
             }
-            return Ok(child);
+            return Ok(());
         }
         if child.try_wait().map_err(|e| e.to_string())?.is_some() {
             return Err(

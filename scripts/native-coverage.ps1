@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([string]$OutputDirectory, [ValidateRange(0,100)][double]$MinimumLines = 70)
+param(
+    [string]$OutputDirectory,
+    [ValidateRange(0,100)][double]$MinimumLines = 71,
+    [ValidateRange(0,100)][double]$MinimumBranches = 60
+)
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../launcher/ChillHub.Native'))
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $project 'dist/coverage' }
@@ -10,8 +14,18 @@ Push-Location $project
 try {
     foreach ($source in Get-ChildItem -LiteralPath (Join-Path $project 'src') -Filter '*.rs' -File -Recurse) {
         if ($source.DirectoryName -match '[/\\]tests(?:[/\\]|$)' -or $source.Name -match '(?:^|[_-])tests\.rs$') { continue }
-        if (Select-String -LiteralPath $source.FullName -Pattern '^\s*#\[\s*test\s*\]' -Quiet) {
+        $contents = [IO.File]::ReadAllText($source.FullName)
+        if ($contents -match '(?m)^\s*#\[\s*test\s*\]') {
             throw "Перенесите тесты из $($source.Name) в отдельный файл *_tests.rs."
+        }
+        $testAttributes = [regex]::Matches($contents, '(?m)^[ \t]*#\[cfg\((?:test|all\(test\b[^\r\n]*\))\)\][ \t]*\r?\n')
+        foreach ($attribute in $testAttributes) {
+            $tail = $contents.Substring($attribute.Index + $attribute.Length)
+            $declaration = [regex]::Match($tail, '\A(?:[ \t]*#\[[^\r\n]+\][ \t]*\r?\n)*[ \t]*([^\r\n]+)').Groups[1].Value
+            # A test-only import, module declaration, or extern declaration contains no executable code.
+            if ($declaration -notmatch '^(?:mod\s+\w+|(?:pub(?:\([^)]*\))?\s+)?use\s+.+|fn\s+[^{};]+);\s*$') {
+                throw "Перенесите тестовые вспомогательные функции из $($source.Name) в отдельный файл *_tests.rs."
+            }
         }
     }
     & rustup component add llvm-tools-preview
@@ -31,7 +45,9 @@ try {
     # Cargo puts large Rust command lines on Windows in @argfiles. The llvm-cov
     # wrapper cannot see the crate name inside them, so it misses application
     # instrumentation. Use compiler flags directly, limiting them to the target.
-    & cargo llvm-cov --branch --no-rustc-wrapper --target $target --coverage-target-only --locked --package chillhub-native --features helper-ui --all-targets --no-report -- --test-threads=1
+    # The screenshot matrix has its own gate in native-windows. Its profile adds
+    # no covered application lines, branches, regions, or functions.
+    & cargo llvm-cov --branch --no-rustc-wrapper --target $target --coverage-target-only --locked --package chillhub-native --features helper-ui --all-targets --no-report -- --test-threads=1 --skip real_ui_headless_layout_and_actions
     if ($LASTEXITCODE) { throw 'Не прошли инструментированные тесты Native.' }
     # Keep the same exclusions when cargo paths and LLVM paths use different
     # separators. Covered tests of private functions live in *_tests.rs files.
@@ -63,16 +79,18 @@ try {
     }
     # Keep critical components visible when the overall total improves.
     $critical = [ordered]@{
-        'main.rs' = @{ Lines = 34; Branches = 20 }
-        'controller.rs' = @{ Lines = 49; Branches = 37 }
-        'bin/security_helper.rs' = @{ Lines = 20; Branches = 25 }
-        'bin/updater.rs' = @{ Lines = 35; Branches = 5 }
-        'launch.rs' = @{ Lines = 73; Branches = 55 }
-        'playtime.rs' = @{ Lines = 80; Branches = 55 }
-        'queue.rs' = @{ Lines = 82; Branches = 65 }
-        'security.rs' = @{ Lines = 42; Branches = 43 }
-        'transfer.rs' = @{ Lines = 63; Branches = 40 }
-        'update.rs' = @{ Lines = 66; Branches = 58 }
+        'main.rs' = @{ Lines = 36; Branches = 24 }
+        'controller.rs' = @{ Lines = 54; Branches = 43 }
+        'bin/security_helper.rs' = @{ Lines = 24; Branches = 29 }
+        'bin/updater.rs' = @{ Lines = 39; Branches = 7 }
+        'launch.rs' = @{ Lines = 89; Branches = 80 }
+        'playtime.rs' = @{ Lines = 92; Branches = 80 }
+        'queue.rs' = @{ Lines = 85; Branches = 71 }
+        'security.rs' = @{ Lines = 51; Branches = 53 }
+        'transfer.rs' = @{ Lines = 84; Branches = 64 }
+        'transfer/cleanup.rs' = @{ Lines = 75; Branches = 44 }
+        'transfer/deferred.rs' = @{ Lines = 85; Branches = 77 }
+        'update.rs' = @{ Lines = 78; Branches = 69 }
     }
     $failures = foreach ($name in $critical.Keys) {
         $metrics = $files[$name]
@@ -88,6 +106,7 @@ try {
     $report.totals | ConvertTo-Json -Depth 4
     if ($failures) { throw "Покрытие отдельных компонентов снизилось: $($failures -join ', ')." }
     if ($report.totals.lines.percent -lt $MinimumLines) { throw "Покрытие строк Native ниже $MinimumLines%." }
+    if ($report.totals.branches.percent -lt $MinimumBranches) { throw "Покрытие ветвей Native ниже $MinimumBranches%." }
 } finally {
     Pop-Location
     if ($null -eq $previousQa) { Remove-Item Env:CHILLHUB_UI_QA -ErrorAction SilentlyContinue }

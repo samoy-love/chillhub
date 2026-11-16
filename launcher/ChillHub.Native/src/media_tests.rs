@@ -4,6 +4,80 @@ const FISH_ICON: &[u8] = include_bytes!("../tests/fixtures/how-to-fish-icon.png"
 // another URL's bounded two-attempt HTTP operation (2 x 10s) to finish first.
 const SERVER_WAIT: Duration = Duration::from_secs(30);
 
+fn raw_image_server() -> (std::net::TcpListener, ApiClient) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let api = ApiClient::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    (listener, api)
+}
+
+fn raw_image_connection(
+    listener: &std::net::TcpListener,
+) -> std::io::BufReader<std::net::TcpStream> {
+    let deadline = Instant::now() + SERVER_WAIT;
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "expected raw image request");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("could not accept raw image request: {error}"),
+        }
+    };
+    stream.set_nonblocking(false).unwrap();
+    stream.set_read_timeout(Some(SERVER_WAIT)).unwrap();
+    stream.set_write_timeout(Some(SERVER_WAIT)).unwrap();
+    std::io::BufReader::new(stream)
+}
+
+fn raw_image_request(connection: &mut std::io::BufReader<std::net::TcpStream>) -> String {
+    use std::io::BufRead;
+    let mut reader = connection.take(8192);
+    let mut headers = String::new();
+    loop {
+        let offset = headers.len();
+        assert_ne!(
+            reader.read_line(&mut headers).unwrap(),
+            0,
+            "incomplete HTTP headers"
+        );
+        if &headers[offset..] == "\r\n" {
+            break;
+        }
+    }
+    headers
+}
+
+fn raw_response(
+    connection: &mut std::io::BufReader<std::net::TcpStream>,
+    status: &str,
+    headers: &str,
+    body: &[u8],
+    keep_alive: bool,
+) {
+    use std::io::Write;
+    let stream = connection.get_mut();
+    let connection_header = if keep_alive { "keep-alive" } else { "close" };
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nConnection: {connection_header}\r\n"
+    )
+    .unwrap();
+    if !status.starts_with("304 ") {
+        write!(stream, "Content-Length: {}\r\n", body.len()).unwrap();
+    }
+    write!(stream, "{headers}\r\n").unwrap();
+    stream.write_all(body).unwrap();
+}
+
+fn raw_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    headers.lines().skip(1).find_map(|line| {
+        let (header, value) = line.split_once(':')?;
+        header.eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
 fn image_server(statuses: Vec<u16>) -> (ApiClient, std::thread::JoinHandle<()>) {
     let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
     let api = ApiClient::new(&format!("http://{}", server.server_addr())).unwrap();
@@ -191,43 +265,59 @@ fn media_urls_use_server_origin_and_keep_case_sensitive_paths() {
 
 #[test]
 fn stale_image_is_revalidated_without_downloading_it_again() {
+    revalidate_stale_image(false);
+}
+
+#[test]
+fn stale_image_is_revalidated_over_the_same_http_connection() {
+    revalidate_stale_image(true);
+}
+
+fn revalidate_stale_image(keep_alive: bool) {
     let temp = tempfile::tempdir().unwrap();
-    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-    let api = ApiClient::new(&format!("http://{}", server.server_addr()))
-        .unwrap()
-        .with_diagnostics(temp.path().join("profile"));
+    let (server, api) = raw_image_server();
+    let api = api.with_diagnostics(temp.path().join("profile"));
     let diagnostic_root = temp.path().to_owned();
     let diagnostic_path = diagnostic_root.join(format!(
         "{}.img",
         blake3::hash(api.base.join("/fish.png").unwrap().as_str().as_bytes()).to_hex()
     ));
     let worker = std::thread::spawn(move || {
-        let first = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
-        assert!(
-            first
-                .headers()
-                .iter()
-                .all(|h| !h.field.equiv("If-None-Match"))
+        let mut connection = raw_image_connection(&server);
+        let headers = raw_image_request(&mut connection);
+        assert!(headers.starts_with("GET /fish.png HTTP/1.1\r\n"));
+        assert_eq!(raw_header(&headers, "If-None-Match"), None);
+        raw_response(
+            &mut connection,
+            "200 OK",
+            "ETag: \"fish-v1\"\r\n",
+            FISH_ICON,
+            keep_alive,
         );
-        first
-            .respond(
-                tiny_http::Response::from_data(FISH_ICON)
-                    .with_header(tiny_http::Header::from_bytes("ETag", "\"fish-v1\"").unwrap()),
-            )
-            .unwrap();
-        let second = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
+        if !keep_alive {
+            drop(connection);
+            connection = raw_image_connection(&server);
+        }
+        // For keep-alive the original buffered socket must receive the second
+        // request. Accepting another connection here would hide a reuse bug.
+        let headers = raw_image_request(&mut connection);
+        let conditional = raw_header(&headers, "If-None-Match") == Some("\"fish-v1\"");
+        raw_response(
+            &mut connection,
+            if conditional {
+                "304 Not Modified"
+            } else {
+                "404 Not Found"
+            },
+            "",
+            &[],
+            false,
+        );
         assert!(
-            second
-                .headers()
-                .iter()
-                .any(|h| h.field.equiv("If-None-Match") && h.value.as_str() == "\"fish-v1\""),
-            "Second request: {} {}; headers: {:?}; {}",
-            second.method(),
-            second.url(),
-            second.headers(),
+            conditional && headers.starts_with("GET /fish.png HTTP/1.1\r\n"),
+            "Second wire request: {headers:?}; {}",
             cache_diagnostics(&diagnostic_root, &diagnostic_path)
         );
-        second.respond(tiny_http::Response::empty(304)).unwrap();
     });
     let path = image_path("/fish.png", temp.path(), temp.path(), &api).unwrap();
     let metadata_bytes = fs::read(path.with_extension("meta")).unwrap_or_else(|error| {
@@ -278,10 +368,8 @@ fn stale_image_is_revalidated_without_downloading_it_again() {
 fn temporary_validator_sharing_violation_keeps_conditional_request() {
     use std::os::windows::fs::OpenOptionsExt;
     let temp = tempfile::tempdir().unwrap();
-    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-    let api = ApiClient::new(&format!("http://{}", server.server_addr()))
-        .unwrap()
-        .with_diagnostics(temp.path().join("profile"));
+    let (server, api) = raw_image_server();
+    let api = api.with_diagnostics(temp.path().join("profile"));
     let path = stale_image(&api, temp.path());
     let meta = Validators {
         etag: Some("\"fish-v1\"".into()),
@@ -305,22 +393,23 @@ fn temporary_validator_sharing_violation_keeps_conditional_request() {
     let diagnostic_root = temp.path().to_owned();
     let diagnostic_path = path.clone();
     let worker = std::thread::spawn(move || {
-        let request = server.recv_timeout(SERVER_WAIT).unwrap().unwrap();
-        let conditional = request
-            .headers()
-            .iter()
-            .any(|h| h.field.equiv("If-None-Match") && h.value.as_str() == "\"fish-v1\"");
-        let headers = format!("{:?}", request.headers());
-        request
-            .respond(tiny_http::Response::empty(if conditional {
-                304
+        let mut connection = raw_image_connection(&server);
+        let headers = raw_image_request(&mut connection);
+        let conditional = raw_header(&headers, "If-None-Match") == Some("\"fish-v1\"");
+        raw_response(
+            &mut connection,
+            if conditional {
+                "304 Not Modified"
             } else {
-                404
-            }))
-            .unwrap();
+                "404 Not Found"
+            },
+            "",
+            &[],
+            false,
+        );
         assert!(
             conditional,
-            "Expected If-None-Match after unlocking metadata: {headers}; {}",
+            "Expected If-None-Match on the wire after unlocking metadata: {headers:?}; {}",
             cache_diagnostics(&diagnostic_root, &diagnostic_path)
         );
     });

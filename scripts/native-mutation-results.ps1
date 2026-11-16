@@ -12,7 +12,7 @@ function Get-NativeMutationScope {
         'src/security_session.rs' = @('validate_token')
         'src/transfer/cleanup.rs' = @('is_approved')
         'src/transfer/deferred.rs' = @('is_locked')
-        'src/update.rs' = @('job_arguments', 'trusted_url')
+        'src/update.rs' = @('job_arguments', 'trusted_url', 'interpret_release')
     }
     foreach ($file in $policies.Keys) {
         foreach ($function in $policies[$file]) {
@@ -63,7 +63,7 @@ function Test-NativeMutationResults {
             # Cargo-mutants counts missing SDKs, resources, and other infrastructure
             # failures as unviable too. Require a Rust source diagnostic.
             $buildFailed = $diagnostics -match '(?m)^error: (failed to run custom build command|linking with|could not execute)'
-            $rustDiagnostic = $diagnostics -match '(?m)^\s*-->\s+src[/\\].+\.rs:\d+:\d+'
+            $rustDiagnostic = $diagnostics -match '(?m)^error(?:\[E\d{4}\])?:[^\r\n]*\r?\n[ \t]*-->[ \t]+src[/\\][^\r\n]+\.rs:\d+:\d+'
             if ($buildFailed -or !$rustDiagnostic) {
                 throw "Не удалось проверить мутацию из-за ошибки сборки: $($outcome.scenario.Mutant.name)."
             }
