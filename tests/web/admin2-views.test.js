@@ -107,8 +107,8 @@ test('пока куски летят, предлагается только от
 });
 
 test('после провала можно повторить, после успеха — только закрыть', () => {
-  assert.deepStrictEqual(V.uploadButtons({ phase: 'failed' }).map((x) => x.act), ['retry', 'close']);
-  assert.deepStrictEqual(V.uploadButtons({ phase: 'aborted' }).map((x) => x.act), ['retry', 'close']);
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'failed' }).map((x) => x.act), ['retry', 'pick', 'close']);
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'aborted' }).map((x) => x.act), ['retry', 'pick', 'close']);
   assert.deepStrictEqual(V.uploadButtons({ phase: 'done' }).map((x) => x.act), ['close']);
   assert.deepStrictEqual(V.uploadButtons({}).map((x) => x.act), ['pick']);
 });

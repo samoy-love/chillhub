@@ -175,6 +175,9 @@
     async function call(path, cfg) {
       const c = cfg || {};
       const method = c.method || 'GET';
+      if (method !== 'GET' && !path.startsWith('auth/') && options.canWrite && !options.canWrite()) {
+        throw new ApiError('дождитесь завершения обновления', 409, path);
+      }
       let url = BASE + path;
 
       /* Значения приводим к строкам одинаково во всех трёх местах:

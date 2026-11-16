@@ -13,8 +13,8 @@
      на самом деле, знает журнал сервера. */
   function reason(status) {
     if (status === 401 || status === 403) return 'Логин или пароль не подошли';
-    if (status === 429) return 'Слишком много попыток подряд, подождите минуту';
-    if (status >= 500) return 'Сервер не отвечает, попробуйте ещё раз';
+    if (status === 429) return 'Слишком много попыток подряд. Подожди перед повтором';
+    if (status >= 500) return 'Сервер не отвечает. Попробуй ещё раз';
     return 'Войти не получилось (' + status + ')';
   }
 
@@ -27,10 +27,11 @@
 
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (btn?.disabled) return;
     const username = document.getElementById('username')?.value?.trim() || '';
     const password = document.getElementById('password')?.value || '';
     if (!username || !password) {
-      say('Заполните оба поля', true);
+      say('Заполни оба поля', true);
       return;
     }
 
@@ -49,7 +50,7 @@
       }
       location.href = '/admin/';
     } catch {
-      say('Сервер не ответил — проверьте связь', true);
+      say('Сервер не ответил. Проверь связь', true);
       btn?.removeAttribute('disabled');
     }
   });

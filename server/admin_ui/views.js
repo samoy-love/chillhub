@@ -135,6 +135,7 @@
     if (phase === 'failed' || phase === 'aborted') {
       return [
         { act: 'retry', title: 'Повторить', accent: true },
+        { act: 'pick', title: 'Другой ZIP', accent: false },
         { act: 'close', title: 'Закрыть', accent: false },
       ];
     }
@@ -264,8 +265,8 @@
       : '<div class="empty"><b>Файл ещё не выбран</b><span>' + esc(what) + '</span></div>';
 
     const bar =
-      s.phase && s.phase !== 'idle'
-        ? '<div class="meter" role="progressbar" aria-valuenow="' +
+      ['upload', 'retry', 'complete', 'process'].includes(s.phase)
+        ? '<div class="meter" role="progressbar" aria-label="Передача архива" aria-valuenow="' +
           pct +
           '" aria-valuemin="0" aria-valuemax="100">' +
           '<i class="' +
@@ -626,7 +627,8 @@
    * держит место и всё равно отличает строки друг от друга.
    */
   function pickIcon(r) {
-    const letter = String(r.iconLetter || r.title || r.id || '?').trim().charAt(0).toUpperCase() || '?';
+    const initial = String(r.iconLetter || r.title || r.id || '').match(/[\p{L}\p{N}][\p{M}]*/u);
+    const letter = initial ? initial[0].toUpperCase() : '?';
     return (
       '<span class="pick-icon" aria-hidden="true"><span>' + esc(letter) + '</span>' +
       (r.icon ? '<img src="' + esc(r.icon) + '" alt="" loading="lazy" decoding="async" data-pick-icon>' : '') +
@@ -704,7 +706,7 @@
       (items || [])
         .map(
           (t) =>
-            '<button type="button" role="tab" data-tab="' + esc(t.id) + '"' +
+            '<button type="button" role="tab" id="game-tab-' + esc(t.id) + '" data-tab="' + esc(t.id) + '" aria-controls="game-tab-panel" aria-selected="' + (t.id === active) + '" tabindex="' + (t.id === active ? '0' : '-1') + '"' +
             (t.id === active ? ' aria-current="page"' : '') +
             '>' + esc(t.title) + '</button>'
         )
@@ -716,18 +718,20 @@
   function gameForm(item, problems) {
     const g = item || {};
     const errs = problems || [];
-    const err = (field) => {
-      const hit = errs.find((e) => e.field === field);
-      return hit ? '<span class="help help--bad">' + esc(hit.message || hit.text) + '</span>' : '';
+    const field = (name, label, value, help, extra) => {
+      const id = 'g-' + name;
+      const problem = errs.find((err) => err.field === name);
+      const descriptionIds = [help && id + '-hint', problem && id + '-error'].filter(Boolean);
+      return '<div class="field"><label for="' + id + '">' + esc(label) + '</label>' +
+        '<input id="' + id + '" name="' + name + '" type="text" value="' + esc(value) + '"' + (extra || '') +
+        (descriptionIds.length ? ' aria-describedby="' + descriptionIds.join(' ') + '"' : '') +
+        (problem ? ' aria-invalid="true"' : '') + '>' +
+        (help ? '<span class="help" id="' + id + '-hint">' + esc(help) + '</span>' : '') +
+        (problem ? '<span class="help help--bad" id="' + id + '-error">' + esc(problem.message || problem.text) + '</span>' : '') + '</div>';
     };
-    const field = (name, label, value, help, extra) =>
-      '<div class="field"><label for="g-' + name + '">' + esc(label) + '</label>' +
-      '<input id="g-' + name + '" name="' + name + '" type="text" value="' + esc(value) + '"' + (extra || '') + '>' +
-      (help ? '<span class="help">' + esc(help) + '</span>' : '') +
-      err(name) + '</div>';
 
     return (
-      '<div class="cols cols--2">' +
+      '<div class="stack game-form"><div class="cols cols--2">' +
       field(
         'gameId',
         'Идентификатор',
@@ -746,13 +750,13 @@
       '</div>' +
       '<div class="field"><label for="g-icon">Иконка</label>' +
       '<div class="btn-row"><input id="g-icon" name="iconUrl" type="text" value="' + esc(g.iconUrl) + '" placeholder="/manifests/' + esc(g.gameId || 'gameId') + '/icon.png">' +
-      (g.existing ? '<button class="btn" type="button" data-flow="icon">Загрузить</button>' : '') +
-      (g.iconUrl ? '<button class="btn btn--text" type="button" data-flow="icon-default">Вернуть стандартную</button>' : '') +
+      (g.existing && !g.deleted ? '<button class="btn" type="button" data-flow="icon">Загрузить</button>' : '') +
+      (g.iconUrl && !g.deleted ? '<button class="btn btn--text" type="button" data-flow="icon-default">Вернуть стандартную</button>' : '') +
       '</div>' +
       '<span class="help">Без неё в списке будет буква на цветном квадрате</span></div>' +
       '<label class="check"><input type="checkbox" name="published"' + (g.unpublished ? '' : ' checked') + '>' +
       '<span>Показывать игрокам</span>' +
-      '<span class="help">Снятая галочка убирает игру из лаунчера, но файлы и версии остаются на месте</span></label>'
+      '<span class="help">Снятая галочка убирает игру из лаунчера, но файлы и версии остаются на месте</span></label></div>'
     );
   }
 
@@ -891,19 +895,15 @@
    * «Не ответил» и «ещё не спрашивали» — разные вещи: первое повод
    * насторожиться, второе просто ожидание.
    */
-  function staleNote(failed, loading) {
+  function staleNote(failed, loading, previous) {
     const bad = failed || [];
-    if (bad.length) {
-      return (
-        '<div class="note note--bad" data-stale>Здесь показан снимок, а не то, что на сервере: ' +
-        esc(bad.join(', ')) +
-        ' не ответил. Записывать в этом состоянии нельзя — запись уйдёт, а список останется прежним.</div>'
-      );
-    }
-    if (loading && loading.length) {
-      return '<div class="note" data-stale>Читаем с сервера…</div>';
-    }
-    return '';
+    const stale = previous || [];
+    const issues = [];
+    if (bad.length) issues.push('<p>Не удалось загрузить: ' + esc(bad.join(', ')) + '.</p>');
+    if (stale.length) issues.push('<p>Последние полученные данные: ' + esc(stale.join(', ')) + '. Обновление не удалось.</p>');
+    if (loading && loading.length) issues.push('<p>Читаем с сервера…</p>');
+    if (!issues.length) return '';
+    return '<div class="note' + (bad.length || stale.length ? ' note--bad' : '') + '" role="status" data-stale>' + issues.join('') + '</div>';
   }
 
   /* ---------- Отборы ---------- */
@@ -918,7 +918,7 @@
   function inboxFilter(f) {
     const flt = f || {};
     const sel = (name, label, options) =>
-      '<label class="inline-label" for="fi-' + name + '">' + esc(label) + '</label>' +
+      '<div class="filter-field"><label class="inline-label" for="fi-' + name + '">' + esc(label) + '</label>' +
       '<select id="fi-' + name + '" name="' + name + '">' +
       options
         .map(
@@ -926,7 +926,7 @@
             '<option value="' + esc(v) + '"' + (String(flt[name] || '') === v ? ' selected' : '') + '>' + esc(t) + '</option>'
         )
         .join('') +
-      '</select>';
+      '</select></div>';
 
     return (
       '<div class="filters" data-inbox-filter>' +
@@ -936,8 +936,8 @@
       '<label class="check check--inline"><input type="checkbox" name="important"' +
       (flt.important ? ' checked' : '') +
       '><span>только важные</span></label>' +
-      '<label class="inline-label" for="fi-from">С</label><input id="fi-from" name="from" type="date" value="' + esc(flt.from) + '">' +
-      '<label class="inline-label" for="fi-to">по</label><input id="fi-to" name="to" type="date" value="' + esc(flt.to) + '">' +
+      '<div class="filter-field"><label class="inline-label" for="fi-from">С</label><input id="fi-from" name="from" type="date" value="' + esc(flt.from) + '"></div>' +
+      '<div class="filter-field"><label class="inline-label" for="fi-to">по</label><input id="fi-to" name="to" type="date" value="' + esc(flt.to) + '"></div>' +
       (anyFilter(flt) ? '<button class="btn btn--text" type="button" data-inbox-reset>Сбросить</button>' : '') +
       '</div>'
     );
@@ -957,11 +957,11 @@
     const st = state || {};
     const days = Number(st.days || 30);
     const btn = (n, label) =>
-      '<button class="seg' + (days === n ? ' on' : '') + '" type="button" data-days="' + n + '">' + esc(label) + '</button>';
+      '<button class="seg' + (days === n ? ' on' : '') + '" type="button" data-days="' + n + '" aria-pressed="' + (days === n) + '">' + esc(label) + '</button>';
     return (
       '<div class="filters" data-metrics-filter>' +
       '<div class="segs">' + btn(7, '7 дней') + btn(30, '30 дней') + btn(90, '90 дней') + '</div>' +
-      '<label class="inline-label" for="mf-game">Игра</label>' +
+      '<div class="filter-field"><label class="inline-label" for="mf-game">Игра</label>' +
       '<select id="mf-game" name="gameId"><option value="">все</option>' +
       (games || [])
         .map(
@@ -971,7 +971,7 @@
             '</option>'
         )
         .join('') +
-      '</select></div>'
+      '</select></div></div>'
     );
   }
 

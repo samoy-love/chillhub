@@ -1,23 +1,6 @@
-/* Админ-панель Chill Hub 2.0 — оболочка и разделы
-   ------------------------------------------------------------------
-   Разделы собраны не по названиям старых вкладок, а по тому, что через
-   эту панель на самом деле делают. Из кода админ-API видно, что решений,
-   которые принимает человек, ровно два, и оба необратимы для игроков:
-
-     1. Сделать загруженную сборку лаунчера активной.
-     2. Пересобрать модпак под вышедшее обновление и активировать его.
-
-   Всё остальное — либо подготовка к этим двум (загрузка, разрешение
-   зависимостей, дифф), либо наблюдение (ошибки, обращения, место).
-   Поэтому «Обзор» начинается с этих двух решений, а не со счётчиков,
-   а кнопка «Сделать активной» — единственная в панели, которая
-   спрашивает подтверждение с названием версии.
-
-   Бизнес-логика (чанковая загрузка, NDJSON-поток сборки, публикация
-   новостей) осталась в admin.js версии 1.0 и переносится отдельно:
-   превью показывает, КАК это выглядит, а не заново реализует, ЧТО это
-   делает.
-   ------------------------------------------------------------------ */
+/* Оболочка админ-панели Chill Hub: разделы, состояние открытых форм,
+   поиск и диалоги. Запросы, запись и отрисовка общих элементов лежат
+   в api.js, actions.js, store.js и views.js. */
 
 (() => {
   'use strict';
@@ -28,6 +11,8 @@
 
   let D = null;
   let game = 'lethal'; // выбранная игра в разделе сборок
+  let gameQuery = '';
+  let revealGame = false;
 
   /* Отборы держатся между перерисовками: раздел перечитывается после
      каждой записи, и сбрасывать отбор на «пометил прочитанным» значило
@@ -54,6 +39,24 @@
     return `${n < 10 && i ? dec(n) : Math.round(n)} ${u[i]}`;
   }
 
+  function keepTabIn(e, root) {
+    if (e.key !== 'Tab') return;
+    const controls = $$('a[href], button, input, select, textarea, summary, [tabindex]', root)
+      .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length);
+    const at = controls.indexOf(document.activeElement);
+    if (at < 0 || (e.shiftKey ? at === 0 : at === controls.length - 1)) {
+      e.preventDefault();
+      (e.shiftKey ? controls.at(-1) : controls[0])?.focus();
+    }
+  }
+
+  function syncOverlays() {
+    const top = sheetStack.at(-1);
+    $('.app').inert = Boolean(top);
+    document.body.classList.toggle('overlay-open', Boolean(top));
+    sheetStack.forEach((overlay) => { overlay.root.inert = overlay !== top; });
+  }
+
   /* Вопрос перед необратимым действием.
 
      `window.confirm` не годился: он не умеет ни выделить объект, ни
@@ -63,12 +66,13 @@
   function ask(q) {
     return new Promise((resolve) => {
       const previousFocus = document.activeElement;
-      const modal = {};
       const back = document.createElement('div');
+      const modal = { root: back };
+      const titleId = `confirm-title-${++confirmSequence}`;
       back.className = 'modal-back';
       back.innerHTML = `
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ask-t">
-          <h2 id="ask-t"></h2>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
+          <h2 id="${titleId}"></h2>
           <p></p>
           <div class="btn-row">
             <button class="btn" type="button" data-no></button>
@@ -87,11 +91,14 @@
         sheetStack.splice(index, 1);
         back.remove();
         document.removeEventListener('keydown', onKey);
+        syncOverlays();
         if (wasTop && previousFocus && previousFocus.isConnected) previousFocus.focus();
         resolve(answer);
       };
       const onKey = (e) => {
-        if (e.key === 'Escape' && sheetStack[sheetStack.length - 1] === modal) {
+        if (sheetStack.at(-1) !== modal) return;
+        keepTabIn(e, back);
+        if (e.key === 'Escape') {
           e.preventDefault();
           e.stopImmediatePropagation();
           close(false);
@@ -107,6 +114,7 @@
       document.addEventListener('keydown', onKey);
 
       document.body.append(back);
+      syncOverlays();
       // Фокус на отказе: опасная кнопка не должна срабатывать пробелом
       back.querySelector('[data-no]').focus();
     });
@@ -157,7 +165,7 @@
        Здесь они — первое, что видно, и каждое ведёт прямо в действие. */
     overview: {
       title: 'Что решить',
-      lede: 'Два решения принимает человек. Остальное панель показывает, чтобы не пропустить.',
+      lede: 'Сборки ждут активации, модпаки — проверки и пересборки.',
       render() {
         const L = D.launcher;
         const behind = D.packs.filter((p) => p.behind || p.deprecated);
@@ -182,12 +190,14 @@
             <div class="body"><div class="stack stack--tight">${body}${action ? `<div class="btn-row">${action}</div>` : ''}</div></div>
           </section>`;
 
-        const launcherBody = L.pending
+        const launcherBody = !D.available.launcher ? '<p>Состояние лаунчера не загрузилось.</p>' : L.pending
           ? `<p>Игроки получают <span class="mono">${esc(L.active)}</span>. Загружена <span class="mono">${esc(L.newest)}</span>${D.diff ? ` — ${D.diff.counts.total} файлов расходятся` : ''}.</p>
              <p class="faint">Пока не активируешь, новая версия лежит на сервере и никому не отдаётся.</p>`
-          : `<p>Игроки получают <span class="mono">${esc(L.active)}</span>. Ничего свежее не загружено.</p>`;
+          : L.active ? `<p>У игроков версия <span class="mono">${esc(L.active)}</span>. Новых сборок нет.</p>`
+            : '<p>Активной версии лаунчера пока нет.</p>';
 
-        const packsBody = behind.length
+        const packsBody = !D.available.packs ? '<p>Сведения о сборках модов не загрузились.</p>' : !D.packs.length
+          ? '<p>Модпаки пока не настроены.</p>' : behind.length
           ? `<ul class="plain">${behind
               .map(
                 (p) => `<li>
@@ -226,7 +236,7 @@
               behind.length > 0,
               'Сборки модов',
               packsBody,
-              behind.length ? `<a class="btn btn--accent" href="#packs">Открыть ${esc(behind[0].title)}</a>` : '<a class="btn btn--text" href="#packs">Открыть раздел</a>'
+              behind.length ? `<a class="btn" href="#packs?game=${encodeURIComponent(behind[0].gameId)}">Открыть модпак ${esc(behind[0].title)}</a>` : '<a class="btn btn--text" href="#packs">Открыть раздел</a>'
             )}
           </div>
 
@@ -237,12 +247,12 @@
 
           <h2 style="margin: var(--s5) 0 var(--s3)">За чем следить</h2>
           <div class="attn">
-            ${watch('#inbox', 'Обращения', unread.length, important.length ? `${important.length} помечено важным` : 'новых', unread.length ? 'accent' : 'ok')}
-            ${watch('#errors', 'Ошибок за сутки', errToday, `при ${today.updates} обновлениях`, errToday > 3 ? 'warn' : 'ok')}
-            ${watch('#news', 'Черновики', drafts, 'не опубликованы', drafts ? 'warn' : '')}
-            ${watch('#maint', 'Техработы', D.maint.on ? 'включены' : 'выключены', D.maint.on ? 'игроки видят заглушку' : 'сервис отдаёт всё', D.maint.on ? 'bad' : 'ok')}
-            ${watch('#transfer', 'Свободно', bytes(D.disk.free), `${100 - freePct}% занято`, freePct < 15 ? 'bad' : freePct < 30 ? 'warn' : 'ok')}
-            ${watch('#transfer', 'Кэш архивов', bytes(D.cache.bytes), `${D.cache.files} файлов`, '')}
+            ${D.available.inbox ? watch('#inbox', 'Обращения', unread.length, important.length ? `${important.length} помечено важным` : 'новых', unread.length ? 'accent' : 'ok') : watch('#inbox', 'Обращения', '—', 'нет данных')}
+            ${D.available.metrics ? watch('#errors', 'Ошибок за сутки', errToday, `при ${today.updates} обновлениях`, errToday > 3 ? 'warn' : 'ok') : watch('#errors', 'Ошибок за сутки', '—', 'нет данных')}
+            ${D.available.news ? watch('#news', 'Черновики', drafts, 'не опубликованы', drafts ? 'warn' : '') : watch('#news', 'Черновики', '—', 'нет данных')}
+            ${D.available.maint ? watch('#maint', 'Техработы', D.maint.on ? 'включены' : 'выключены', D.maint.on ? 'игроки видят заглушку' : 'сервис отдаёт всё', D.maint.on ? 'bad' : 'ok') : watch('#maint', 'Техработы', '—', 'нет данных')}
+            ${D.available.disk && D.disk.total ? watch('#transfer', 'Свободно', bytes(D.disk.free), `${100 - freePct}% занято`, freePct < 15 ? 'bad' : freePct < 30 ? 'warn' : 'ok') : watch('#transfer', 'Свободно', '—', 'нет данных')}
+            ${D.available.cache ? watch('#transfer', 'Кэш архивов', bytes(D.cache.bytes), `${D.cache.files} файлов`) : watch('#transfer', 'Кэш архивов', '—', 'нет данных')}
           </div>`;
       },
     },
@@ -326,14 +336,10 @@
             <div class="stack">
               ${card(
                 'Загрузить новую версию',
-                `<div class="stack">
-                   <div class="field">
-                     <label for="up-file">ZIP со сборкой</label>
-                     <input id="up-file" type="text" placeholder="перетащи файл или выбери" readonly>
-                     <span class="help">Загрузка идёт кусками и продолжается после обрыва. Загруженная версия никому не отдаётся, пока её не активируют.</span>
-                   </div>
+                `<div class="stack stack--tight">
+                   <p class="dim">Выбери ZIP со сборкой. После обрыва загрузку можно продолжить.</p>
                    <div class="btn-row">
-                     <button class="btn btn--accent" type="button" data-act="upload">Выбрать файл</button>
+                     <button class="btn${L.pending ? '' : ' btn--accent'}" type="button" data-act="upload">Загрузить ZIP</button>
                    </div>
                  </div>`
               )}
@@ -342,7 +348,7 @@
                 list({
                   rows: L.versions,
                   head: '<th>Версия</th><th>Собрана</th><th class="num">Файлов</th><th class="num">Размер</th><th>Состояние</th><th></th>',
-                  row: (v) => `<tr>
+                  row: (v) => `<tr data-launcher-version="${esc(v.version)}" tabindex="-1">
                       <td class="mono">${esc(v.version)}</td>
                       <td class="dim">${esc(when(v.date))}</td>
                       <td class="num">${v.files}</td>
@@ -410,9 +416,10 @@
           <div class="segs">${tabs}</div>
           ${
             off.length
-              ? `<p class="faint" style="margin-top: var(--s2)">Без модпака: ${off
-                  .map((g) => esc(g.title))
-                  .join(', ')}. <button class="btn btn--text" type="button" data-act="ecosystem">Подключить моды</button></p>`
+              ? `<div class="btn-row muted pack-gap">
+                   <span>Без модпака: <b class="mono">${off.length}</b></span>
+                   <button class="btn btn--text" type="button" data-act="ecosystem">Подключить моды</button>
+                 </div>`
               : ''
           }
 
@@ -530,7 +537,7 @@
                  })}
                </div>`
             )}
-            <div data-game-detail>${gameDetail()}</div>
+            <div data-game-detail tabindex="-1">${gameDetail()}</div>
           </div>`;
       },
     },
@@ -543,7 +550,7 @@
        игрока справа. */
     news: {
       title: 'Новости',
-      lede: 'То, что игрок читает на главном экране лаунчера.',
+      lede: 'Редактор лент лаунчера и игр.',
       actions:
         '<button class="btn" type="button" data-act="news.rebuild">Пересобрать индекс</button>' +
         '<button class="btn btn--accent" type="button" data-act="new-post">Написать</button>',
@@ -562,7 +569,7 @@
                    full: true,
                    selected: newsEdit.adding ? '' : newsKey(newsEdit),
                    empty: 'Заметок нет',
-                   emptyHint: 'Лаунчер покажет игроку пустую ленту, пока здесь ничего не написано.',
+                   emptyHint: 'Можно написать заметку для ленты лаунчера или игры.',
                  })}
                </div>`
             )}
@@ -602,7 +609,7 @@
                 <td class="dim">${esc(when(f.at))}</td>
                 <td class="act">
                   <button class="btn btn--text" type="button" data-act="feedback" data-args='{"id":"${esc(f.id)}"}'>Открыть</button>
-                  <button class="btn btn--text" type="button" data-act="inbox.important" data-args='{"id":"${esc(f.id)}","important":${f.important ? 'false' : 'true'}}' title="Пометить важным">${f.important ? '★' : '☆'}</button>
+                  <button class="btn btn--text btn--icon" type="button" data-act="inbox.important" data-args='{"id":"${esc(f.id)}","important":${f.important ? 'false' : 'true'}}' aria-label="Важное обращение" aria-pressed="${f.important}" title="${f.important ? 'Снять важность' : 'Пометить важным'}"><svg viewBox="0 0 24 24" width="14" height="14" fill="${f.important ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg></button>
                   <button class="btn btn--text" type="button" data-act="inbox.read" data-args='{"id":"${esc(f.id)}","read":${f.status === 'new' ? 'true' : 'false'}}'>${f.status === 'new' ? 'Отметить прочитанным' : 'Вернуть в новые'}</button>
                   <button class="btn btn--danger btn--text" type="button" data-act="inbox.delete" data-args='{"id":"${esc(f.id)}"}'>Удалить</button>
                 </td>
@@ -634,6 +641,10 @@
                    <span class="faint">${m.on ? 'лаунчер показывает заглушку и не отдаёт сборки' : 'всё работает обычным образом'}</span>
                  </div>
                  ${V().maintForm(m)}
+                 <div class="note" data-maint-conflict role="status" hidden>
+                   <p>Поля, которые вы меняли, обновились на сервере. Чтобы применить настройки, сначала откройте сохранённые поля и внесите правки заново.</p>
+                   <button class="btn" type="button" data-act="maint.discard">Отбросить черновик и открыть сохранённое</button>
+                 </div>
                  <div class="btn-row">
                    ${
                      m.on
@@ -666,7 +677,7 @@
        Поэтому сверху коды ошибок, а динамика — под ними. */
     errors: {
       title: 'Ошибки у игроков',
-      lede: 'Ради чего собираются события: где именно ломается загрузка и запуск.',
+      lede: 'Коды ошибок и число случаев за выбранный период.',
       actions:
         '<button class="btn btn--danger btn--text" type="button" data-act="metrics.clear">Удалить все метрики</button>',
       render() {
@@ -689,7 +700,7 @@
                  код и число, и колонка стояла пустой у каждой строки. */
               head: '<th>Код</th><th>Что это значит</th><th class="num">Случаев</th><th class="num">Доля</th>',
               row: (e) => `<tr>
-                  <td class="mono"><button class="btn btn--text" type="button" data-act="error-events" data-args='{"code":"${esc(e.code)}"}'>${esc(e.code)}</button></td>
+                  <td class="error-code mono"><button class="btn btn--text" type="button" data-act="error-events" data-args='{"code":"${esc(e.code)}"}'>${esc(e.code)}</button></td>
                   <td class="dim">${esc(e.what)}</td>
                   <td class="num">${e.n}</td>
                   <td class="num" style="width:120px">
@@ -744,24 +755,25 @@
       render() {
         /* Ноль в знаменателе — не «сто процентов свободно», а «места
            не посчитали»: сервер мог не ответить, и делить тут нечего. */
-        const freePct = D.disk.total ? Math.round((D.disk.free / D.disk.total) * 100) : 0;
+        const diskKnown = D.available.disk && D.disk.total > 0;
+        const freePct = diskKnown ? Math.min(100, Math.max(0, Math.round((D.disk.free / D.disk.total) * 100))) : 0;
 
         return `
           <div class="cols cols--55">
             ${card(
               'Место на диске с контентом',
-              `<div class="stack stack--tight">
+              diskKnown ? `<div class="stack stack--tight">
                  <div class="btn-row">
                    <span class="num" style="font-size:20px">${bytes(D.disk.free)}</span>
                    <span class="faint">свободно из ${bytes(D.disk.total)}</span>
                  </div>
                  <div class="meter"><i class="${freePct < 15 ? 'bad' : freePct < 30 ? 'warn' : 'ok'}" style="width:${100 - freePct}%"></i></div>
                  <p class="faint">Сборки и манифесты лежат здесь же. Загрузка новой версии на заполненный диск падает на середине и оставляет обрывок.</p>
-               </div>`
+               </div>` : '<p class="dim">Свободное место пока неизвестно.</p>'
             )}
             ${card(
               'Кэш скачанных архивов',
-              `<div class="stack stack--tight">
+              D.available.cache ? `<div class="stack stack--tight">
                  <div class="btn-row">
                    <span class="num" style="font-size:20px">${bytes(D.cache.bytes)}</span>
                    <span class="faint">${D.cache.files} файлов${D.cache.ttlDays ? `, хранятся ${D.cache.ttlDays} дней` : ''}</span>
@@ -771,7 +783,7 @@
                    <button class="btn" type="button" data-act="cache.sweep">Убрать старое</button>
                    <button class="btn btn--danger btn--text" type="button" data-act="cache.clear">Очистить полностью</button>
                  </div>
-               </div>`
+               </div>` : '<p class="dim">Размер кэша не загрузился.</p>'
             )}
           </div>
 
@@ -829,6 +841,7 @@
   let openedSheet = null;
 
   const sheetStack = [];
+  let confirmSequence = 0;
 
   function openSheet(o) {
     const previousFocus = document.activeElement;
@@ -855,13 +868,16 @@
         back.remove();
         document.removeEventListener('keydown', onKey);
         if (openedSheet === h) openedSheet = null;
+        syncOverlays();
         if (wasTop && previousFocus && previousFocus.isConnected) previousFocus.focus();
       },
       onClose: null,
     };
 
     const onKey = (e) => {
-      if (e.key === 'Escape' && sheetStack[sheetStack.length - 1] === h) {
+      if (sheetStack.at(-1) !== h) return;
+      keepTabIn(e, back);
+      if (e.key === 'Escape') {
         e.preventDefault();
         e.stopImmediatePropagation();
         h.close();
@@ -872,6 +888,7 @@
       if (e.target === back) h.close();
     });
     sheetStack.push(h);
+    syncOverlays();
     document.addEventListener('keydown', onKey);
     back.querySelector('[data-sheet-close]').focus();
     openedSheet = h;
@@ -971,14 +988,21 @@
        переданное, а принятое буферами, и узкое окно честно делит
        мегабайты на миллисекунды, выдавая «>100 МБ/с» на канале, где
        столько не бывает. */
-    const rate = window.makeRateEstimator(4000, { minSpanMs: 1200 });
-
     const paint = () => {
+      const active = document.activeElement;
+      const focused = sheet.root.contains(active);
+      const name = focused && active.getAttribute('name');
+      const action = focused && active.dataset.flow;
       /* Выбор цели показываем, только пока дело не началось: менять
          игру и версию посреди заливки некуда, а поле на экране это
          предлагает. */
       sheet.body((st.phase === 'idle' ? V().uploadTarget(st, D.games, U) : '') + V().uploadCard(st));
       sheet.foot(footButtons(V().uploadButtons(st, U)));
+      if (name || action) {
+        const replacement = $$('[name], [data-flow]', sheet.root).find((el) => !el.disabled &&
+          (name ? el.getAttribute('name') === name : el.dataset.flow === action));
+        (replacement || $('[data-sheet-close]', sheet.root)).focus({ preventScroll: true });
+      }
     };
 
     /* Отрисовка не чаще четырёх раз в секунду. Событий прогресса летят
@@ -998,6 +1022,7 @@
     async function start(file) {
       if (running) return;
       running = true;
+      const rate = window.makeRateEstimator(4000, { minSpanMs: 1200 });
       const params = window.CH2_UPLOAD_PARAMS
         ? { chunkSize: window.CH2_UPLOAD_PARAMS.size || window.CH2Upload.DEFAULT_CHUNK, concurrency: window.CH2_UPLOAD_PARAMS.streams }
         : window.pickUploadParams
@@ -1129,7 +1154,12 @@
       const b = e.target.closest('[data-flow]');
       if (!b) return;
       const act = b.dataset.flow;
-      if ((act === 'pick' || act === 'retry') && !running) input.click();
+      if (act === 'retry' && !running && input.files?.[0]) {
+        await start(input.files[0]);
+      } else if ((act === 'pick' || act === 'retry') && !running) {
+        input.value = '';
+        input.click();
+      }
       if (act === 'abort') {
         if (ctrl) ctrl.abort();
         if (uploadId) window.CH2Upload.abort(API, uploadId);
@@ -1534,13 +1564,17 @@
       if (rm) {
         const agreed = await ask({
           title: 'Удалить ' + rm.dataset.remove + '?',
-          body: 'Файл пропадёт из всех заметок, где на него ссылались.',
+          body: 'Файл удалится с сервера. Ссылки на него в заметках и карточках перестанут открываться.',
           ok: 'Удалить',
           cancel: 'Отмена',
         });
         if (!agreed) return;
-        await API.newsAssetsDelete(path, rm.dataset.remove);
-        load();
+        try {
+          await API.newsAssetsDelete(path, rm.dataset.remove);
+          load();
+        } catch (err) {
+          toast('Не удалилось: ' + window.CH2Api.reason(err), 'bad');
+        }
         return;
       }
 
@@ -1555,8 +1589,12 @@
           toast(problem, 'warn');
           return;
         }
-        await API.newsAssetsMkdir(path, name);
-        load();
+        try {
+          await API.newsAssetsMkdir(path, name);
+          load();
+        } catch (err) {
+          toast('Не удалось создать папку: ' + window.CH2Api.reason(err), 'bad');
+        }
       }
       if (act.dataset.flow === 'byUrl') {
         const url = window.prompt('Ссылка на файл', '');
@@ -1792,28 +1830,74 @@
     };
   }
 
+  const GAME_FIELDS = ['title', 'exeRelativePath', 'steamAppId', 'steamFolder', 'iconUrl', 'unpublished', 'presentation'];
+
+  function sameGameField(left, right, key) {
+    if (key !== 'presentation') return left[key] === right[key];
+    const { normalize } = window.CH2Presentation;
+    return JSON.stringify(normalize(left[key])) === JSON.stringify(normalize(right[key]));
+  }
+
+  function selectedGame(gameId, tab) {
+    const baseline = gameId ? gameFields(gameId) : null;
+    return {
+      gameId,
+      tab,
+      adding: false,
+      item: baseline ? { ...baseline } : null,
+      baseline,
+      revision: D.raw.revision,
+      conflict: false,
+      deleted: false,
+      problems: [],
+    };
+  }
+
+  function adoptSnapshot(next) {
+    readGameForm();
+    D = next;
+    if (!gameEdit.baseline || !gameEdit.item || gameEdit.adding || !D.raw.loaded) return;
+    const dirty = GAME_FIELDS.filter((key) => !sameGameField(gameEdit.item, gameEdit.baseline, key));
+    if (!D.raw.games.some((entry) => entry.gameId === gameEdit.gameId)) {
+      gameEdit.deleted = dirty.length > 0;
+      if (gameEdit.deleted) {
+        gameEdit.conflict = true;
+        if (!gameTabs().some((tab) => tab.id === gameEdit.tab)) gameEdit.tab = 'overview';
+      }
+      return;
+    }
+    gameEdit.deleted = false;
+    const latest = gameFields(gameEdit.gameId);
+    const edited = dirty.filter((key) => !sameGameField(gameEdit.item, latest, key));
+    const updated = gameEdit.revision !== D.raw.revision || GAME_FIELDS.some((key) =>
+      !sameGameField(gameEdit.baseline, latest, key));
+    for (const key of edited) latest[key] = gameEdit.item[key];
+    gameEdit.item = latest;
+    gameEdit.baseline = gameFields(gameEdit.gameId);
+    gameEdit.revision = D.raw.revision;
+    gameEdit.conflict = edited.length > 0 && (gameEdit.conflict || updated);
+  }
+
   /* Открытым остаётся то, что открыли. Но выбранная игра могла пропасть
      из реестра — тогда открываем первую, иначе экран показывал бы поля
      того, чего уже нет. */
   function pickGameIfNeeded() {
-    if (gameEdit.adding) return;
+    if (gameEdit.adding || gameEdit.deleted) return;
     const alive = D.games.some((g) => g.gameId === gameEdit.gameId);
     if (!alive) {
       const first = D.games[0];
-      gameEdit = {
-        gameId: first ? first.gameId : '',
-        tab: 'overview',
-        adding: false,
-        item: first ? gameFields(first.gameId) : null,
-        problems: [],
-      };
+      gameEdit = selectedGame(first ? first.gameId : '', 'overview');
       gameBuilds = null;
       return;
     }
-    if (!gameEdit.item) gameEdit.item = gameFields(gameEdit.gameId);
+    if (!gameEdit.item) gameEdit = selectedGame(gameEdit.gameId, gameEdit.tab);
   }
 
   /** Правая половина экрана целиком. */
+  function gameTabs() {
+    return gameEdit.deleted ? GAME_TABS.slice(0, 2) : GAME_TABS;
+  }
+
   function gameDetail() {
     if (gameEdit.adding) {
       return card('Новая игра', V().gameForm(gameEdit.item, gameEdit.problems), {
@@ -1826,16 +1910,20 @@
     if (!gameEdit.item) {
       return '<div class="empty"><b>Реестр пуст</b><span>Заведите первую игру — лаунчер покажет её игрокам</span></div>';
     }
+    const conflict = gameEdit.deleted
+      ? 'Игры больше нет в реестре. Черновик остался в редакторе, откуда его можно скопировать.'
+      : 'Реестр изменился, пока у вас был черновик. Правки видны, но сохранить их поверх новой версии нельзя.';
     return card(
       'Игра: ' + (gameEdit.item.title || gameEdit.item.gameId),
-      V().tabs(GAME_TABS, gameEdit.tab) + gameTabBody(),
+      (gameEdit.conflict ? `<div class="note" data-game-conflict role="status"><p>${conflict}</p><button class="btn" type="button" data-game-do="discard">${gameEdit.deleted ? 'Отбросить черновик и вернуться к реестру' : 'Отбросить черновик и открыть сохранённое'}</button></div>` : '') +
+        V().tabs(gameTabs(), gameEdit.tab) + `<div id="game-tab-panel" role="tabpanel" aria-labelledby="game-tab-${esc(gameEdit.tab)}">${gameTabBody()}</div>`,
       { foot: gameTabFoot() }
     );
   }
 
   function gameTabBody() {
     if (gameEdit.tab === 'overview') {
-      return V().gameForm(gameEdit.item, gameEdit.problems);
+      return V().gameForm({ ...gameEdit.item, deleted: gameEdit.deleted }, gameEdit.problems);
     }
 
     if (gameEdit.tab === 'presentation') {
@@ -1843,7 +1931,13 @@
     }
 
     if (gameEdit.tab === 'versions') {
-      if (gameBuilds === null) return '<div class="sk" style="height:12rem"></div>';
+      if (gameBuilds === null || gameBuilds.loading) return '<div class="sk" style="height:12rem"></div>';
+      if (gameBuilds.error) {
+        return `<div class="note note--bad" role="status">
+          <p>Не удалось загрузить версии игры. ${esc(gameBuilds.error)}</p>
+          <button class="btn" type="button" data-game-do="retry-versions">Повторить запрос</button>
+        </div>`;
+      }
       return (
         list({
           rows: gameBuilds.versions,
@@ -1916,15 +2010,17 @@
 
   function gameTabFoot() {
     if (gameEdit.tab === 'overview' || gameEdit.tab === 'presentation') {
-      return '<span class="push"></span><button class="btn btn--accent" type="button" data-game-do="save">Сохранить</button>';
+      return '<span class="push"></span><button class="btn btn--accent" type="button" data-game-do="save"' +
+        (gameEdit.conflict ? ' disabled' : '') + '>Сохранить</button>';
     }
     if (gameEdit.tab === 'versions') {
-      const canPrune = gameBuilds && window.CH2Upload.prunable(gameBuilds.versions.map((v) => v.version), gameBuilds.active).length > 0;
+      if (!gameBuilds?.versions) return '';
+      const canPrune = window.CH2Upload.prunable(gameBuilds.versions.map((v) => v.version), gameBuilds.active).length > 0;
       return (
         '<span class="faint">Старее активной сервер оставляет две — на случай отката</span>' +
         '<span class="push"></span>' +
         (canPrune ? '<button class="btn" type="button" data-game-do="prune">Убрать старые</button>' : '') +
-        (gameBuilds && gameBuilds.versions.length >= 2
+        (gameBuilds.versions.length >= 2
           ? '<button class="btn" type="button" data-act="compare" data-args=\'' +
             esc(JSON.stringify({ kind: 'game', gameId: gameEdit.gameId })) +
             '\'>Сравнить версии</button>'
@@ -1939,7 +2035,10 @@
   function drawGameDetail() {
     const box = $('[data-game-detail]');
     if (!box) return;
+    const active = document.activeElement;
+    const tab = box.contains(active) ? active.dataset.tab : '';
     box.innerHTML = gameDetail();
+    if (tab) $(`#game-tab-${tab}`, box)?.focus({ preventScroll: true });
     if (gameEdit.tab === 'gallery' && !gameEdit.adding) mountGameGallery();
   }
 
@@ -1961,16 +2060,19 @@
 
   async function loadGameBuilds() {
     const want = gameEdit.gameId;
+    if (!want || gameBuilds?.loading) return;
+    const request = { loading: true };
+    gameBuilds = request;
+    let builds;
     try {
-      const got = await API.versions(want);
-      if (gameEdit.gameId !== want) return;
-      gameBuilds = window.CH2Sections.launcher(got);
-    } catch {
-      /* Сборок у игры может не быть вовсе — сервер отвечает 404, и это не
-         отказ: игра заведена, заливать ей ещё нечего. */
-      if (gameEdit.gameId !== want) return;
-      gameBuilds = { versions: [], active: '', newest: '', uploaded: [], pending: false };
+      builds = window.CH2Sections.launcher(await API.versions(want));
+    } catch (err) {
+      builds = err.status === 404
+        ? window.CH2Sections.launcher(null)
+        : { error: window.CH2Api.reason(err) };
     }
+    if (gameEdit.gameId !== want || gameBuilds !== request) return;
+    gameBuilds = builds;
     if (gameEdit.tab === 'versions') drawGameDetail();
   }
 
@@ -2019,14 +2121,9 @@
 
   /** Открыть игру нужной стороной. Зовут и с экрана, и из палитры. */
   function openGame(gameId, tab) {
-    gameEdit = {
-      gameId: gameId,
-      tab: tab || 'overview',
-      adding: false,
-      item: gameFields(gameId),
-      problems: [],
-    };
+    gameEdit = selectedGame(gameId, tab || 'overview');
     gameBuilds = null;
+    revealGame = true;
     goGames();
   }
 
@@ -2048,6 +2145,7 @@
       problems: [],
     };
     gameBuilds = null;
+    revealGame = true;
     goGames();
   }
 
@@ -2698,6 +2796,36 @@
     return out;
   }
 
+  /* Обновление подставляет свежие данные в нетронутые поля формы. */
+  function readMaintDraft() {
+    const current = $('[data-maint-conflict]:not([hidden])', main);
+    const fields = $$('[data-maint] input[name], [data-maint] textarea[name]', main).map((field) => ({
+      name: field.name,
+      value: field.type === 'checkbox' ? field.checked : field.value,
+      baseline: field.type === 'checkbox' ? field.defaultChecked : field.defaultValue,
+    })).filter(({ value, baseline }) => value !== baseline);
+    return { conflict: Boolean(current), fields };
+  }
+
+  function restoreMaintDraft(draft) {
+    const note = $('[data-maint-conflict]', main);
+    if (!note) return;
+    let conflict = draft.conflict;
+    for (const { name, value, baseline } of draft.fields) {
+      const field = $(`[data-maint] [name="${name}"]`, main);
+      if (!field) continue;
+      const key = field.type === 'checkbox' ? 'checked' : 'value';
+      if (field[key] !== baseline && field[key] !== value) conflict = true;
+      field[key] = value;
+    }
+    if (conflict) {
+      note.hidden = false;
+      $$('[data-maint] [data-act^="maint."]:not([data-act="maint.discard"])', main).forEach((button) => {
+        button.disabled = true;
+      });
+    }
+  }
+
   /* --- Подбор параметров --- */
 
   /* САМ ПРОГОН — ИЗ ВЕРСИИ 1.0. `upload-bench.js` умеет разобрать списки
@@ -2854,6 +2982,15 @@
     gallery: (a) => openGame(a.gameId || (D.games[0] && D.games[0].gameId) || '', 'gallery'),
     'new-game': () => openNewGame(),
     'edit-game': (a) => openGame(a.gameId, 'overview'),
+    'maint.discard': async () => {
+      const note = $('[data-maint-conflict]', main);
+      if (await ask({
+        title: 'Отбросить черновик технических работ?',
+        body: 'Откроются последние полученные настройки.',
+        ok: 'Отбросить черновик',
+        cancel: 'Оставить черновик',
+      }) && note?.isConnected) route();
+    },
     order: () => flowOrder(),
     ecosystem: () => flowEcosystem(),
     logs: (a) => flowLogs(a),
@@ -2872,7 +3009,7 @@
      что на сервере. Имена — те, что человек видит в навигации, а не
      ключи хранилища: «metrics не ответил» ему ничего не говорит. */
   const SOURCES = {
-    overview: { launcher: 'лаунчер', packs: 'сборки', news: 'новости', inbox: 'обращения', disk: 'диск' },
+    overview: { launcher: 'лаунчер', packs: 'сборки', news: 'новости', inbox: 'обращения', maint: 'технические работы', metrics: 'метрики', disk: 'диск', cache: 'кэш архивов' },
     launcher: { launcher: 'версии лаунчера' },
     packs: { packs: 'сборки модов' },
     games: { games: 'реестр игр' },
@@ -2887,15 +3024,25 @@
   function freshness(sectionId) {
     const map = SOURCES[sectionId] || {};
     const failed = [];
+    const previous = [];
     const loading = [];
     for (const name of Object.keys(map)) {
       const st = store.get(name);
       if (!st) continue;
-      if (st.status === window.CH2Store.FAILED) failed.push(map[name]);
+      if (st.status === window.CH2Store.FAILED) (st.data === null || st.data === undefined ? failed : previous).push(map[name]);
       if (st.status === window.CH2Store.LOADING) loading.push(map[name]);
     }
-    return V().staleNote(failed, loading);
+    return V().staleNote(failed, loading, previous);
   }
+
+  const READ_BEFORE_ACTION = {
+    launcher: 'launcher', mods: 'packs', games: 'games', news: 'news', inbox: 'inbox',
+    maint: 'maint', metrics: 'metrics', cache: 'cache',
+  };
+  const canRunAction = (id) => {
+    const section = READ_BEFORE_ACTION[id.split('.')[0]];
+    return !section || !window.CH2Actions.has(id) || store.get(section)?.status === window.CH2Store.READY;
+  };
 
   /* РАЗБОР НАЖАТИЙ — ОДИН НА ВСЮ ПАНЕЛЬ, А НЕ НА КАЖДУЮ ОТРИСОВКУ.
      Раньше обработчики вешались на кнопки текущего раздела, и всё, что
@@ -2907,6 +3054,15 @@
     if (!b || b.disabled) return;
 
     const id = b.dataset.act;
+    if (manualRefreshPending && window.CH2Actions.has(id)) {
+      toast('Дождись завершения обновления', 'warn');
+      return;
+    }
+    if (id.startsWith('maint.') && id !== 'maint.discard' && $('[data-maint-conflict]:not([hidden])', main)) return;
+    if (!canRunAction(id)) {
+      toast('Обнови данные перед записью', 'warn');
+      return;
+    }
 
     let args = {};
     try {
@@ -2952,9 +3108,11 @@
       return;
     }
 
+    const wasFocused = document.activeElement === b;
     b.disabled = true;
     const res = await window.CH2Actions.run(id, args, { api: API, confirm: ask });
     b.disabled = false;
+    if (wasFocused && b.isConnected && document.activeElement === document.body) b.focus();
 
     if (res.cancelled) return;
     if (!res.ok) {
@@ -2978,7 +3136,7 @@
    */
   async function refresh(stale, redraw) {
     await store.invalidate(stale);
-    D = await collect();
+    adoptSnapshot(await collect());
     updateWaiting();
     if (redraw !== false) { route(); }
     pollModChecks();
@@ -2987,8 +3145,12 @@
   /* ---------- Навигация ---------- */
 
   function route() {
-    const id = (location.hash.slice(1) || 'overview').split('?')[0];
+    const [id, query] = (location.hash.slice(1) || 'overview').split('?');
     const sec = SECTIONS[id] ? id : 'overview';
+    if (sec === 'packs' && query) {
+      const candidate = new URLSearchParams(query).get('game');
+      if (D.packs.some((p) => p.gameId === candidate)) game = candidate;
+    }
 
     $$('[data-nav]').forEach((a) => {
       if (a.getAttribute('href') === `#${sec}`) a.setAttribute('aria-current', 'page');
@@ -3010,10 +3172,39 @@
         })()}
       </div>
       ${freshness(sec)}
-      ${S.render()}`;
+      ${sec === 'overview' || Object.keys(SOURCES[sec]).some((name) => D.available[name])
+        ? S.render()
+        : '<div class="empty"><b>Данные недоступны</b><span>Обнови панель, чтобы повторить запрос.</span></div>'}`;
 
     document.title = `${S.title} — админ-панель Chill Hub`;
+    $$('[data-act]', main).forEach((button) => {
+      if (canRunAction(button.dataset.act)) return;
+      button.disabled = true;
+      button.title = 'Обнови данные перед записью';
+    });
     wireSection();
+    const rail = $('.rail');
+    const current = $('[aria-current="page"]', rail);
+    if (current && rail.scrollWidth > rail.clientWidth) {
+      const tab = current.getBoundingClientRect();
+      const area = rail.getBoundingClientRect();
+      if (tab.left < area.left) rail.scrollLeft += tab.left - area.left;
+      if (tab.right > area.right) rail.scrollLeft += tab.right - area.right;
+    }
+    if (sec === 'games' && revealGame) {
+      revealGame = false;
+      const panel = $('[data-game-detail]', main);
+      panel?.focus({ preventScroll: true });
+      if (window.matchMedia?.('(width < 900px)').matches) panel?.scrollIntoView({ block: 'start' });
+    }
+    if (sec === 'launcher' && query) {
+      const version = new URLSearchParams(query).get('version');
+      const row = $$('[data-launcher-version]', main).find((el) => el.dataset.launcherVersion === version);
+      if (row) {
+        row.scrollIntoView?.({ block: 'nearest' });
+        row.focus({ preventScroll: true });
+      }
+    }
   }
 
   /* ---------- Экран игр: нажатия ---------- */
@@ -3026,16 +3217,40 @@
        поле теряет и текст, и курсор на каждой букве. */
     const search = box.querySelector('[data-game-search]');
     if (search) {
-      search.addEventListener('input', () => {
-        const q = search.value.trim().toLowerCase();
+      const filter = () => {
+        gameQuery = search.value;
+        const q = gameQuery.trim().toLowerCase();
         box.querySelectorAll('[data-pick]').forEach((b) => {
           b.hidden = q ? !b.textContent.toLowerCase().includes(q) : false;
         });
-      });
+      };
+      search.value = gameQuery;
+      filter();
+      search.addEventListener('input', filter);
     }
 
     if (gameEdit.tab === 'versions' && gameBuilds === null && !gameEdit.adding) loadGameBuilds();
     if (gameEdit.tab === 'gallery' && !gameEdit.adding) mountGameGallery();
+
+    const changeTab = (tabId) => {
+      readGameForm();
+      gameEdit.tab = tabId;
+      gameEdit.problems = [];
+      if (tabId === 'versions' && gameBuilds === null) loadGameBuilds();
+      drawGameDetail();
+      $(`#game-tab-${tabId}`, box)?.focus({ preventScroll: true });
+    };
+
+    box.addEventListener('keydown', (e) => {
+      const tab = e.target.closest('[data-tab]');
+      if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      const tabs = gameTabs();
+      const at = tabs.findIndex((item) => item.id === tab.dataset.tab);
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1
+        : (at + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      e.preventDefault();
+      changeTab(tabs[next].id);
+    });
 
     /* Кнопки экрана помечены `data-game-do`, а не `data-game`: второе имя
        уже занято переключателем игр на экране сборок, и его обработчик
@@ -3059,11 +3274,7 @@
 
       const tab = e.target.closest('[data-tab]');
       if (tab) {
-        readGameForm();
-        gameEdit.tab = tab.dataset.tab;
-        gameEdit.problems = [];
-        if (gameEdit.tab === 'versions' && gameBuilds === null) loadGameBuilds();
-        drawGameDetail();
+        changeTab(tab.dataset.tab);
         return;
       }
 
@@ -3089,6 +3300,19 @@
   async function onGameAction(b) {
     const R = window.CH2Registry;
     const kind = b.dataset.gameDo;
+    if (b.disabled) return;
+    if (gameEdit.deleted && kind !== 'discard') return;
+
+    if (kind === 'discard') {
+      const editing = gameEdit;
+      if (await ask({
+        title: 'Отбросить черновик карточки?',
+        body: editing.deleted ? 'Откроется последняя полученная версия реестра.' : 'Откроются последние полученные поля игры.',
+        ok: 'Отбросить черновик',
+        cancel: 'Оставить черновик',
+      }) && gameEdit === editing) openGame(editing.gameId, editing.tab);
+      return;
+    }
 
     if (kind === 'cancel') {
       gameEdit.adding = false;
@@ -3097,13 +3321,20 @@
       return;
     }
 
+    if (kind === 'retry-versions') {
+      if (gameEdit.tab !== 'versions' || !gameBuilds?.error) return;
+      const pending = loadGameBuilds();
+      drawGameDetail();
+      $('#game-tab-versions')?.focus({ preventScroll: true });
+      await pending;
+      return;
+    }
+
     /* Новая версия заливается отсюда же, где её потом отдают игрокам:
        искать заливку игры в разделе лаунчера никто не догадается. */
     if (kind === 'upload') {
-      /* Кнопка видна раньше, чем приходит список версий. Без него лист не
-         знает, что у игроков, и пропустил бы заливку поверх активной. */
-      if (gameBuilds === null) await loadGameBuilds();
-      const builds = gameBuilds || { versions: [], active: '', newest: '' };
+      if (!gameBuilds?.versions) return;
+      const builds = gameBuilds;
       flowUpload({
         kind: 'game',
         gameId: gameEdit.gameId,
@@ -3121,6 +3352,7 @@
     }
 
     if (kind === 'activate' || kind === 'delete') {
+      if (!gameBuilds?.versions) return;
       const version = b.dataset.version;
       const question =
         kind === 'activate'
@@ -3151,7 +3383,7 @@
     }
 
     if (kind === 'prune') {
-      if (!gameBuilds) return;
+      if (!gameBuilds?.versions) return;
       const gameId = gameEdit.gameId;
       const victims = window.CH2Upload.prunable(gameBuilds.versions.map((v) => v.version), gameBuilds.active);
       if (!victims.length) return;
@@ -3206,6 +3438,7 @@
     if (kind !== 'save') return;
 
     readGameForm();
+    if (gameEdit.conflict) return;
     const rows = mergedRegistry();
     const problems = R.problems(rows).filter((x) => x.gameId === gameEdit.item.gameId || !x.gameId);
     problems.push(...window.CH2Presentation.problems(gameEdit.item.presentation));
@@ -3221,7 +3454,7 @@
     const savedId = gameEdit.item.gameId;
     try {
       if (!D.raw.loaded) throw new Error('Реестр не загрузился. Обновите данные и попробуйте ещё раз.');
-      await API.gamesSave(rows, D.raw.revision);
+      await API.gamesSave(rows, gameEdit.adding ? D.raw.revision : gameEdit.revision);
       toast(wasNew ? 'Игра заведена' : 'Сохранено. Лаунчер увидит это при следующем старте.', 'ok');
       gameEdit.adding = false;
       gameEdit.gameId = savedId;
@@ -3240,11 +3473,17 @@
   gameIconInput.type = 'file';
   gameIconInput.accept = 'image/*';
   gameIconInput.addEventListener('change', async () => {
-    if (!gameIconInput.files || !gameIconInput.files[0]) return;
+    const file = gameIconInput.files?.[0];
+    const editor = gameEdit;
+    const { gameId } = editor;
+    if (!file || !gameId || !editor.item || editor.deleted) return;
     try {
-      const got = await API.gamesIconUpload(gameEdit.gameId, gameIconInput.files[0]);
-      gameEdit.item.iconUrl = (got && (got.iconUrl || got.url)) || '/manifests/' + gameEdit.gameId + '/icon.png';
-      drawGameDetail();
+      const got = await API.gamesIconUpload(gameId, file);
+      if (gameEdit === editor && editor.gameId === gameId && editor.item && !editor.deleted) {
+        readGameForm();
+        editor.item.iconUrl = (got && (got.iconUrl || got.url)) || '/manifests/' + gameId + '/icon.png';
+        drawGameDetail();
+      }
       toast('Иконка загружена', 'ok');
       await refresh(['games'], false);
     } catch (err) {
@@ -3549,6 +3788,7 @@
     $$('[data-game]').forEach((b) =>
       b.addEventListener('click', () => {
         game = b.dataset.game;
+        history.replaceState(null, '', `#packs?game=${encodeURIComponent(game)}`);
         route();
       })
     );
@@ -3615,60 +3855,98 @@
     const ul = $('[data-palette-list]');
     let items = [];
     let sel = 0;
+    let previousFocus;
+    const overlay = { root: box };
+    const normal = (value) => value.normalize('NFKC').toLowerCase().replace(/[._-]/g, '');
 
     function index() {
       const out = Object.entries(SECTIONS).map(([id, s]) => ({ label: s.title, where: 'раздел', href: `#${id}` }));
-      D.games.forEach((g) => out.push({ label: g.title, where: 'игра', href: '#games' }));
-      D.packs.forEach((p) => out.push({ label: `${p.title} — сборка ${p.built}`, where: 'сборка', href: '#packs' }));
-      D.launcher.versions.forEach((v) => out.push({ label: `Лаунчер ${v.version}`, where: 'версия', href: '#launcher' }));
-      D.errors.forEach((e) => out.push({ label: e.code, where: 'ошибка', href: '#errors' }));
-      D.inbox.forEach((f) => out.push({ label: f.comment.slice(0, 60), where: 'обращение', href: '#inbox' }));
-      D.news.forEach((n) => out.push({ label: n.title, where: 'новость', href: '#news' }));
+      D.games.forEach((g) => out.push({ label: g.title, keys: g.gameId, where: 'игра', open: () => openGame(g.gameId) }));
+      D.packs.forEach((p) => out.push({ label: `${p.title} — сборка ${p.built || 'ещё не собрана'}`, keys: `${p.gameId} ${p.pack}`, where: 'сборка', href: `#packs?game=${encodeURIComponent(p.gameId)}` }));
+      D.launcher.versions.forEach((v) => out.push({ label: `Лаунчер ${v.version}`, where: 'версия', href: `#launcher?version=${encodeURIComponent(v.version)}` }));
+      D.errors.forEach((e) => out.push({ label: e.code, where: 'ошибка', href: '#errors', open: () => flowErrorEvents(e) }));
+      D.inbox.forEach((f) => out.push({ label: f.comment.slice(0, 90), keys: `${f.id} ${f.name} ${f.contact}`, where: 'обращение', href: '#inbox', open: () => flowFeedback(f) }));
+      D.news.forEach((n) => out.push({ label: n.title || n.slug, keys: n.slug, where: 'новость', href: '#news', open: () => openPost({ gameId: n.game, slug: n.slug }) }));
       return out;
     }
 
+    function setSelected(n) {
+      sel = n;
+      const options = $$('[data-choice]', ul);
+      options.forEach((li, index) => li.setAttribute('aria-selected', String(index === n)));
+      if (options[n]) {
+        input.setAttribute('aria-activedescendant', options[n].id);
+        options[n].scrollIntoView?.({ block: 'nearest' });
+      } else input.removeAttribute('aria-activedescendant');
+    }
+
     function draw() {
-      const q = input.value.trim().toLowerCase();
-      items = index().filter((i) => !q || i.label.toLowerCase().includes(q)).slice(0, 12);
-      sel = 0;
+      const q = normal(input.value.trim());
+      items = index().filter((i) => !q || normal(`${i.label} ${i.keys || ''}`).includes(q)).slice(0, 12);
       ul.innerHTML = items.length
         ? items
             .map(
               (i, n) =>
-                `<li role="option" aria-selected="${n === 0}" data-href="${i.href}">${esc(i.label)}<span class="where">${esc(i.where)}</span></li>`
+                `<li id="palette-option-${n}" role="option" data-choice="${n}"><span>${esc(i.label)}</span><span class="where">${esc(i.where)}</span></li>`
             )
             .join('')
-        : '<li role="option" aria-selected="false" class="faint">Ничего не найдено</li>';
+        : '<li role="option" aria-disabled="true" class="faint">Ничего не найдено</li>';
+      setSelected(0);
     }
 
     const open = () => {
+      if (sheetStack.length) return;
+      previousFocus = document.activeElement;
       box.hidden = false;
       input.value = '';
+      input.setAttribute('aria-expanded', 'true');
+      sheetStack.push(overlay);
+      syncOverlays();
       draw();
       input.focus();
     };
-    const close = () => (box.hidden = true);
+    const close = () => {
+      if (sheetStack.at(-1) !== overlay) return;
+      box.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      sheetStack.pop();
+      syncOverlays();
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
     const go = (i) => {
-      if (!items[i]) return;
-      location.hash = items[i].href;
+      const item = items[i];
+      if (!item) return;
       close();
+      if (item.href) {
+        if (location.hash === item.href && !item.open) route();
+        else location.hash = item.href;
+      }
+      if (item.open) item.open();
     };
 
     $('[data-open-palette]').addEventListener('click', open);
     input.addEventListener('input', draw);
     ul.addEventListener('click', (e) => {
-      const li = e.target.closest('li[data-href]');
-      if (li) go([...ul.children].indexOf(li));
+      const li = e.target.closest('[data-choice]');
+      if (li) go(Number(li.dataset.choice));
     });
     box.addEventListener('click', (e) => e.target === box && close());
 
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') close();
-      if (e.key === 'Enter') go(sel);
+    box.addEventListener('keydown', (e) => {
+      keepTabIn(e, box);
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        go(sel);
+      }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
-        sel = Math.max(0, Math.min(items.length - 1, sel + (e.key === 'ArrowDown' ? 1 : -1)));
-        [...ul.children].forEach((li, n) => li.setAttribute('aria-selected', String(n === sel)));
+        setSelected(Math.max(0, Math.min(items.length - 1, sel + (e.key === 'ArrowDown' ? 1 : -1))));
       }
     });
 
@@ -3678,7 +3956,7 @@
         box.hidden ? open() : close();
         return;
       }
-      if (!box.hidden || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
+      if (sheetStack.length || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
       const n = Number(e.key);
       const ids = Object.keys(SECTIONS);
       if (n >= 1 && n <= ids.length) location.hash = `#${ids[n - 1]}`;
@@ -3689,25 +3967,47 @@
 
   function updateWaiting() {
     const L = D.launcher;
-    const behind = D.packs.filter((p) => p.behind || p.deprecated).length;
+    const behind = D.packs.filter((p) => p.behind || p.deprecated || p.staged).length;
     const waiting = (L.pending ? 1 : 0) + behind;
 
     const w = $('[data-waiting]');
-    w.className = `badge badge--${waiting ? 'accent' : 'ok'}`;
-    $('[data-waiting-text]').textContent = waiting ? `${waiting} ждёт решения`
-      : D.packs.some((p) => p.checking) ? 'проверяем обновления'
+    const known = D.available.launcher && D.available.packs;
+    const fresh = ['launcher', 'packs'].every((name) => store.get(name).status === window.CH2Store.READY);
+    w.className = `badge badge--${!fresh ? 'warn' : waiting ? 'accent' : 'ok'}`;
+    $('[data-waiting-text]').textContent = !fresh ? (known ? 'решения: данные устарели' : 'решения не загрузились')
+      : waiting ? `Решений: ${waiting}`
+        : D.packs.some((p) => p.checking) ? 'проверяем обновления'
         : D.packs.some((p) => p.updateError) ? 'обновления не проверены' : 'решений нет';
 
+    const m = $('[data-maint]');
+    const maintenanceCurrent = store.get('maint').status === window.CH2Store.READY;
+    const lastMaintenance = D.maint.on ? 'техработы включены' : 'техработы выключены';
+    m.className = `badge badge--${!maintenanceCurrent ? 'warn' : D.maint.on ? 'bad' : 'ok'}`;
+    m.title = !maintenanceCurrent && D.available.maint ? `Последнее состояние: ${lastMaintenance}` : 'Режим технических работ';
+    $('[data-maint-text]').textContent = maintenanceCurrent ? lastMaintenance
+      : D.available.maint ? 'техработы: данные устарели' : 'техработы: нет данных';
   }
 
   function topbar() {
     updateWaiting();
 
-    const m = $('[data-maint]');
-    m.className = `badge badge--${D.maint.on ? 'bad' : 'ok'}`;
-    $('[data-maint-text]').textContent = D.maint.on ? 'техработы включены' : 'техработы выключены';
-
-    $('[data-refresh]').addEventListener('click', () => boot(true));
+    const reload = $('[data-refresh]');
+    const reloadLabel = $('[data-refresh-label]', reload);
+    reload.addEventListener('click', async () => {
+      if (reload.disabled) return;
+      reload.disabled = true;
+      manualRefreshPending = true;
+      reload.setAttribute('aria-busy', 'true');
+      reloadLabel.textContent = 'Обновляем…';
+      try {
+        await boot(true);
+      } finally {
+        manualRefreshPending = false;
+        reload.disabled = false;
+        reload.removeAttribute('aria-busy');
+        reloadLabel.textContent = 'Обновить всё';
+      }
+    });
 
     /* Выход уводит на страницу входа независимо от того, ответил ли
        сервер успехом: держать человека в панели, из которой он попросил
@@ -3725,7 +4025,8 @@
 
   /* ---------- Запуск ---------- */
 
-  const API = window.CH2Api.makeApi();
+  let manualRefreshPending = false;
+  const API = window.CH2Api.makeApi({ canWrite: () => !manualRefreshPending });
 
   /* Иконка, которая не загрузилась, прячется, и под ней остаётся буква.
      Ловим на документе в фазе захвата: событие `error` у картинки не
@@ -3744,10 +4045,7 @@
      всю страницу, а не каждое место отрисовки само. */
   if (window.watchTables) window.watchTables(document.body);
 
-  /* Разделы читаются порознь и складываются в ту же плоскую форму, что
-     ждёт отрисовка. Снимок остался ровно для одного: показать панель,
-     когда сервер не отвечает вовсе, — и панель тогда об этом говорит, а
-     не выдаёт снимок за прод. */
+  /* При сбое хранилище сохраняет последний ответ отдельного раздела. */
   const store = window.CH2Store.createStore(window.CH2Sections.LOADERS, { api: API });
 
   // Only unfinished checks are polled. Server-side lookups have a finite
@@ -3783,30 +4081,24 @@
        каждый запуск и каждое обновление данных. */
     const rawGamesSoon = rawGames();
     await store.loadAll();
-    const demo = await window.CHILLHUB_DATA.load();
-
-    /* Снимок проходит через тот же разбор, что и ответ сервера.
-       Иначе в панели живут две формы одних и тех же данных, и отрисовка
-       обязана уметь обе — ровно так в 1.0 одна игра выглядела по-разному
-       на двух вкладках. */
     const S = window.CH2Sections;
-    const val = (name, raw, parse) => {
-      const st = store.get(name);
-      if (st && st.status === window.CH2Store.READY) return st.data;
-      return parse ? parse(raw) : raw;
-    };
+    const val = (name, empty) => store.get(name)?.data ?? empty;
 
     const data = {
-      launcher: val('launcher', { items: demo.launcher.versions }, S.launcher),
-      games: val('games', demo.games, S.games),
-      packs: val('packs', demo.packs, S.packs),
-      news: val('news', demo.news, S.news),
-      inbox: val('inbox', demo.inbox, S.inbox),
-      maint: val('maint', { enabled: demo.maint.on, reason: demo.maint.reason }, S.maintenance),
-      metrics: val('metrics', demo.days, (raw) => ({ days: S.metrics(raw), totals: S.totals(raw) })),
-      errors: val('errors', demo.errors, S.errors),
-      disk: val('disk', demo.disk, S.disk),
-      cache: val('cache', demo.cache, S.cache),
+      available: Object.fromEntries(store.names.map((name) => {
+        const { data: loaded } = store.get(name);
+        return [name, loaded !== null && loaded !== undefined];
+      })),
+      launcher: val('launcher', S.launcher(null)),
+      games: val('games', []),
+      packs: val('packs', []),
+      news: val('news', []),
+      inbox: val('inbox', []),
+      maint: val('maint', S.maintenance(null)),
+      metrics: val('metrics', { days: [], totals: S.totals(null) }),
+      errors: val('errors', []),
+      disk: val('disk', S.disk(null)),
+      cache: val('cache', S.cache(null)),
     };
 
     /* Дни и итоги приходят одной сводкой — раскладываем их по местам,
@@ -3840,7 +4132,10 @@
     }
 
     if (again) await store.invalidate(store.names);
-    D = await collect();
+    const next = await collect();
+    if (again) readPostForm();
+    const maintDraft = again ? readMaintDraft() : null;
+    adoptSnapshot(next);
     if (again) updateWaiting();
     if (!again) {
       topbar();
@@ -3851,18 +4146,15 @@
       window.addEventListener('hashchange', route);
     }
     route();
+    if (maintDraft) restoreMaintDraft(maintDraft);
     pollModChecks();
 
     const h = store.health();
-    if (again) {
-      toast('Данные перечитаны', 'ok');
-      return;
-    }
     if (!h.live.length) {
-      toast('Сервер не отвечает: показан снимок, записывать нельзя', 'bad');
+      toast('Сервер не ответил. Обнови данные, чтобы повторить запрос', 'bad');
     } else if (h.failed.length) {
-      toast(`Не ответили разделы: ${h.failed.join(', ')}`, 'warn');
-    }
+      toast('Часть данных не обновилась. Открой раздел, чтобы увидеть подробности', 'warn');
+    } else if (again) toast('Данные обновлены', 'ok');
   }
 
   boot();
