@@ -22,6 +22,23 @@ function Get-NativeMutationScope {
     }
 }
 
+function Test-NativeMutantFailure {
+    param([Parameter(Mandatory)][string]$Log)
+    if (!(Test-Path -LiteralPath $Log -PathType Leaf)) { return $false }
+    $phases = (Get-Content -LiteralPath $Log -Raw) -split '(?m)^\*\*\* result: Success\r?$', 2
+    if ($phases.Count -ne 2) { return $false }
+    $tests = $phases[1]
+    if ($tests -notmatch '(?m)^running [1-9]\d* tests?\r?$') { return $false }
+    if ($tests -match '(?m)^test result: FAILED\. \d+ passed; [1-9]\d* failed;') { return $true }
+
+    # The test binary may crash before libtest prints its final summary.
+    $exit = [regex]::Match($tests, '(?m)^[ \t]*process didn''t exit successfully:[^\r\n]*').Value
+    if (!$exit) { return $false }
+    $crash = $exit -match 'STATUS_(ACCESS_VIOLATION|ILLEGAL_INSTRUCTION|INTEGER_DIVIDE_BY_ZERO|STACK_OVERFLOW|STACK_BUFFER_OVERRUN|HEAP_CORRUPTION)\b|\bSIG(ABRT|BUS|FPE|ILL|SEGV)\b'
+    $panic = $tests -match '(?m)^thread .* panicked at ' -and $exit -match '\(exit code: 3\)'
+    return $crash -or $panic
+}
+
 function Test-NativeMutationResults {
     param(
         [Parameter(Mandatory)][string]$Results,
@@ -55,8 +72,17 @@ function Test-NativeMutationResults {
         $coverage[$entry.name] = [ordered]@{ tested=$matching.Count; caught=$caught }
     }
     $accepted = @()
+    $caughtCount = 0
+    $compilerRejected = 0
     foreach ($outcome in $mutants) {
-        if ($outcome.summary -eq 'CaughtMutant') { continue }
+        if ($outcome.summary -eq 'CaughtMutant') {
+            # A Cargo launch or cache failure also produces a failed Test phase.
+            if (!$outcome.log_path -or !(Test-NativeMutantFailure -Log (Join-Path (Split-Path $Results -Parent) $outcome.log_path))) {
+                throw "Нет подтверждённого падения тестов для мутации: $($outcome.scenario.Mutant.name)."
+            }
+            $caughtCount++
+            continue
+        }
         if ($outcome.summary -eq 'Unviable') {
             $buildLog = Join-Path (Split-Path $Results -Parent) $outcome.log_path
             $diagnostics = Get-Content -LiteralPath $buildLog -Raw
@@ -67,6 +93,7 @@ function Test-NativeMutationResults {
             if ($buildFailed -or !$rustDiagnostic) {
                 throw "Не удалось проверить мутацию из-за ошибки сборки: $($outcome.scenario.Mutant.name)."
             }
+            $compilerRejected++
             continue
         }
         if ($outcome.summary -ne 'MissedMutant') { throw "Неприемлемый результат: $($outcome.summary)." }
@@ -82,5 +109,5 @@ function Test-NativeMutationResults {
         if ($hash -cne $entry[0].sourceSha256) { throw "Обоснование мутации устарело: $($mutant.name)" }
         $accepted += [ordered]@{ name=$mutant.name; reason=$entry[0].reason }
     }
-    [ordered]@{ baselinePassedTests=$passed; tested=$mutants.Count; caught=$data.caught; unviable=$data.unviable; scopes=$coverage; reviewedEquivalentOrInactive=$accepted; unexpectedMissed=0 }
+    [ordered]@{ baselinePassedTests=$passed; tested=$mutants.Count; caught=$caughtCount; unviable=$compilerRejected; scopes=$coverage; reviewedEquivalentOrInactive=$accepted; unexpectedMissed=0 }
 }

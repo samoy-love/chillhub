@@ -9,12 +9,28 @@ foreach ($file in ($scope.file | Sort-Object -Unique)) {
     [IO.File]::WriteAllText($path, "original`n")
 }
 $sourceHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("original`n"))).ToLowerInvariant()
+# Relevant lines from a Windows cargo-mutants 27.1.0 assertion failure.
+$caughtLog = @'
+*** result: Success
+
+*** cargo.exe test --verbose --package=chillhub-native@1.8.9 --no-default-features --locked --lib
+
+running 227 tests
+test changelog::tests::first_install_upgrade_repeat_and_rollback_have_distinct_gates ... FAILED
+
+test result: FAILED. 226 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 4.76s
+
+error: test failed, to rerun pass `-p chillhub-native --lib`
+
+*** result: Failure(101)
+'@
+[IO.File]::WriteAllText((Join-Path $root 'log/caught.log'), $caughtLog)
 $outcomes = @(@{ scenario='Baseline'; summary='Success' })
 for ($i=0; $i -lt 175; $i++) {
     $entry = $scope[$i % $scope.Count]
     $function = $entry.function ?? 'fixture'
     $name = "$($entry.file):${i}:1: replace && with || in $function"
-    $outcomes += @{ scenario=@{Mutant=@{name=$name; file=$entry.file}}; summary='CaughtMutant' }
+    $outcomes += @{ scenario=@{Mutant=@{name=$name; file=$entry.file}}; summary='CaughtMutant'; log_path='log/caught.log' }
 }
 $baseline = @{cargo_mutants_version='27.1.0';end_time='2026-11-11T00:00:01Z';total_mutants=175;caught=175;unviable=0;outcomes=$outcomes} | ConvertTo-Json -Depth 10
 $passed = 0
@@ -36,6 +52,35 @@ function Assert-Policy {
 }
 try {
     Assert-Policy 'caught mutations' {} $true
+    Assert-Policy 'test executable could not launch' {param($d,$r)
+        $d.outcomes[1].log_path='log/mutant.log'
+        @('*** result: Success','error: could not execute process (never executed)','*** result: Failure(101)') |
+            Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
+    } $false
+    Assert-Policy 'no test executed before cache failure' {param($d,$r)
+        $d.outcomes[1].log_path='log/mutant.log'
+        @('*** result: Success','running 0 tests','error: failed to write cache: no space left on device','*** result: Failure(101)') |
+            Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
+    } $false
+    Assert-Policy 'started test binary crashes' {param($d,$r)
+        $d.outcomes[1].log_path='log/mutant.log'
+        @('*** result: Success','running 227 tests','error: test failed, to rerun pass `-p chillhub-native --lib`',
+          '  process didn''t exit successfully: `chillhub_native.exe` (exit code: 0xc0000005, STATUS_ACCESS_VIOLATION)',
+          '*** result: Failure(101)') |
+            Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
+    } $true
+    Assert-Policy 'started test binary aborts after panic' {param($d,$r)
+        $d.outcomes[1].log_path='log/mutant.log'
+        @('*** result: Success','running 227 tests',"thread 'fixture' panicked at src/fixture.rs:7:5:",
+          '  process didn''t exit successfully: `chillhub_native.exe` (exit code: 3)','*** result: Failure(101)') |
+            Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
+    } $true
+    Assert-Policy 'unexpected process exit without crash' {param($d,$r)
+        $d.outcomes[1].log_path='log/mutant.log'
+        @('*** result: Success','running 227 tests','  process didn''t exit successfully: `chillhub_native.exe` (exit code: 1)',
+          '*** result: Failure(101)') |
+            Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
+    } $false
     Assert-Policy 'unknown survivor' {param($d,$r) $d.outcomes[1].summary='MissedMutant'} $false
     Assert-Policy 'reviewed exact source' {param($d,$r)
         $d.outcomes[1].summary='MissedMutant'
@@ -52,19 +97,19 @@ try {
             Set-Content -LiteralPath (Join-Path $root 'log/baseline.log') -Encoding utf8NoBOM
     } $false
     Assert-Policy 'compile-time rejection' {param($d,$r)
-        $d.outcomes[1] | Add-Member -NotePropertyName log_path -NotePropertyValue 'log/mutant.log'
+        $d.outcomes[1].log_path='log/mutant.log'
         $d.outcomes[1].summary='Unviable'
         @('error[E0277]: broken mutation',' --> src/changelog.rs:10:2') |
             Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
     } $true
     Assert-Policy 'broken build environment' {param($d,$r)
-        $d.outcomes[1] | Add-Member -NotePropertyName log_path -NotePropertyValue 'log/mutant.log'
+        $d.outcomes[1].log_path='log/mutant.log'
         $d.outcomes[1].summary='Unviable'
         'error: failed to run custom build command (missing resource)' |
             Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
     } $false
     Assert-Policy 'warning followed by a cache write failure' {param($d,$r)
-        $d.outcomes[1] | Add-Member -NotePropertyName log_path -NotePropertyValue 'log/mutant.log'
+        $d.outcomes[1].log_path='log/mutant.log'
         $d.outcomes[1].summary='Unviable'
         @('warning: unused variable',' --> src/changelog.rs:10:2','error: failed to write cache: no space left on device') |
             Set-Content -LiteralPath (Join-Path $root 'log/mutant.log') -Encoding utf8NoBOM
