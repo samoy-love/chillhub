@@ -5,38 +5,20 @@
     {
       "file": "src/manifest.rs",
       "name": "src/manifest.rs:75:13: replace || with && in validate_relative",
-      "sourceSha256": "a4a74e99adc9718d99b21866fa2fba7038caa14890825ec991276944e0c721b7",
+      "sourceSha256": "5911a13f9b3ee6ca70c7ada2a30d0a186bdaba33afd450c7b1b3384ac91c2abd",
       "reason": "Эквивалентно: сегменты . и .. независимо отклоняются проверкой ends_with точки."
     },
     {
       "file": "src/manifest.rs",
       "name": "src/manifest.rs:262:37: replace | with ^ in DirectoryGuard::acquire",
-      "sourceSha256": "a4a74e99adc9718d99b21866fa2fba7038caa14890825ec991276944e0c721b7",
+      "sourceSha256": "5911a13f9b3ee6ca70c7ada2a30d0a186bdaba33afd450c7b1b3384ac91c2abd",
       "reason": "Эквивалентно: 0x1 и 0x2 не имеют общих битов; OR и XOR равны 0x3."
     },
     {
       "file": "src/manifest.rs",
       "name": "src/manifest.rs:263:46: replace | with ^ in DirectoryGuard::acquire",
-      "sourceSha256": "a4a74e99adc9718d99b21866fa2fba7038caa14890825ec991276944e0c721b7",
+      "sourceSha256": "5911a13f9b3ee6ca70c7ada2a30d0a186bdaba33afd450c7b1b3384ac91c2abd",
       "reason": "Эквивалентно: 0x00200000 и 0x02000000 не имеют общих битов; OR и XOR совпадают."
-    },
-    {
-      "file": "src/manifest.rs",
-      "name": "src/manifest.rs:320:29: replace > with == in open_regular",
-      "sourceSha256": "a4a74e99adc9718d99b21866fa2fba7038caa14890825ec991276944e0c721b7",
-      "reason": "Этот блок находится под cfg(unix) и не компилируется в Windows-продукт. Windows hard-link guard проверяется отдельными тестами."
-    },
-    {
-      "file": "src/manifest.rs",
-      "name": "src/manifest.rs:320:29: replace > with < in open_regular",
-      "sourceSha256": "a4a74e99adc9718d99b21866fa2fba7038caa14890825ec991276944e0c721b7",
-      "reason": "Этот блок находится под cfg(unix) и не компилируется в Windows-продукт. Windows hard-link guard проверяется отдельными тестами."
-    },
-    {
-      "file": "src/manifest.rs",
-      "name": "src/manifest.rs:320:29: replace > with >= in open_regular",
-      "sourceSha256": "a4a74e99adc9718d99b21866fa2fba7038caa14890825ec991276944e0c721b7",
-      "reason": "Этот блок находится под cfg(unix) и не компилируется в Windows-продукт. Windows hard-link guard проверяется отдельными тестами."
     },
     {
       "file": "src/paths.rs",

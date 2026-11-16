@@ -68,6 +68,21 @@ pub(super) fn remove_approved(
     Ok(CleanupResult::Removed)
 }
 
+/// Remove a file in the guarded private replacement directory.
+pub(super) fn remove_pending_file(path: &Path) -> Result<()> {
+    let file = match open_for_delete(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || manifest::is_reparse(&metadata) {
+        return Err(TransferError::UnsafePath(path.display().to_string()));
+    }
+    delete_open_file(path, file)?;
+    Ok(())
+}
+
 fn capture(file: &File, relative: &str, control: &TransferControl) -> Result<CleanupFile> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || manifest::is_reparse(&metadata) {

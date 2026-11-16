@@ -63,6 +63,23 @@ fn pending_payload_is_unique_and_recovered_before_next_plan() {
     recover(temp.path(), &TransferControl::default()).unwrap();
     assert!(!part.exists());
 }
+
+#[test]
+fn read_only_journal_can_be_recovered() {
+    let (temp, part, file) = fixture();
+    assert!(matches!(
+        stage(temp.path(), &part, &file, |_, _| Ok(())),
+        Err(TransferError::ReplacementDeferred(_))
+    ));
+    let journal = journal_path(temp.path());
+    let mut permissions = fs::metadata(&journal).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&journal, permissions).unwrap();
+    assert!(recover(temp.path(), &TransferControl::default()).unwrap());
+    assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"new");
+    assert!(!journal.exists());
+}
+
 #[test]
 fn failed_pending_storage_preserves_partial_and_does_not_report_success() {
     let (temp, part, file) = fixture();
@@ -76,17 +93,66 @@ fn failed_pending_storage_preserves_partial_and_does_not_report_success() {
     );
 }
 #[test]
-fn tampered_pending_payload_cannot_be_promoted() {
+fn corrupted_pending_payload_preserves_target_and_redownloads_verified_bytes() {
     let (temp, part, file) = fixture();
-    let _ = stage(temp.path(), &part, &file, |source, _| {
-        fs::write(source, b"bad").unwrap();
-        Ok(())
-    });
     assert!(matches!(
-        recover(temp.path(), &TransferControl::default()),
-        Err(TransferError::Integrity(_))
+        stage(temp.path(), &part, &file, |source, _| {
+            fs::write(source, b"bad")?;
+            let mut permissions = fs::metadata(source)?.permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(source, permissions)
+        }),
+        Err(TransferError::ReplacementDeferred(_))
     ));
+    #[cfg(windows)]
+    {
+        let journal = journal_path(temp.path());
+        let entry: Entry = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        let payload = temp.path().join(entry.payload);
+        let reader = open_regular(&payload, false, false, false).unwrap();
+        let error = recover(temp.path(), &TransferControl::default()).unwrap_err();
+        assert!(is_locked(&error), "{error:?}");
+        assert!(journal.is_file() && payload.is_file());
+        assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
+        drop(reader);
+    }
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let mut retry = request(temp.path());
+    retry.manifest_url = format!("http://{}/manifest.json", server.server_addr());
+    retry.content_base_url = format!("http://{}/content/", server.server_addr());
+    let root = temp.path().to_path_buf();
+    let responses = std::thread::spawn(move || {
+        let manifest = server
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .expect("retry did not fetch the current manifest");
+        assert_eq!(manifest.url(), "/manifest.json");
+        manifest
+            .respond(tiny_http::Response::from_data(
+                serde_json::to_vec(&expected()).unwrap(),
+            ))
+            .unwrap();
+
+        let content = server
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .expect("corrupt cached payload blocked a fresh download");
+        assert_eq!(content.url(), "/content/game.dll");
+        assert_eq!(fs::read(root.join("game.dll")).unwrap(), b"old");
+        assert!(!root.join(".version").exists());
+        assert_eq!(fs::read_dir(root.join(DIRECTORY)).unwrap().count(), 0);
+        content
+            .respond(tiny_http::Response::from_data(b"new".to_vec()))
+            .unwrap();
+    });
     assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
+    let result = TransferEngine::new()
+        .unwrap()
+        .run(&retry, &TransferControl::default(), &|_| {});
+    responses.join().unwrap();
+    assert_eq!(result.unwrap().network_bytes, 3);
+    assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"new");
+    assert_eq!(fs::read(temp.path().join(".version")).unwrap(), b"1");
 }
 #[test]
 fn only_windows_sharing_errors_are_deferred() {
@@ -170,33 +236,34 @@ fn cancellation_and_existing_transfer_leave_pending_files_untouched() {
 #[test]
 fn journal_cannot_promote_paths_outside_its_payload_directory_or_into_service_files() {
     for (payload, target) in [
-        ("../escape.bin", "game.dll"),
-        ("other.bin", "game.dll"),
-        (".chillhub-reboot/nested/file.bin", "game.dll"),
-        (".chillhub-reboot/file.bin", "../outside.dll"),
-        (".chillhub-reboot/file.bin", ".chillhub.lock"),
-        (".chillhub-reboot/file.bin", ".chillhub-reboot/other.bin"),
+        (Some("../escape.bin"), "game.dll"),
+        (Some("other.bin"), "game.dll"),
+        (Some(".chillhub-reboot/nested/file.bin"), "game.dll"),
+        (None, "../outside.dll"),
+        (None, ".chillhub.lock"),
+        (None, ".chillhub-reboot/other.bin"),
     ] {
-        let (temp, part, mut file) = fixture();
+        let (temp, part, file) = fixture();
         let _ = stage(temp.path(), &part, &file, |_, _| Ok(()));
-        file.path = target.into();
-        fs::write(
-            journal_path(temp.path()),
-            serde_json::to_vec(&Entry {
-                payload: payload.into(),
-                file,
-                game_id: "game".into(),
-                version: "1".into(),
-                scope: SyncScope::WholeRoot,
-            })
-            .unwrap(),
-        )
-        .unwrap();
+        let unrelated = temp.path().join("other.bin");
+        fs::write(&unrelated, b"unrelated").unwrap();
+        let journal = journal_path(temp.path());
+        let mut entry: Entry = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        let cached = temp.path().join(&entry.payload);
+        if let Some(payload) = payload {
+            entry.payload = payload.into();
+        }
+        entry.file.path = target.into();
+        fs::write(&journal, serde_json::to_vec(&entry).unwrap()).unwrap();
         assert!(
             recover(temp.path(), &TransferControl::default()).is_err(),
-            "{payload} -> {target}"
+            "{} -> {target}",
+            entry.payload
         );
         assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
+        assert_eq!(fs::read(cached).unwrap(), b"new");
+        assert_eq!(fs::read(unrelated).unwrap(), b"unrelated");
+        assert!(journal.exists());
     }
 }
 
@@ -234,6 +301,24 @@ fn invalid_manifest_digest_in_journal_is_rejected_before_payload_recovery() {
 }
 
 #[test]
+fn hard_linked_journal_cannot_discard_its_payload_or_modify_the_link() {
+    let (temp, part, file) = fixture();
+    let _ = stage(temp.path(), &part, &file, |source, _| {
+        fs::write(source, b"bad")
+    });
+    let journal = journal_path(temp.path());
+    let bytes = fs::read(&journal).unwrap();
+    let entry: Entry = serde_json::from_slice(&bytes).unwrap();
+    let linked = temp.path().join("other.json");
+    fs::hard_link(&journal, &linked).unwrap();
+    assert!(recover(temp.path(), &TransferControl::default()).is_err());
+    assert_eq!(fs::read(journal).unwrap(), bytes);
+    assert_eq!(fs::read(linked).unwrap(), bytes);
+    assert_eq!(fs::read(temp.path().join(entry.payload)).unwrap(), b"bad");
+    assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
+}
+
+#[test]
 fn superseded_versions_and_digests_never_promote_old_payloads() {
     for change in ["version", "digest", "size", "removed"] {
         let (temp, part, file) = fixture();
@@ -264,7 +349,11 @@ fn superseded_versions_and_digests_never_promote_old_payloads() {
 fn another_game_or_modpack_cannot_replay_a_pending_base_update() {
     for change_scope in [false, true] {
         let (temp, part, file) = fixture();
-        let _ = stage(temp.path(), &part, &file, |_, _| Ok(()));
+        let _ = stage(temp.path(), &part, &file, |source, _| {
+            fs::write(source, b"bad")
+        });
+        let journal = journal_path(temp.path());
+        let entry: Entry = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
         let mut requested = request(temp.path());
         if change_scope {
             requested.scope = SyncScope::OwnFilesOnly;
@@ -276,7 +365,8 @@ fn another_game_or_modpack_cannot_replay_a_pending_base_update() {
             Err(TransferError::PendingReplacement)
         ));
         assert_eq!(fs::read(temp.path().join("game.dll")).unwrap(), b"old");
-        assert!(journal_path(temp.path()).exists());
+        assert!(journal.exists());
+        assert_eq!(fs::read(temp.path().join(entry.payload)).unwrap(), b"bad");
     }
 }
 

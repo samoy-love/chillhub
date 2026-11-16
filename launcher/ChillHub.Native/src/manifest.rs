@@ -298,34 +298,37 @@ pub fn open_regular(path: &Path, write: bool, create: bool, truncate: bool) -> i
     let meta = file.metadata()?;
     validate_regular_metadata(&meta)?;
     if write {
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            use windows_sys::Win32::Storage::FileSystem::{
-                BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-            };
-            let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-            if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut information) }
-                == 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            if information.nNumberOfLinks > 1 {
-                return Err(io::Error::other("Запись в жёсткую ссылку запрещена"));
-            }
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if meta.nlink() > 1 {
-                return Err(io::Error::other("Запись в жёсткую ссылку запрещена"));
-            }
-        }
+        reject_hard_links(&file)?;
     }
     if truncate {
         file.set_len(0)?;
     }
     Ok(file)
+}
+
+pub(crate) fn reject_hard_links(file: &File) -> io::Result<()> {
+    #[cfg(windows)]
+    let links = {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut information) } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        information.nNumberOfLinks
+    };
+    #[cfg(unix)]
+    let links = {
+        use std::os::unix::fs::MetadataExt;
+        file.metadata()?.nlink()
+    };
+    if links > 1 {
+        return Err(io::Error::other("Ожидался файл без жёстких ссылок"));
+    }
+    Ok(())
 }
 
 pub fn is_service_path(path: &str) -> bool {

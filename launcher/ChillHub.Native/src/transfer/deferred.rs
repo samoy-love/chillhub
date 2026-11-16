@@ -83,6 +83,7 @@ pub(super) fn recover(
             .filter(|stem| uuid::Uuid::parse_str(stem).is_ok())
             .ok_or_else(|| TransferError::InvalidManifest("invalid deferred entry name".into()))?;
         let mut file = open_regular(&path, false, false, false)?;
+        manifest::reject_hard_links(&file)?;
         if file.metadata()?.len() > 64 * 1024 {
             return Err(TransferError::InvalidManifest(
                 "deferred entry too large".into(),
@@ -129,31 +130,33 @@ pub(super) fn recover(
         let Some(current) = current else {
             // A new version supersedes the saved bytes. Do not restore content
             // that is no longer part of the current requested transfer plan.
-            if payload.try_exists()? {
-                remove_regular(&payload)?;
-            }
+            cleanup::remove_pending_file(&payload)?;
             drop(file);
-            remove_regular(&path)?;
+            cleanup::remove_pending_file(&path)?;
             continue;
         };
         let destination = path_in(root, &current.path)?;
         if payload.try_exists()? {
-            if !verify_file(&payload, &entry.file, control)? {
-                return Err(TransferError::Integrity(entry.file.path));
-            }
-            // Closing the locking program permits a verified immediate retry.
-            match atomic_replace(&payload, &destination) {
-                Ok(()) => {}
-                Err(error) if is_locked(&error) => {
-                    return Err(TransferError::ReplacementDeferred(entry.file.path));
+            if verify_file(&payload, &entry.file, control)? {
+                // Closing the locking program permits a verified immediate retry.
+                match atomic_replace(&payload, &destination) {
+                    Ok(()) => {}
+                    Err(error) if is_locked(&error) => {
+                        return Err(TransferError::ReplacementDeferred(entry.file.path));
+                    }
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
+            } else {
+                // A corrupt cached payload must not prevent a fresh download.
+                // Remove only the validated journal's private directory entry.
+                control.checkpoint()?;
+                cleanup::remove_pending_file(&payload)?;
             }
         }
         // Missing payload can follow a pre-rename crash or an interrupted recovery.
         // The normal transfer plan verifies the destination before publishing a version.
         drop(file);
-        remove_regular(&path)?;
+        cleanup::remove_pending_file(&path)?;
     }
     Ok(recovered)
 }
