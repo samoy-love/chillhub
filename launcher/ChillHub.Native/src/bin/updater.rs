@@ -20,11 +20,17 @@ fn main() -> Result<(), String> {
         }
         return Ok(());
     }
-    let log = HelperLog::open(HelperKind::Updater);
+    run_logged(HelperLog::open(HelperKind::Updater), |log| run(log, args))
+}
+
+fn run_logged(
+    log: Result<HelperLog, String>,
+    work: impl FnOnce(Result<HelperLog, String>) -> Result<(), String>,
+) -> Result<(), String> {
     if let Ok(log) = &log {
         let _ = log.record("start", "Запущен модуль обновления");
     }
-    let result = helper_runtime::caught(|| run(log.clone(), args));
+    let result = helper_runtime::caught(|| work(log.clone()));
     if result.is_err() {
         helper_runtime::record_result(&log, &result);
     }

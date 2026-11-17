@@ -1,4 +1,35 @@
 use super::*;
+
+#[cfg(windows)]
+#[test]
+fn native_window_handle_preserves_the_owner_used_for_dialogs_and_update_close() {
+    use raw_window_handle::{RawWindowHandle, Win32WindowHandle, WindowHandle};
+    use std::{num::NonZeroIsize, ptr::null_mut};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
+
+    let window = unsafe {
+        CreateWindowExW(
+            0,
+            windows_sys::w!("STATIC"),
+            std::ptr::null(),
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            std::ptr::null(),
+        )
+    };
+    let hwnd = NonZeroIsize::new(window as isize).expect("create a hidden Win32 test window");
+    let raw = RawWindowHandle::Win32(Win32WindowHandle::new(hwnd));
+    let extracted = native_hwnd(&unsafe { WindowHandle::borrow_raw(raw) });
+    assert_ne!(unsafe { DestroyWindow(window) }, 0);
+    assert_eq!(extracted, hwnd.get());
+}
+
 #[test]
 fn both_helpers_fall_back_to_injected_temp_and_report_the_real_log() {
     let temp = tempfile::tempdir().unwrap();

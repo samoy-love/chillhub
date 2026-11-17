@@ -51,8 +51,8 @@ fn style_handle(handle: &slint::WindowHandle) -> isize {
 }
 
 #[cfg(windows)]
-fn native_hwnd(handle: &slint::WindowHandle) -> isize {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+fn native_hwnd(handle: &impl raw_window_handle::HasWindowHandle) -> isize {
+    use raw_window_handle::RawWindowHandle;
     if let Ok(handle) = handle.window_handle()
         && let RawWindowHandle::Win32(handle) = handle.as_raw()
     {

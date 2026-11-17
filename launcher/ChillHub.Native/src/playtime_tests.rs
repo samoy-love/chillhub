@@ -166,6 +166,73 @@ fn ended_session_recovered_after_restart_reports_persisted_playtime_once() {
 }
 
 #[test]
+fn recovered_session_sends_the_persisted_duration_to_the_metrics_api_once() {
+    const FIXTURE: &str = "CHILLHUB_TEST_RECOVERED_SESSION_METRIC";
+    if std::env::var_os(FIXTURE).is_none() {
+        // A child gives this scenario explicit telemetry settings without
+        // changing the environment shared by other tests or worker threads.
+        let (_, module) = module_path!().split_once("::").unwrap();
+        let name = format!(
+            "{module}::recovered_session_sends_the_persisted_duration_to_the_metrics_api_once"
+        );
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--nocapture"])
+            .env(FIXTURE, "1")
+            .env("CHILLHUB_METRICS", "test")
+            .env("CHILLHUB_CLIENT_LOG", "0")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let store = PlaytimeStore::new(&paths);
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let api = crate::net::ApiClient::new(&format!("http://{}", server.server_addr())).unwrap();
+    store.set_metrics_api(api);
+    write_json(
+        &paths.data_dir.join("playtime.commit.json"),
+        &serde_json::json!({
+            "Playtime": {"peak": {"TotalSeconds": 183, "LastSessionSeconds": 183}},
+            "Pending": {},
+            "RestoreModdedDirs": [],
+            "CompletedSession": {"game_id": "peak", "duration_ms": 183_000},
+        }),
+    )
+    .unwrap();
+    store.recover_commit().unwrap();
+    store.recover_commit().unwrap();
+    let mut request = server
+        .recv_timeout(Duration::from_secs(4))
+        .unwrap()
+        .expect("recovered play session metric");
+    assert_eq!(request.method(), &tiny_http::Method::Post);
+    assert_eq!(request.url(), "/metrics/report");
+    let body: serde_json::Value = serde_json::from_reader(request.as_reader()).unwrap();
+    assert_eq!(body["event"], "game_session");
+    assert_eq!(body["gameId"], "peak");
+    assert_eq!(body["result"], "ok");
+    assert_eq!(body["durationMs"], 183_000);
+    request
+        .respond(tiny_http::Response::from_string("{}"))
+        .unwrap();
+    assert!(
+        server
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.totals("peak").unwrap().total_seconds, 183);
+}
+
+#[test]
 fn broken_legacy_session_with_a_loader_obligation_blocks_launch() {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temp.path());

@@ -78,6 +78,36 @@ fn installer_version_comparison_preserves_the_nsis_exit_codes() {
 }
 
 #[test]
+fn updater_records_a_startup_failure_before_a_window_is_available() {
+    let temp = tempfile::tempdir().unwrap();
+    let log = HelperLog::in_directory(temp.path(), HelperKind::Updater).unwrap();
+    let message = "Не удалось создать окно обновления";
+    let result = run_logged(Ok(log.clone()), |worker_log| {
+        assert_eq!(worker_log.unwrap().path(), log.path());
+        Err(message.into())
+    });
+    assert_eq!(result, Err(message.into()));
+    let contents = std::fs::read_to_string(log.path()).unwrap();
+    let events: Vec<serde_json::Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["event"], "start");
+    assert_eq!(events[1]["event"], "error");
+    assert_eq!(events[1]["message"], message);
+
+    let result = run_logged(
+        Err("Журнал недоступен".into()),
+        |worker_log| {
+            assert!(worker_log.is_err());
+            Ok(())
+        },
+    );
+    assert!(result.is_ok(), "a log failure must not block the updater");
+}
+
+#[test]
 fn update_failure_unlocks_window_and_points_to_actual_log() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     invalid_invocation_completes_with_visible_error();
