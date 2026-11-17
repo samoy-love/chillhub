@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [ValidateRange(0,100)][double]$MinimumLines = 71,
-    [ValidateRange(0,100)][double]$MinimumBranches = 60
+    [ValidateRange(0,100)][double]$MinimumLines = 76,
+    [ValidateRange(0,100)][double]$MinimumBranches = 64
 )
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../launcher/ChillHub.Native'))
@@ -79,18 +79,22 @@ try {
     }
     # Keep critical components visible when the overall total improves.
     $critical = [ordered]@{
-        'main.rs' = @{ Lines = 36; Branches = 24 }
-        'controller.rs' = @{ Lines = 54; Branches = 43 }
+        'main.rs' = @{ Lines = 64; Branches = 51 }
+        'controller.rs' = @{ Lines = 64; Branches = 50 }
+        'controller/settings.rs' = @{ Lines = 92; Branches = 79 }
+        'desktop.rs' = @{ Lines = 49; Branches = 41 }
         'controller/launch_presentation.rs' = @{ Lines = 95; Branches = 90 }
         # LLVM gives the parser's string match arms line records.
         'controller/ui_action.rs' = @{ Lines = 95 }
-        'bin/security_helper.rs' = @{ Lines = 24; Branches = 29 }
-        'bin/updater.rs' = @{ Lines = 39; Branches = 7 }
+        'bin/security_helper.rs' = @{ Lines = 46; Branches = 49 }
+        'bin/updater.rs' = @{ Lines = 60; Branches = 42 }
+        'helper_runtime.rs' = @{ Lines = 76; Branches = 68 }
+        'setup.rs' = @{ Lines = 66; Branches = 68 }
         'launch.rs' = @{ Lines = 89; Branches = 80 }
         'media.rs' = @{ Lines = 82; Branches = 67 }
         'playtime.rs' = @{ Lines = 92; Branches = 80 }
         'queue.rs' = @{ Lines = 85; Branches = 71 }
-        'security.rs' = @{ Lines = 51; Branches = 53 }
+        'security.rs' = @{ Lines = 76; Branches = 75 }
         'transfer.rs' = @{ Lines = 84; Branches = 64 }
         'transfer/cleanup.rs' = @{ Lines = 75; Branches = 44 }
         'transfer/deferred.rs' = @{ Lines = 85; Branches = 77 }
