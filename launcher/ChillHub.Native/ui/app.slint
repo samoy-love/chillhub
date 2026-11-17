@@ -1275,7 +1275,7 @@ export component AppWindow inherits Window {
                     if root.settings-section == 0: Rectangle { height: 102px;
                         Text { x: 0px; y: 0px; text: "Папка с играми"; color: Theme.dim; font-size: 13px; }
                         games-path := FormField { x: 0px; y: 27px; width: parent.width - 122px; text <=> root.settings-path; label: "Папка с играми"; enabled: !root.operation-busy; }
-                        ActionButton { x: parent.width - 110px; y: 27px; width: 110px; text: "Выбрать…"; icon: "folder"; enabled: !root.operation-busy; clicked => { root.action-requested("choose-games-folder"); } }
+                        ActionButton { x: parent.width - 110px; y: 27px; width: 110px; text: "Обзор"; accessible-name: "Выбрать папку с играми"; icon: "folder"; enabled: !root.operation-busy; clicked => { root.action-requested("choose-games-folder"); } }
                         Text { x: 0px; y: 76px; width: parent.width; text: "Установленные игры останутся в прежней папке."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
                     }
                     if root.settings-section == 0: SectionHeading { text: "Поведение окна"; }
