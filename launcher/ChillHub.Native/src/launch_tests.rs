@@ -424,7 +424,9 @@ fn unavailable_preferences_and_corrupt_statistics_do_not_stop_vanilla_launch() {
         let root = paths.game_root("optional-state-fixture").unwrap();
         fs::create_dir_all(&root).unwrap();
         let executable = root.join("Game.exe");
-        fs::copy(system_executable("ping.exe"), &executable).unwrap();
+        fs::copy(system_executable("cmd.exe"), &executable).unwrap();
+        write_game_wait_script(&root);
+        let stop = root.join("stop-game");
         fs::create_dir_all(&paths.data_dir).unwrap();
         if let Some(name) = corrupt {
             fs::write(paths.data_dir.join(name), b"{invalid json").unwrap();
@@ -439,7 +441,7 @@ fn unavailable_preferences_and_corrupt_statistics_do_not_stop_vanilla_launch() {
             target: LaunchTarget::LocalVanilla,
             game_executable: executable.clone(),
             executable,
-            arguments: vec!["-n".into(), "4".into(), "127.0.0.1".into()],
+            arguments: vec!["/D".into(), "/C".into(), "game.cmd".into()],
             working_directory: root.clone(),
             game_directory: root,
         };
@@ -449,7 +451,9 @@ fn unavailable_preferences_and_corrupt_statistics_do_not_stop_vanilla_launch() {
         else {
             panic!("a local game had no tracked process");
         };
-        assert!(session.process.is_running());
+        let running = session.process.is_running();
+        fs::write(stop, b"").unwrap();
+        assert!(running);
         assert_eq!(session.warning.is_some(), corrupt.is_some());
         assert_eq!(fs::read_to_string(doorstop).unwrap(), "enabled=false");
         launched.push((temp, service, session));
