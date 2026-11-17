@@ -852,6 +852,71 @@ fn disabled_controls_do_not_activate_after_focus() {
 }
 
 #[test]
+fn preview_title_and_sparse_game_page_follow_their_bindings() {
+    use slint::private_unstable_api::re_exports::WindowInner;
+
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true,
+        threading: false,
+        renderer_name: Some("software".into()),
+    })))
+    .expect("headless platform only");
+    let h = Harness::new();
+    let ui = &h.ui;
+    let native_title = || {
+        WindowInner::from_pub(ui.window())
+            .window_item()
+            .expect("Slint window item")
+            .as_pin_ref()
+            .title()
+    };
+    assert_eq!(native_title(), "Chill Hub");
+    ui.set_window_title("Chill Hub · Проверочная копия".into());
+    let cover = ui.get_hero();
+    ui.set_game_title("A · Проверка очереди".into());
+    ui.set_description("Игра из проверочного каталога.".into());
+    ui.set_genre("".into());
+    ui.set_hero(Image::default());
+    ui.set_has_mods(false);
+    ui.set_has_gallery(false);
+    ui.set_media(model(Vec::new()));
+    ui.set_highlights(model(Vec::new()));
+    resize(ui.window(), 900, 500, 1.0);
+    ui.hide().unwrap();
+    ui.show().unwrap();
+    settle();
+    ui.window().take_snapshot().unwrap();
+    assert_eq!(native_title(), "Chill Hub · Проверочная копия");
+    assert!(
+        ElementHandle::find_by_accessible_label(ui, "Обложка")
+            .next()
+            .is_none()
+    );
+    let details = || {
+        ElementHandle::find_by_accessible_label(ui, "Об игре")
+            .next()
+            .map_or(0.0, |element| element.size().height)
+    };
+    assert_eq!(details(), 0.0);
+
+    // A lone cover can still open from the gallery model without a decoded poster.
+    ui.set_hero(cover);
+    ui.set_media(model(vec![MediaTile {
+        caption: "Изображение игры".into(),
+        ..Default::default()
+    }]));
+    ui.set_highlights(model(vec!["Одна особенность игры".into()]));
+    let opened = Rc::new(std::cell::Cell::new(None));
+    let media_index = opened.clone();
+    ui.on_media_selected(move |index| media_index.set(Some(index)));
+    settle();
+    ui.window().take_snapshot().unwrap();
+    h.click_pointer("Обложка");
+    assert_eq!(opened.get(), Some(0));
+    assert!(details() > 0.0);
+}
+
+#[test]
 fn real_ui_headless_layout_and_actions() {
     use slint::Model;
     slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {

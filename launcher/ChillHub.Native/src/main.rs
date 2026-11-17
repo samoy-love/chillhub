@@ -1292,9 +1292,6 @@ fn initialize_native(ui: &AppWindow, state: &State) -> Result<Option<Timer>, Str
     }
     ui.window().with_winit_window(|window| {
         let prefs = &state.borrow().prefs;
-        if std::env::var_os("CHILLHUB_DATA_DIR").is_some() {
-            window.set_title("Chill Hub · Проверочная копия");
-        }
         let outer = window.outer_size();
         let inner = window.inner_size();
         let scale = window.scale_factor();
@@ -1413,6 +1410,9 @@ fn run(args: &[String]) -> Result<(), String> {
     )));
     ACTIVE_STATE.with(|slot| *slot.borrow_mut() = Some(state.clone()));
     let ui = AppWindow::new().map_err(|e| e.to_string())?;
+    if std::env::var_os("CHILLHUB_DATA_DIR").is_some() {
+        ui.set_window_title("Chill Hub · Проверочная копия".into());
+    }
     ui.set_launcher_version(env!("CARGO_PKG_VERSION").into());
     bind(&ui, &state);
     controller::initialize(&ui, &state);

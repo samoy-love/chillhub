@@ -599,7 +599,8 @@ component SeekBar inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "Chill Hub";
+    in property <string> window-title: "Chill Hub";
+    title: root.window-title;
     icon: @image-url("assets/brand.png");
     preferred-width: 1360px; preferred-height: 850px;
     min-width: 900px; min-height: 500px;
@@ -1003,7 +1004,7 @@ export component AppWindow inherits Window {
                         Rectangle { x: 0px; y: 0px; width: 100%; height: 100%; background: @linear-gradient(90deg, #121117e8, #12111750); }
                         Rectangle { x: 0px; y: 0px; width: 100%; height: 100%; background: @linear-gradient(0deg, #121117c0, #12111700 70%); }
                         ActionButton { x: parent.width - 180px; y: 16px; width: 164px; compact: true; text: "Управление игрой"; icon: "tune"; enabled: root.panel-kind == ""; clicked => { root.panel-requested("manage"); } }
-                        if !root.has-gallery: ActionButton { x: parent.width - 295px; y: 16px; width: 105px; compact: true; text: "Обложка"; icon: "expand"; enabled: root.panel-kind == ""; clicked => { root.media-selected(0); } }
+                        if !root.has-gallery && root.media.length > 0: ActionButton { x: parent.width - 295px; y: 16px; width: 105px; compact: true; text: "Обложка"; icon: "expand"; enabled: root.panel-kind == ""; clicked => { root.media-selected(0); } }
                         title-measure := Text { visible: false; text: root.game-title; font-size: 54px; font-weight: 700; }
                         hero-copy := VerticalLayout {
                             x: 24px; y: 64px; width: min(600px, parent.width - 48px);
@@ -1092,9 +1093,11 @@ export component AppWindow inherits Window {
                 }
                 details := Rectangle { x: 0px;
                     y: feature.y + feature.height + 21px + (root.has-gallery ? root.media-tile-height + 58px : 0px); width: parent.width;
-                    height: root.has-mods ? benefits.preferred-height + 120px : about.preferred-height + 78px;
+                    visible: root.has-mods || root.highlights.length > 0;
+                    height: !self.visible ? 0px : root.has-mods ? benefits.preferred-height + 120px : about.preferred-height + 78px;
                     border-radius: 13px; border-width: 1px; border-color: #303035; background: #1b1b20;
-                    Text { x: 24px; y: 21px; width: parent.width - 48px; text: root.has-mods ? "Что добавляет модпак" : "Об игре"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                    accessible-role: groupbox; accessible-label: details-heading.text;
+                    details-heading := Text { x: 24px; y: 21px; width: parent.width - 48px; text: root.has-mods ? "Что добавляет модпак" : "Об игре"; color: Theme.ink; font-size: 18px; font-weight: 600; }
                     benefits := VerticalLayout { x: 24px; y: 65px; width: parent.width - 48px; spacing: 0px; alignment: start; visible: root.has-mods;
                         for start in [0, 2, 4]: Rectangle {
                             height: start < root.mod-benefits.length ? max(left-benefit.preferred-height, right-benefit.preferred-height) + 10px : 0px;
@@ -1105,7 +1108,6 @@ export component AppWindow inherits Window {
                     }
                     about := VerticalLayout { x: 24px; y: 59px; width: parent.width - 48px; spacing: 10px; alignment: start; visible: !root.has-mods;
                         for line in root.highlights: Text { text: line; font-size: 13px; color: #c9c6d0; wrap: word-wrap; }
-                        if root.highlights.length == 0: Text { text: root.genre; font-size: 13px; color: #c9c6d0; wrap: word-wrap; }
                     }
                     if root.has-mods: Rectangle { x: 24px; y: parent.height - 51px; width: parent.width - 48px; height: 1px; background: #ffffff0c; }
                     if root.has-mods: Text { x: 24px; y: parent.height - 39px; width: parent.width - 266px; height: 24px; text: root.pack-name + (root.pack-version == "" ? "" : " · " + root.pack-version); color: Theme.dim; font-size: 11px; vertical-alignment: center; overflow: elide; }
