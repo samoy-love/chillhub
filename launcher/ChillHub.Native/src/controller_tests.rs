@@ -439,10 +439,11 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                 }
                 19 if !ui.get_busy() => {
                     let ready_library_row = ui.get_games().row_data(1).is_some_and(|row| {
-                        row.id == "fixture" && row.status == "Установлена" && row.status_kind == "ready"
+                        row.id == "fixture" && row.status == "Готова локально" && row.status_kind == "ready"
                     });
                     if ui.get_source() != "steam"
                         || ui.get_play_label() != "Недоступно"
+                        || ui.get_ready_to_play()
                         || ui.get_can_play()
                         || ui.get_has_game_files()
                         || ui.get_can_verify_game()
