@@ -36,7 +36,7 @@ component SetupToggle inherits Rectangle {
     }
     toggle-copy := Text { x: 30px; width: parent.width - 30px; height: parent.height; text: root.text; color: Theme.ink; font-size: 13px; vertical-alignment: center; wrap: word-wrap; }
     toggle-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled;
-        key-pressed(event) => { if event.text == " " || event.text == Key.Return { root.checked = !root.checked; return accept; } reject }
+        key-pressed(event) => { if root.enabled && (event.text == " " || event.text == Key.Return) { root.checked = !root.checked; return accept; } reject }
         TouchArea { width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: pointer; clicked => { toggle-key.focus(); root.checked = !root.checked; } }
     }
 }

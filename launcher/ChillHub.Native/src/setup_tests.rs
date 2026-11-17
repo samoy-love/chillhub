@@ -38,6 +38,10 @@ fn setup_callbacks_preserve_invalid_input_and_unlock_after_preview_failure() {
     ui.invoke_submit();
     assert!(ui.get_busy());
     assert!(!ui.get_error());
+    ui.set_message("Первая операция уже выполняется.".into());
+    ui.invoke_submit();
+    assert!(ui.get_busy());
+    assert_eq!(ui.get_message(), "Первая операция уже выполняется.");
 
     let completed = std::rc::Rc::new(std::cell::Cell::new(false));
     let result = completed.clone();

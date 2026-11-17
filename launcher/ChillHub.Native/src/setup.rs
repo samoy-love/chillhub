@@ -356,6 +356,9 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
     let weak = ui.as_weak();
     ui.on_submit(move || {
         let Some(ui) = weak.upgrade() else { return };
+        if ui.get_busy() {
+            return;
+        }
         if ui.get_done() {
             if !request.removing
                 && let Err(e) =

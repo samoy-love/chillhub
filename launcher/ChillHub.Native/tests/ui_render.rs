@@ -672,6 +672,177 @@ fn assert_download_numbers_fit(ui: &AppWindow) {
 }
 
 #[test]
+fn downloads_escape_after_focused_queue_actions_change() {
+    use slint::Model;
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true,
+        threading: false,
+        renderer_name: Some("software".into()),
+    })))
+    .expect("headless platform only");
+    let h = Harness::new();
+    resize(h.ui.window(), 1120, 720, 1.0);
+    for (label, action) in [
+        ("Приостановить", "queue:active:pause"),
+        ("Отменить", "queue:pending:cancel"),
+    ] {
+        let mut active = QueueRow {
+            id: "active".into(),
+            title: "Первая загрузка".into(),
+            processing: true,
+            can_pause: true,
+            ..Default::default()
+        };
+        h.ui.set_queue_active(active.clone());
+        h.ui.set_queue(model(vec![QueueRow {
+            id: "pending".into(),
+            title: "Вторая загрузка".into(),
+            can_cancel: true,
+            ..Default::default()
+        }]));
+        h.ui.set_queue_history(model(Vec::new()));
+        h.panel("downloads", "Загрузки", "");
+        h.ui.window().take_snapshot().expect("download panel");
+        h.click_pointer(label);
+        assert_eq!(h.actions.borrow_mut().pop().as_deref(), Some(action));
+
+        active.progress = 0.8;
+        h.ui.set_queue_active(active);
+        settle();
+        key(h.ui.window(), Key::Return);
+        assert_eq!(
+            h.actions.borrow_mut().pop().as_deref(),
+            Some(action),
+            "progress updates preserve the focused queue action"
+        );
+
+        h.ui.set_queue_active(QueueRow::default());
+        h.ui.set_queue(model(Vec::new()));
+        h.ui.set_queue_history(model(vec![QueueRow {
+            id: "active".into(),
+            title: "Первая загрузка".into(),
+            state: "Готово".into(),
+            can_remove: true,
+            ..Default::default()
+        }]));
+        settle();
+        key(h.ui.window(), Key::Escape);
+        assert_eq!(h.ui.get_panel_kind(), "", "Escape after removing {label}");
+    }
+
+    h.ui.set_queue_active(QueueRow {
+        id: "running".into(),
+        title: "Активная загрузка".into(),
+        ..Default::default()
+    });
+    let mut waiting = QueueRow {
+        id: "waiting".into(),
+        title: "Ожидающая загрузка".into(),
+        can_pause: true,
+        ..Default::default()
+    };
+    let pending = Rc::new(VecModel::from(vec![waiting.clone()]));
+    h.ui.set_queue(ModelRc::from(pending.clone()));
+    h.panel("downloads", "Загрузки", "");
+    h.ui.window().take_snapshot().expect("download panel");
+    h.click_pointer("Приостановить");
+    assert_eq!(
+        h.actions.borrow_mut().pop().as_deref(),
+        Some("queue:waiting:pause")
+    );
+    waiting.can_pause = false;
+    waiting.can_resume = true;
+    pending.set_row_data(0, waiting);
+    settle();
+    key(h.ui.window(), Key::Escape);
+    assert_eq!(
+        h.ui.get_panel_kind(),
+        "",
+        "Escape after pausing a queued row"
+    );
+
+    let moved = QueueRow {
+        id: "later".into(),
+        title: "Следующая загрузка".into(),
+        can_reorder: true,
+        can_move_up: true,
+        ..Default::default()
+    };
+    pending.push(moved.clone());
+    h.panel("downloads", "Загрузки", "");
+    h.ui.window().take_snapshot().expect("download panel");
+    h.click_pointer("Поднять в очереди");
+    assert_eq!(
+        h.actions.borrow_mut().pop().as_deref(),
+        Some("queue:later:move-up")
+    );
+    pending.remove(1);
+    pending.insert(0, moved);
+    settle();
+    key(h.ui.window(), Key::Escape);
+    assert_eq!(h.ui.get_panel_kind(), "", "Escape after reordering a row");
+}
+
+#[test]
+fn disabled_controls_do_not_activate_after_focus() {
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true,
+        threading: false,
+        renderer_name: Some("software".into()),
+    })))
+    .expect("headless platform only");
+    let mut h = Harness::new();
+    h.game("lethal-company");
+    h.ui.set_can_play(true);
+    h.ui.set_play_label("Установить".into());
+    let play_requests = Rc::new(std::cell::Cell::new(0));
+    let requests = play_requests.clone();
+    h.ui.on_play_requested(move || requests.set(requests.get() + 1));
+    resize(h.ui.window(), 1120, 720, 1.0);
+    h.ui.window().take_snapshot().unwrap();
+    h.click_pointer("Установить");
+    assert_eq!(play_requests.get(), 1);
+    h.ui.set_can_play(false);
+    settle();
+    key(h.ui.window(), Key::Return);
+    text_key(h.ui.window(), " ");
+    assert_eq!(play_requests.get(), 1);
+
+    let setup = SetupWindow::new().unwrap();
+    let submits = Rc::new(std::cell::Cell::new(0));
+    let requests = submits.clone();
+    setup.on_submit(move || requests.set(requests.get() + 1));
+    resize(setup.window(), 680, 560, 1.0);
+    setup.window().take_snapshot().unwrap();
+    let install = ElementHandle::find_by_accessible_label(&setup, "Установить")
+        .find(|button| button.accessible_enabled() == Some(true))
+        .expect("install button");
+    click_input(setup.window(), &install);
+    assert_eq!(submits.get(), 1);
+    setup.set_busy(true);
+    settle();
+    key(setup.window(), Key::Return);
+    text_key(setup.window(), " ");
+    assert_eq!(submits.get(), 1);
+
+    setup.set_busy(false);
+    setup.window().take_snapshot().unwrap();
+    let shortcut =
+        ElementHandle::find_by_accessible_label(&setup, "Создать ярлык на рабочем столе")
+            .find(|toggle| toggle.accessible_enabled() == Some(true))
+            .expect("desktop shortcut toggle");
+    assert!(setup.get_desktop_shortcut());
+    click_input(setup.window(), &shortcut);
+    assert!(!setup.get_desktop_shortcut());
+    setup.set_picking(true);
+    setup.set_busy(true);
+    settle();
+    key(setup.window(), Key::Return);
+    text_key(setup.window(), " ");
+    assert!(!setup.get_desktop_shortcut());
+}
+
+#[test]
 fn real_ui_headless_layout_and_actions() {
     use slint::Model;
     slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {

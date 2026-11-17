@@ -84,7 +84,7 @@ export component AuxiliaryButton inherits Rectangle {
     accessible-action-default => { if enabled { clicked(); } }
     Text { x: 12px; y: 0px; width: parent.width - 24px; height: parent.height; text: parent.text; color: !parent.enabled ? Theme.dim : parent.primary ? #25202e : Theme.ink; font-size: 14px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
     key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled;
-        key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } reject }
+        key-pressed(event) => { if root.enabled && (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; } reject }
         touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: pointer; clicked => { key.focus(); root.clicked(); } }
     }
 }

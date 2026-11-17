@@ -110,7 +110,7 @@ component ActionButton inherits Rectangle {
     key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
         enabled: root.enabled;
         key-pressed(event) => {
-            if event.text == " " || event.text == Key.Return {
+            if root.enabled && (event.text == " " || event.text == Key.Return) {
                 root.clicked();
                 return accept;
             }
@@ -146,21 +146,31 @@ component QueueActions inherits Rectangle {
     in property <QueueRow> job;
     in property <bool> available;
     callback action(string, string);
+    callback restore-focus();
+    property <int> action-mask:
+        (root.job.can-reorder ? 1 : 0) + (root.job.can-move-up ? 2 : 0) +
+        (root.job.can-move-down ? 4 : 0) + (root.job.security-blocked ? 8 : 0) +
+        (root.job.can-confirm ? 16 : 0) + (root.job.can-pause ? 32 : 0) +
+        (root.job.can-resume ? 64 : 0) + (root.job.can-cancel ? 128 : 0) +
+        (root.job.can-remove ? 256 : 0);
+    property <string> control-identity: root.job.id + ":" + root.action-mask;
+    changed control-identity => { root.restore-focus(); }
     preferred-width: max(controls.min-width, controls.preferred-width);
     height: 32px;
 
     controls := HorizontalLayout {
         width: 100%; height: 100%;
         spacing: 6px; alignment: end;
+        // Moving a row recreates its buttons even when the list length stays the same.
         if root.job.can-reorder: ActionButton {
             min-width: 32px; compact: true; quiet: true; icon: "up";
             accessible-name: "Поднять в очереди"; enabled: root.available && root.job.can-move-up;
-            clicked => { root.action(root.job.id, "move-up"); }
+            clicked => { root.restore-focus(); root.action(root.job.id, "move-up"); }
         }
         if root.job.can-reorder: ActionButton {
             min-width: 32px; compact: true; quiet: true; icon: "down";
             accessible-name: "Опустить в очереди"; enabled: root.available && root.job.can-move-down;
-            clicked => { root.action(root.job.id, "move-down"); }
+            clicked => { root.restore-focus(); root.action(root.job.id, "move-down"); }
         }
         if root.job.security-blocked: ActionButton {
             min-width: 92px; compact: true; quiet: true; text: "Антивирус"; enabled: root.available;
@@ -216,6 +226,7 @@ component ActiveDownload inherits Rectangle {
     in property <QueueRow> job;
     in property <bool> available;
     callback action(string, string);
+    callback restore-focus();
     height: root.job.processing ? 188px : root.job.detail == "" ? 76px : 126px;
     background: #26242e;
     border-width: 1px; border-color: #3e3948;
@@ -237,6 +248,7 @@ component ActiveDownload inherits Rectangle {
         x: parent.width - self.width - 16px; y: 22px; width: self.preferred-width;
         job: root.job; available: root.available;
         action(id, verb) => { root.action(id, verb); }
+        restore-focus => { root.restore-focus(); }
     }
     if root.job.file != "": Text {
         x: 16px; y: 70px; width: parent.width - 32px; height: 17px;
@@ -275,6 +287,7 @@ component QueueListRow inherits Rectangle {
     in property <QueueRow> job;
     in property <bool> available;
     callback action(string, string);
+    callback restore-focus();
     height: root.job.detail == "" ? 56px : 61px + detail-copy.preferred-height;
     accessible-role: groupbox; accessible-label: root.job.title;
 
@@ -293,6 +306,7 @@ component QueueListRow inherits Rectangle {
         x: parent.width - self.width; y: 12px; width: self.preferred-width;
         job: root.job; available: root.available;
         action(id, verb) => { root.action(id, verb); }
+        restore-focus => { root.restore-focus(); }
     }
     detail-copy := Text {
         x: 44px; y: 51px; width: parent.width - self.x; height: self.preferred-height;
@@ -1198,6 +1212,15 @@ export component AppWindow inherits Window {
                 // The modal survives help -> feedback/settings transitions, but
                 // the previously focused action belongs to the removed content.
                 changed active-panel => { if root.gallery-open { keyboard.focus(); } else { self.focus(); } }
+                // A removed action can leave Slint without a focus target for Escape.
+                property <string> download-rows: root.queue-active.id + ":" + root.queue.length + ":" +
+                    root.queue-history.length + ":" + (root.queue-recovery-needed ? 1 : 0);
+                changed download-rows => { self.restore-download-focus(); }
+                function restore-download-focus() {
+                    if root.panel-kind == "downloads" {
+                        if self.enabled { self.focus(); } else { keyboard.focus(); }
+                    }
+                }
                 x: parent.width - 48px; y: 17px; width: 32px; compact: true; icon: "close"; accessible-name: "Закрыть"; enabled: !root.operation-busy && !root.feedback-exit-confirm; clicked => { root.request-close(); }
             }
 
@@ -1313,6 +1336,7 @@ export component AppWindow inherits Window {
                         if root.queue-active.id != "": ActiveDownload {
                             job: root.queue-active; available: !root.operation-busy;
                             action(id, verb) => { root.queue-action(id, verb); }
+                            restore-focus => { modal-close.restore-download-focus(); }
                         }
                         if root.queue.length > 0: VerticalLayout {
                             spacing: 0px;
@@ -1320,6 +1344,7 @@ export component AppWindow inherits Window {
                             for item in root.queue: QueueListRow {
                                 job: item; available: !root.operation-busy;
                                 action(id, verb) => { root.queue-action(id, verb); }
+                                restore-focus => { modal-close.restore-download-focus(); }
                             }
                         }
                         if root.queue-history.length > 0: VerticalLayout {
@@ -1328,6 +1353,7 @@ export component AppWindow inherits Window {
                             for item in root.queue-history: QueueListRow {
                                 job: item; available: !root.operation-busy;
                                 action(id, verb) => { root.queue-action(id, verb); }
+                                restore-focus => { modal-close.restore-download-focus(); }
                             }
                         }
                         if root.downloads-empty: Rectangle {
