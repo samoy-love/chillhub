@@ -191,6 +191,7 @@ pub fn locate_steam_at(root: Option<&Path>, app_id: &str, steam_folder: &str) ->
 pub enum LaunchAction {
     Play,
     InstallGame,
+    ResumeInstall,
     UpdateGame,
     InstallMods,
     UpdateMods,
@@ -292,10 +293,14 @@ pub fn options_with_steam(
             &[LaunchTarget::LocalVanilla]
         };
         let exe_exists = resolve_game_exe(&local, &game.exe_relative_path, &[]).is_ok();
-        let installed = !read_marker(&local, ".version").is_empty();
-        let outdated = !read_marker(&local, ".version").eq_ignore_ascii_case(local_version.trim());
+        let version_marker = read_marker(&local, ".version");
+        let installed = !version_marker.is_empty();
+        let outdated = !version_marker.eq_ignore_ascii_case(local_version.trim());
+        let interrupted = local.join(".updating").exists();
         for target in targets {
-            let (action, note) = if local.join(".updating").exists() {
+            let (action, note) = if interrupted && !installed {
+                (LaunchAction::ResumeInstall, "Установка прервана")
+            } else if interrupted {
                 (
                     LaunchAction::UpdateGame,
                     "Обновление не завершено. Восстановить игру",

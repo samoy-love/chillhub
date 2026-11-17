@@ -67,6 +67,7 @@ pub(super) fn present<'a>(
             let label = match option.action {
                 LaunchAction::Play => "Играть",
                 LaunchAction::InstallGame => "Установить",
+                LaunchAction::ResumeInstall => "Продолжить установку",
                 LaunchAction::UpdateGame => "Обновить",
                 LaunchAction::InstallMods => "Установить моды",
                 LaunchAction::UpdateMods => "Обновить моды",
@@ -116,6 +117,7 @@ pub(super) fn library_label(action: &LaunchAction, running: bool) -> (String, St
         LaunchAction::UpdateGame | LaunchAction::UpdateMods => ("Есть обновление", "update"),
         LaunchAction::RepairMods => ("Восстановить моды", "update"),
         LaunchAction::InstallGame => ("Не установлена", "idle"),
+        LaunchAction::ResumeInstall => ("Установка прервана", "update"),
         LaunchAction::InstallMods => ("Нужны моды", "idle"),
         LaunchAction::Unavailable => ("Копия недоступна", "idle"),
     };
@@ -132,7 +134,7 @@ pub(super) fn library_copies_label(
     let installed = |option: &&LaunchOption| {
         !matches!(
             option.action,
-            LaunchAction::InstallGame | LaunchAction::Unavailable
+            LaunchAction::InstallGame | LaunchAction::ResumeInstall | LaunchAction::Unavailable
         )
     };
     let choice = options
@@ -148,6 +150,11 @@ pub(super) fn library_copies_label(
                     LaunchAction::RepairMods => 2,
                     _ => 3,
                 })
+        })
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| option.action == LaunchAction::ResumeInstall)
         })
         .or_else(|| {
             options

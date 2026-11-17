@@ -37,6 +37,13 @@ fn every_action_has_its_primary_button_and_library_badge() {
             true,
         ),
         (
+            LaunchAction::ResumeInstall,
+            "Продолжить установку",
+            "Установка прервана",
+            "update",
+            true,
+        ),
+        (
             LaunchAction::UpdateGame,
             "Обновить",
             "Есть обновление",
@@ -256,6 +263,23 @@ fn library_describes_installed_copies_without_changing_the_launch_choice() {
     assert_eq!(
         library_copies_label(&not_installed, LaunchTarget::SteamModded, false),
         ("Не установлена".into(), "idle".into())
+    );
+    let interrupted = [
+        make(LaunchTarget::LocalVanilla, LaunchAction::InstallGame),
+        make(LaunchTarget::LocalModded, LaunchAction::ResumeInstall),
+        make(LaunchTarget::SteamVanilla, LaunchAction::Unavailable),
+    ];
+    assert_eq!(
+        library_copies_label(&interrupted, LaunchTarget::SteamVanilla, false),
+        ("Установка прервана".into(), "update".into())
+    );
+    let interrupted_and_installed = [
+        make(LaunchTarget::LocalModded, LaunchAction::ResumeInstall),
+        make(LaunchTarget::SteamVanilla, LaunchAction::Play),
+    ];
+    assert_eq!(
+        library_copies_label(&interrupted_and_installed, LaunchTarget::LocalModded, false),
+        ("Установлена".into(), "ready".into())
     );
     let steam_only = [make(LaunchTarget::SteamVanilla, LaunchAction::Play)];
     assert_eq!(

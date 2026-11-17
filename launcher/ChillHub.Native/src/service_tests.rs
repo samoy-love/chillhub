@@ -18,6 +18,7 @@ fn maintenance_blocks_only_named_operations() {
         ..Default::default()
     };
     assert!(blocked(&m, &LaunchAction::InstallGame));
+    assert!(blocked(&m, &LaunchAction::ResumeInstall));
     assert!(!blocked(&m, &LaunchAction::Play));
     assert!(!blocked(&m, &LaunchAction::UpdateMods));
     assert!(!blocked(&m, &LaunchAction::InstallMods));
@@ -31,6 +32,7 @@ fn maintenance_blocks_only_named_operations() {
         ..Default::default()
     };
     assert!(blocked(&updating, &LaunchAction::InstallMods));
+    assert!(!blocked(&updating, &LaunchAction::ResumeInstall));
     let off = Maintenance {
         enabled: false,
         ..m

@@ -96,6 +96,38 @@ fn absent_exe_and_unfinished_update_cannot_be_launched() {
     );
 }
 #[test]
+fn interrupted_local_install_uses_the_committed_version_to_distinguish_updates() {
+    let (_temp, paths, game, steam) = fixture();
+    let root = paths.game_root(&game.game_id).unwrap();
+    let check = |action, note| {
+        let options = options_with_steam(&game, &paths, Some(&steam)).unwrap();
+        for target in [LaunchTarget::LocalVanilla, LaunchTarget::LocalModded] {
+            let option = options.iter().find(|item| item.target == target).unwrap();
+            assert_eq!(option.action, action);
+            assert_eq!(option.note, note);
+            assert!(option.available());
+            assert!(!option.ready());
+        }
+    };
+    fs::remove_file(root.join(".version")).unwrap();
+    let game_exe = root.join("PEAK.exe");
+    let partial = root.join("PEAK.exe.part");
+    fs::rename(&game_exe, &partial).unwrap();
+    check(LaunchAction::InstallGame, "Установить игру");
+    fs::write(root.join(".updating"), "version=1").unwrap();
+    check(LaunchAction::ResumeInstall, "Установка прервана");
+
+    // A crash after file promotion can leave the executable without a committed version.
+    fs::rename(&partial, &game_exe).unwrap();
+    check(LaunchAction::ResumeInstall, "Установка прервана");
+    fs::write(root.join(".version"), "1").unwrap();
+    check(
+        LaunchAction::UpdateGame,
+        "Обновление не завершено. Восстановить игру",
+    );
+}
+
+#[test]
 fn interrupted_first_steam_mod_install_can_be_resumed_without_published_markers() {
     let (_temp, paths, mut game, steam) = fixture();
     fs::remove_file(steam.game_dir.join(".mods.version")).unwrap();
