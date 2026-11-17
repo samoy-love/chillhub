@@ -569,6 +569,36 @@ fn disk_plan_counts_fresh_bytes_and_only_concurrent_replacement_overlap() {
             expected_units: 79,
         },
         SpaceCase {
+            name: "serial shrink releases space for a later file",
+            sizes: &[(10, 100), (9, 0)],
+            parallel: 1,
+            expected_units: 10,
+        },
+        SpaceCase {
+            name: "serial estimate follows the descending size schedule",
+            sizes: &[(9, 0), (10, 100)],
+            parallel: 1,
+            expected_units: 10,
+        },
+        SpaceCase {
+            name: "equal-size serial replacements keep manifest order",
+            sizes: &[(10, 0), (10, 100)],
+            parallel: 1,
+            expected_units: 20,
+        },
+        SpaceCase {
+            name: "serial growth is included before a later shrink",
+            sizes: &[(30, 10), (20, 50), (19, 0)],
+            parallel: 1,
+            expected_units: 40,
+        },
+        SpaceCase {
+            name: "parallel shrink does not promise an early release",
+            sizes: &[(10, 100), (9, 0)],
+            parallel: 2,
+            expected_units: 19,
+        },
+        SpaceCase {
             name: "mixed three workers",
             sizes: &[(31, 1), (30, 9), (5, 7), (10, 11), (8, 0)],
             parallel: 3,

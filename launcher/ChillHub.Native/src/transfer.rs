@@ -620,29 +620,19 @@ impl TransferEngine {
         checking.emit(TransferStage::Checking, "", event, true);
         replacements.sort_unstable_by_key(|(index, _, _)| *index);
         let mut downloads = Vec::with_capacity(replacements.len());
-        let mut growth = 0u64;
-        let mut overlap = Vec::with_capacity(replacements.len());
+        let mut allocations = Vec::with_capacity(replacements.len());
         let mut hash_mismatches = 0;
         for (index, old, existing_part) in replacements {
             let file = &manifest.files[index];
             hash_mismatches += usize::from(old.as_ref().is_some_and(|old| old.size == file.size));
             let old_size = old.map_or(0, |old| old.allocated);
             let remaining = file.size.saturating_sub(existing_part);
-            growth += remaining.saturating_sub(old_size);
-            overlap.push(remaining.min(old_size));
+            allocations.push((remaining, old_size));
             downloads.push(file.clone());
         }
         let total_download_bytes: u64 = downloads.iter().map(|f| f.size).sum();
-        // The same bytes move from `.part` to the final filename. Count all
-        // positive growth (shrinking files could be processed later), plus the
-        // largest overlaps while old and new files exist side by side. Credit
-        // only space already allocated to an ordinary, unshared partial file.
-        overlap.sort_unstable_by(|a, b| b.cmp(a));
-        let temp_space: u64 = overlap
-            .into_iter()
-            .take(request.max_parallel.clamp(1, 16))
-            .sum();
-        let required_free_bytes = growth + temp_space;
+        let required_free_bytes =
+            required_transfer_space(&downloads, &allocations, request.max_parallel.clamp(1, 16));
         Ok(TransferPlan {
             manifest,
             downloads,
@@ -745,22 +735,20 @@ impl TransferEngine {
             request.bytes_per_second,
         );
         stats.emit(TransferStage::Downloading, "", event, true);
-        // Start large transfers while other workers can still handle small files.
-        // Stable ordering keeps manifest order for equal sizes and leaves the plan intact.
-        let mut downloads: Vec<_> = plan.downloads.iter().collect();
-        downloads.sort_by_key(|file| Reverse(file.size));
+        let schedule = download_order(&plan.downloads);
         let next = AtomicUsize::new(0);
         let stopped = AtomicBool::new(false);
         let error = Mutex::new(None);
         std::thread::scope(|scope| {
-            for _ in 0..request.max_parallel.clamp(1, 16).min(downloads.len()) {
+            for _ in 0..request.max_parallel.clamp(1, 16).min(schedule.len()) {
                 scope.spawn(|| {
                     let mut buffer = vec![0; BUFFER];
                     while !stopped.load(Ordering::Acquire) {
                         let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(&file) = downloads.get(index) else {
+                        let Some(&file_index) = schedule.get(index) else {
                             break;
                         };
+                        let file = &plan.downloads[file_index];
                         if let Err(e) = self.transfer_file(
                             request,
                             &plan.manifest,
@@ -1500,6 +1488,43 @@ fn rolling(bytes: &[u8]) -> u64 {
 }
 fn hash_worker_count() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get().min(HASH_WORKERS))
+}
+
+fn download_order(downloads: &[ManifestFile]) -> Vec<usize> {
+    let mut order: Vec<_> = (0..downloads.len()).collect();
+    // Start large transfers early and retain manifest order for equal sizes.
+    order.sort_by_key(|&index| Reverse(downloads[index].size));
+    order
+}
+
+fn required_transfer_space(
+    downloads: &[ManifestFile],
+    allocations: &[(u64, u64)],
+    workers: usize,
+) -> u64 {
+    if workers == 1 {
+        let mut used = 0i128;
+        let mut peak = 0i128;
+        for index in download_order(downloads) {
+            let (remaining, old) = allocations[index];
+            used += i128::from(remaining);
+            peak = peak.max(used);
+            // The next file cannot start before this one is promoted.
+            used -= i128::from(old);
+        }
+        return u64::try_from(peak).unwrap_or(u64::MAX);
+    }
+
+    // Parallel completion may differ from the scheduled order. Count all
+    // positive growth, plus the largest simultaneous old/new file overlaps.
+    let mut growth = 0;
+    let mut overlap = Vec::with_capacity(allocations.len());
+    for &(remaining, old) in allocations {
+        growth += remaining.saturating_sub(old);
+        overlap.push(remaining.min(old));
+    }
+    overlap.sort_unstable_by(|a, b| b.cmp(a));
+    growth + overlap.into_iter().take(workers).sum::<u64>()
 }
 
 fn allocated_part_bytes(destination: &Path) -> u64 {
