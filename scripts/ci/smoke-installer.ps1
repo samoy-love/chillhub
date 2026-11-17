@@ -30,6 +30,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+    throw 'Installer smoke requires a disposable GitHub-hosted runner.'
+}
+
 $UninstKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ChillHub'
 $AppKey = 'HKCU:\Software\ChillHub\Install'
 
@@ -69,51 +73,21 @@ $setupMb = [math]::Round((Get-Item -LiteralPath $setupPath).Length / 1MB, 1)
 Write-Host "[smoke] установщик: $setupPath ($setupMb МБ), ожидаемая версия: $ExpectedVersion" -ForegroundColor Cyan
 
 if (-not $InstallDir) {
-    $InstallDir = Join-Path ([IO.Path]::GetTempPath().TrimEnd('\')) ("chillhub-smoke-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    $InstallDir = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-smoke-" + [Guid]::NewGuid().ToString('N'))
 }
-
-# Путь без пробелов — требование ключа /D= (см. Invoke-SilentInstall), а
-# временный каталог лежит в профиле пользователя, в имени которого пробел —
-# обычное дело. Короткая форма пути (8.3) решает это, не заставляя никого
-# передавать каталог руками; она же — то, что и так стоит в %TEMP% на раннере
-# CI. Каталог для этого должен существовать, поэтому создаём его заранее:
-# установщик всё равно создал бы его сам.
-New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-if ($InstallDir -match '\s') {
-    try {
-        $fso = New-Object -ComObject Scripting.FileSystemObject
-        $short = $fso.GetFolder($InstallDir).ShortPath
-        if ($short -and $short -notmatch '\s') { $InstallDir = $short }
-    }
-    catch { }
+$InstallDir = [IO.Path]::GetFullPath($InstallDir, (Get-Location).ProviderPath)
+if (Get-Item -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue) {
+    throw "Каталог для проверки должен быть новым: $InstallDir"
 }
+$createdInstallDir = $null
 
-# Конфиг лаунчера живёт в профиле, а не в каталоге установки, и установщик
-# пишет туда осознанно (И19). На машине разработчика это ЕГО настоящий конфиг,
-# поэтому сохраняем и возвращаем как было: проверка не имеет права трогать
-# рабочее окружение того, кто её запустил.
 $appDataDir = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'ChillHub'
+$localAppDataDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ChillHub'
 $configPath = Join-Path $appDataDir 'config.json'
-$configBackup = $null
-$configExistedBefore = Test-Path -LiteralPath $configPath
-if ($configExistedBefore) {
-    $configBackup = "$configPath.smoke-backup"
-    Copy-Item -LiteralPath $configPath -Destination $configBackup -Force
-}
 
-# ОКРУЖЕНИЕ ВОЗВРАЩАЕТСЯ РОВНО В ИСХОДНОЕ СОСТОЯНИЕ.
-#
-# Проверка ставит и удаляет НАСТОЯЩИЙ Chill Hub, а установщик — пользовательский:
-# он пишет в HKCU, кладёт ярлык на рабочий стол и в меню «Пуск» по фиксированным
-# путям, не зависящим от каталога установки. На чистом раннере это неважно, а на
-# машине разработчика, где Chill Hub стоит по-настоящему, тихое удаление в конце
-# снесло бы его ярлыки и запись в списке программ — то есть проверка сломала бы
-# ровно то, что проверяет.
-#
-# Поэтому всё, что установщик трогает вне $InstallDir, снимается до и
-# восстанавливается после, независимо от исхода проверок.
-$snapshotDir = Join-Path ([IO.Path]::GetTempPath().TrimEnd('\')) ("chillhub-smoke-backup-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-New-Item -ItemType Directory -Path $snapshotDir -Force | Out-Null
+# Установщик пишет в профиль раннера. Снимки создаются до первой записи.
+$snapshotDir = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-smoke-backup-" + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $snapshotDir | Out-Null
 
 # Ярлыки называются по видимому имени продукта — «Chill Hub», а не по имени exe.
 $desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Chill Hub.lnk'
@@ -134,29 +108,26 @@ function Restore-Snapshot {
     param([string]$Path, [string]$Name, [bool]$Existed)
     $saved = Join-Path $snapshotDir $Name
     if ($Existed) {
-        if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue }
-        Copy-Item -LiteralPath $saved -Destination $Path -Recurse -Force
+        $null = Get-Item -LiteralPath $saved
     }
-    elseif (Test-Path -LiteralPath $Path) {
-        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+    if ($Existed) {
+        Copy-Item -LiteralPath $saved -Destination $Path -Recurse -Force
     }
 }
 
-$hadDesktopLnk = Save-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk'
-$hadStartMenu = Save-Snapshot -Path $startMenuDir -Name 'StartMenu'
-$hadLegacyDesktopLnk = Save-Snapshot -Path $legacyDesktopLnk -Name 'ChillHub.lnk'
-$hadLegacyStartMenu = Save-Snapshot -Path $legacyStartMenuDir -Name 'LegacyStartMenu'
+$shortcutSnapshots = @(
+    @{ Path = $desktopLnk; Name = 'Chill Hub.lnk' }
+    @{ Path = $startMenuDir; Name = 'StartMenu' }
+    @{ Path = $legacyDesktopLnk; Name = 'ChillHub.lnk' }
+    @{ Path = $legacyStartMenuDir; Name = 'LegacyStartMenu' }
+)
+foreach ($shortcut in $shortcutSnapshots) {
+    $shortcut.Existed = Save-Snapshot -Path $shortcut.Path -Name $shortcut.Name
+}
 
-# КАТАЛОГИ ДАННЫХ УВОДЯТСЯ В СТОРОНУ ПЕРЕИМЕНОВАНИЕМ, А НЕ КОПИРОВАНИЕМ.
-#
-# Ниже прогоняется настоящее удаление, а оно делает RMDir /r по
-# %APPDATA%\ChillHub и %LOCALAPPDATA%\ChillHub. На раннере CI там пусто, а на
-# машине разработчика в %LOCALAPPDATA%\ChillHub лежит его НАСТОЯЩАЯ установка
-# лаунчера: проверка снесла бы её вместе с играми.
-#
-# Переименование, а не копия: каталог установки весит сотни мегабайт, и копией
-# на каждом прогоне платил бы каждый.
-$localAppDataDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ChillHub'
 $stashed = @{}
 
 function Move-Aside {
@@ -174,16 +145,55 @@ function Move-Aside {
     }
 }
 
-# Ключи реестра сохраняются целиком (reg export), а не по одному значению:
-# восстановить надо всё, что было, а не то, что вспомнили перечислить.
-$hadUninstKey = Test-Path -LiteralPath $UninstKey
-$hadAppKey = Test-Path -LiteralPath $AppKey
-if ($hadUninstKey) { reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ChillHub" (Join-Path $snapshotDir 'uninst.reg') /y | Out-Null }
-if ($hadAppKey) { reg export "HKCU\Software\ChillHub\Install" (Join-Path $snapshotDir 'app.reg') /y | Out-Null }
+function Invoke-RegistrySnapshot {
+    param([string[]]$Arguments)
+    $regExe = Join-Path ([Environment]::SystemDirectory) 'reg.exe'
+    & $regExe @Arguments | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Ошибка reg.exe $($Arguments[0]), код $LASTEXITCODE."
+    }
+}
+
+function Restore-RegistrySnapshot {
+    param([string]$Key, [string]$File)
+    if ($File -and -not (Test-Path -LiteralPath $File -PathType Leaf)) {
+        throw "Снимок раздела $Key не найден: $File"
+    }
+    if (Test-Path -LiteralPath $Key) {
+        Remove-Item -LiteralPath $Key -Recurse -Force
+    }
+    if ($File) {
+        Invoke-RegistrySnapshot -Arguments @('import', $File)
+    }
+}
+
+$registrySnapshots = @{}
+foreach ($key in $UninstKey, $AppKey) {
+    $registrySnapshots[$key] = $null
+    if (Test-Path -LiteralPath $key) {
+        $file = Join-Path $snapshotDir ("$(Split-Path -Leaf $key).reg")
+        Invoke-RegistrySnapshot -Arguments @('export', ($key -replace '^HKCU:', 'HKCU'), $file)
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            throw "reg.exe не создал снимок раздела $key."
+        }
+        $registrySnapshots[$key] = $file
+    }
+}
 
 $gamesDir = Join-Path ([IO.Path]::GetTempPath().TrimEnd('\')) ("chillhub-smoke-games-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+$installerStarted = $false
 
 try {
+    # Без -Force создание остановится, если каталог успел появиться после проверки.
+    $createdInstallDir = (New-Item -ItemType Directory -Path $InstallDir).FullName
+    if ($InstallDir -match '\s') {
+        $fso = New-Object -ComObject Scripting.FileSystemObject
+        $InstallDir = $fso.GetFolder($InstallDir).ShortPath
+        if (-not $InstallDir -or $InstallDir -match '\s') {
+            throw 'Передайте новый каталог установки без пробелов.'
+        }
+    }
+
     # Переносим до установки, но уже под finally: если второй перенос не
     # удастся, первый каталог всё равно должен вернуться на место.
     if (-not ((Move-Aside -Path $appDataDir -Name 'AppDataRoaming') -and
@@ -193,6 +203,7 @@ try {
 
     # ---------------------------------------------------------------- установка
     Write-Host "[smoke] тихая установка в $InstallDir" -ForegroundColor Cyan
+    $installerStarted = $true
     $code = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
     Test-Assert -What "установщик завершился успешно" -Condition ($code -eq 0) -Detail "код возврата $code"
 
@@ -437,65 +448,61 @@ try {
     }
 }
 finally {
-    # Возвращаем окружение как было — проверка не должна оставлять следов ни на
-    # раннере, ни на машине разработчика.
-    #
-    # Уведённые в сторону каталоги данных возвращаются ПЕРВЫМИ: копия config.json
-    # лежит внутри %APPDATA%\ChillHub и уехала вместе с ним, поэтому возврат
-    # каталога целиком отменяет и делает ненужным восстановление конфига ниже.
-    # То, что успел создать сам прогон, сносится: восстанавливаем то, что было ДО.
-    $stashLost = $false
-    foreach ($original in @($stashed.Keys)) {
-        if (Test-Path -LiteralPath $original) { Remove-Item -LiteralPath $original -Recurse -Force -ErrorAction SilentlyContinue }
-        try { Move-Item -LiteralPath $stashed[$original] -Destination $original -Force -ErrorAction Stop }
+    $restoreFailures = [Collections.Generic.List[string]]::new()
+    foreach ($original in $appDataDir, $localAppDataDir) {
+        try {
+            if ($stashed.ContainsKey($original)) {
+                $null = Get-Item -LiteralPath $stashed[$original]
+                if (Test-Path -LiteralPath $original) {
+                    Remove-Item -LiteralPath $original -Recurse -Force
+                }
+                Move-Item -LiteralPath $stashed[$original] -Destination $original
+            }
+            elseif ($installerStarted -and (Test-Path -LiteralPath $original)) {
+                Remove-Item -LiteralPath $original -Recurse -Force
+            }
+        }
         catch {
-            $stashLost = $true
-            Write-Warning "НЕ УДАЛОСЬ вернуть '$original' из '$($stashed[$original])': $($_.Exception.Message)"
+            $restoreFailures.Add("Каталог ${original}: $($_.Exception.Message)")
         }
     }
 
-    if ($stashed.ContainsKey($appDataDir)) {
-        # Каталог вернулся целиком, вместе с исходным config.json и копией рядом.
-        if ($configBackup -and (Test-Path -LiteralPath $configBackup)) {
-            Remove-Item -LiteralPath $configBackup -Force -ErrorAction SilentlyContinue
+    if ($installerStarted) {
+        foreach ($shortcut in $shortcutSnapshots) {
+            try {
+                Restore-Snapshot -Path $shortcut.Path -Name $shortcut.Name -Existed $shortcut.Existed
+            }
+            catch {
+                $restoreFailures.Add("Ярлыки $($shortcut.Path): $($_.Exception.Message)")
+            }
+        }
+        foreach ($key in $registrySnapshots.Keys) {
+            try {
+                Restore-RegistrySnapshot -Key $key -File $registrySnapshots[$key]
+            }
+            catch {
+                $restoreFailures.Add("Раздел ${key}: $($_.Exception.Message)")
+            }
         }
     }
-    elseif ($configBackup) {
-        Copy-Item -LiteralPath $configBackup -Destination $configPath -Force
-        Remove-Item -LiteralPath $configBackup -Force -ErrorAction SilentlyContinue
-    }
-    elseif (-not $configExistedBefore -and (Test-Path -LiteralPath $appDataDir)) {
-        Remove-Item -LiteralPath $appDataDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    if (Test-Path -LiteralPath $gamesDir) { Remove-Item -LiteralPath $gamesDir -Recurse -Force -ErrorAction SilentlyContinue }
 
-    Restore-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk' -Existed $hadDesktopLnk
-    Restore-Snapshot -Path $startMenuDir -Name 'StartMenu' -Existed $hadStartMenu
-    Restore-Snapshot -Path $legacyDesktopLnk -Name 'ChillHub.lnk' -Existed $hadLegacyDesktopLnk
-    Restore-Snapshot -Path $legacyStartMenuDir -Name 'LegacyStartMenu' -Existed $hadLegacyStartMenu
-
-    if (Test-Path -LiteralPath $UninstKey) { Remove-Item -LiteralPath $UninstKey -Recurse -Force -ErrorAction SilentlyContinue }
-    if (Test-Path -LiteralPath $AppKey) { Remove-Item -LiteralPath $AppKey -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($hadUninstKey) { reg import (Join-Path $snapshotDir 'uninst.reg') 2>&1 | Out-Null }
-    if ($hadAppKey) { reg import (Join-Path $snapshotDir 'app.reg') 2>&1 | Out-Null }
-    # Каталог со снимками сносится, только если ВСЁ уведённое вернулось на место.
-    # Иначе внутри лежат единственные копии пользовательских данных, и убрать за
-    # собой мусор означало бы стереть их насовсем — пусть лучше останется след,
-    # который видно в предупреждении выше.
-    if ($stashLost) {
-        Write-Warning "каталог со снимками НЕ удалён, в нём остались невозвращённые данные: $snapshotDir"
-    }
-    else {
+    if ($restoreFailures.Count -eq 0) {
         Remove-Item -LiteralPath $snapshotDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($installerStarted -and (Test-Path -LiteralPath $gamesDir)) {
+        Remove-Item -LiteralPath $gamesDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     # Каталог освобождается не мгновенно: Uninstall.exe завершился, но ссылка
     # на файл может ещё жить у антивируса или индексатора.
-    for ($i = 0; $i -lt 5 -and (Test-Path -LiteralPath $InstallDir); $i++) {
-        try { Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 400 }
+    for ($i = 0; $i -lt 5 -and $createdInstallDir -and (Test-Path -LiteralPath $createdInstallDir); $i++) {
+        try { Remove-Item -LiteralPath $createdInstallDir -Recurse -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 400 }
     }
-    if (Test-Path -LiteralPath $InstallDir) {
-        Write-Warning "не удалось убрать временный каталог $InstallDir"
+    if ($createdInstallDir -and (Test-Path -LiteralPath $createdInstallDir)) {
+        Write-Warning "не удалось убрать временный каталог $createdInstallDir"
+    }
+    if ($restoreFailures.Count -gt 0) {
+        throw "Снимки сохранены в $snapshotDir. Ошибки восстановления: $($restoreFailures -join '; ')"
     }
 }
 
