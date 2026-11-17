@@ -211,13 +211,13 @@ component QueueMetric inherits Rectangle {
     }
     value-measure := Text { visible: false; text: root.value; font-family: "Consolas"; font-size: 16px; }
     value-copy := Text {
-        width: self.preferred-width; y: 20px; height: 22px;
+        x: 0px; width: self.preferred-width; y: 20px; height: 22px;
         text: root.value; font-family: "Consolas";
         font-size: min(16px, 16px * max(1px, root.width - 2px) / max(1px, value-measure.preferred-width));
         color: Theme.ink;
     }
     if root.note != "": note-copy := Text {
-        width: self.preferred-width; y: 42px; height: 16px;
+        x: 0px; width: self.preferred-width; y: 42px; height: 16px;
         text: root.note; font-size: 12px; color: Theme.dim;
     }
 }
@@ -796,7 +796,11 @@ export component AppWindow inherits Window {
     property <length> modal-width: min(720px, root.width - 64px);
     property <bool> downloads-idle: root.queue-active.id == "" && root.queue.length == 0 && root.queue-error == "";
     property <bool> downloads-empty: root.downloads-idle && root.queue-history.length == 0;
-    property <length> downloads-height: root.downloads-idle ? max(220px, 168px + root.queue-history.length * 64px) : 650px;
+    property <bool> downloads-single: root.queue-active.id != "" && root.queue.length == 0 &&
+        root.queue-history.length == 0 && root.queue-error == "";
+    // Reserve room for all active stages, including the download counters.
+    property <length> downloads-height: root.downloads-idle ? max(220px, 168px + root.queue-history.length * 64px) :
+        root.downloads-single ? 320px : 650px;
     property <length> modal-height: min(650px, root.height - 64px,
         root.panel-kind == "confirm" ? max(280px, confirmation-measure.preferred-height + 212px) :
         root.panel-kind == "update" ? 460px :

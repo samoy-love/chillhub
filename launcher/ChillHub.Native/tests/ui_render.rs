@@ -648,6 +648,14 @@ fn assert_in_bounds(element: &ElementHandle, width: f32, height: f32, context: &
     );
 }
 
+fn download_panel_height(ui: &AppWindow) -> f32 {
+    ElementHandle::find_by_element_id(ui, "AppWindow::modal")
+        .next()
+        .expect("download panel")
+        .size()
+        .height
+}
+
 fn assert_download_numbers_fit(ui: &AppWindow) {
     let values: Vec<_> = ElementHandle::find_by_element_id(ui, "QueueMetric::value-copy").collect();
     assert_eq!(values.len(), 4);
@@ -662,6 +670,7 @@ fn assert_download_numbers_fit(ui: &AppWindow) {
         .next()
         .expect("total is displayed under the processed amount");
     assert!(slot > 0.0);
+    assert_eq!(total.absolute_position().x, values[0].absolute_position().x);
     for value in values.iter().chain(std::iter::once(&total)) {
         assert!(
             value.size().width <= slot + 0.5,
@@ -1731,6 +1740,12 @@ fn real_ui_headless_layout_and_actions() {
             }
             for (w, height, scale) in [(900, 500, 1.0), (1120, 720, 2.0)] {
                 h.capture(&format!("queue-{name}"), w, height, scale);
+                if matches!(
+                    name,
+                    "running" | "pausing" | "paused" | "cancelling" | "confirmation"
+                ) {
+                    assert_eq!(download_panel_height(&h.ui), 320.0, "single {name} task");
+                }
                 if name == "running" {
                     assert_download_numbers_fit(&h.ui);
                 }
@@ -1798,6 +1813,8 @@ fn real_ui_headless_layout_and_actions() {
             }
             if name == "running" {
                 let mut active = h.ui.get_queue_active();
+                active.progress = 0.93;
+                active.progress_label = "93%".into();
                 active.processed = "17179869183,9 ГБ".into();
                 active.processed_total = "17179869184,0 ГБ".into();
                 active.transferred = "17179869183,9 ГБ".into();
@@ -1806,6 +1823,17 @@ fn real_ui_headless_layout_and_actions() {
                 h.ui.set_queue_active(active);
                 h.capture("queue-large-counters", 900, 500, 1.0);
                 assert_download_numbers_fit(&h.ui);
+                assert_eq!(download_panel_height(&h.ui), 320.0);
+
+                h.ui.set_queue(model(vec![QueueRow {
+                    id: "waiting".into(),
+                    title: "Ожидающая загрузка".into(),
+                    state: "В очереди".into(),
+                    ..Default::default()
+                }]));
+                settle();
+                assert_eq!(download_panel_height(&h.ui), 436.0, "active plus waiting");
+                h.ui.set_queue(model(Vec::new()));
             }
         }
     }
@@ -1826,11 +1854,8 @@ fn real_ui_headless_layout_and_actions() {
                     .collect(),
             ));
             h.capture(&format!("queue-history-{count}"), 900, 500, 1.0);
-            let modal = ElementHandle::find_by_element_id(&h.ui, "AppWindow::modal")
-                .next()
-                .expect("download panel");
             assert_eq!(
-                modal.size().height,
+                download_panel_height(&h.ui),
                 expected_height,
                 "history with {count} records"
             );
