@@ -1012,6 +1012,28 @@ fn library_queue_task<'a>(tasks: &'a [QueueItem], game_id: &str) -> Option<&'a Q
         })
 }
 
+fn library_queue_kind(task: &QueueItem) -> &'static str {
+    match task.state {
+        QueueState::Failed => "error",
+        QueueState::NeedsConfirmation => "confirmation",
+        QueueState::Paused | QueueState::Pausing => "paused",
+        QueueState::Waiting => "queued",
+        QueueState::Running => match task.progress.as_ref().map(|p| p.stage) {
+            Some(
+                chillhub_native::transfer::TransferStage::Checking
+                | chillhub_native::transfer::TransferStage::Verifying,
+            ) => "checking",
+            _ if task.report.operation
+                == Some(chillhub_native::queue::TransferOperation::Verify) =>
+            {
+                "recovery"
+            }
+            _ => "active",
+        },
+        _ => "active",
+    }
+}
+
 fn library_queue_label(task: &QueueItem) -> &'static str {
     match task.state {
         QueueState::Failed => "Ошибка загрузки",
@@ -1023,6 +1045,7 @@ fn library_queue_label(task: &QueueItem) -> &'static str {
                 | chillhub_native::transfer::TransferStage::Verifying,
             ) => "Проверяем",
             Some(chillhub_native::transfer::TransferStage::Activating) => "Устанавливаем",
+            _ if library_queue_kind(task) == "recovery" => "Восстанавливаем",
             _ => queue_ui::state_label(task),
         },
         _ => queue_ui::state_label(task),
@@ -1046,12 +1069,7 @@ pub(super) fn sync_library_rows(ui: &AppWindow, state: &State) {
         if let Some(task) = queue {
             label = (
                 library_queue_label(task).into(),
-                if task.state == QueueState::Failed {
-                    "error"
-                } else {
-                    "active"
-                }
-                .into(),
+                library_queue_kind(task).into(),
             );
             if let Some(progress) = queue_ui::stage_progress(task) {
                 label.0 = format!("{} · {}%", label.0, (progress * 100.).floor());

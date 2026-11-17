@@ -143,5 +143,29 @@ fn library_labels_keep_the_stage_visible_without_truncating_actionable_states() 
         assert_eq!(library_queue_label(&running), "Проверяем");
     }
     running.progress = Some(progress(TransferStage::Downloading, 10, 0));
-    assert_eq!(library_queue_label(&running), "Скачиваем");
+    assert_eq!(library_queue_label(&running), "Восстанавливаем");
+}
+
+#[test]
+fn library_status_shapes_follow_queue_state_and_operation() {
+    for (state, expected) in [
+        (QueueState::Waiting, "queued"),
+        (QueueState::Paused, "paused"),
+        (QueueState::Pausing, "paused"),
+        (QueueState::Failed, "error"),
+        (QueueState::NeedsConfirmation, "confirmation"),
+        (QueueState::Running, "active"),
+    ] {
+        assert_eq!(
+            library_queue_kind(&task(state, TransferOperation::Install)),
+            expected
+        );
+    }
+    let mut repair = task(QueueState::Running, TransferOperation::Verify);
+    assert_eq!(library_queue_kind(&repair), "recovery");
+    assert_eq!(library_queue_label(&repair), "Восстанавливаем");
+    for stage in [TransferStage::Checking, TransferStage::Verifying] {
+        repair.progress = Some(progress(stage, 0, 0));
+        assert_eq!(library_queue_kind(&repair), "checking");
+    }
 }

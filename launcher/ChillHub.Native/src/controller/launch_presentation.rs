@@ -108,15 +108,15 @@ pub(super) fn present<'a>(
 
 pub(super) fn library_label(action: &LaunchAction, running: bool) -> (String, String) {
     if running {
-        return ("Игра запущена".into(), "active".into());
+        return ("Игра запущена".into(), "running".into());
     }
     let (text, kind) = match action {
         LaunchAction::Play => ("Установлена", "ready"),
         LaunchAction::UpdateGame | LaunchAction::UpdateMods => ("Есть обновление", "update"),
-        LaunchAction::RepairGame => ("Нужно восстановить", "update"),
-        LaunchAction::RepairMods => ("Восстановить моды", "update"),
+        LaunchAction::RepairGame => ("Нужно восстановить", "repair"),
+        LaunchAction::RepairMods => ("Восстановить моды", "repair"),
         LaunchAction::InstallGame => ("Не установлена", "idle"),
-        LaunchAction::ResumeInstall => ("Установка прервана", "update"),
+        LaunchAction::ResumeInstall => ("Установка прервана", "interrupted"),
         LaunchAction::InstallMods => ("Нужны моды", "idle"),
         LaunchAction::Unavailable => ("Копия недоступна", "idle"),
     };

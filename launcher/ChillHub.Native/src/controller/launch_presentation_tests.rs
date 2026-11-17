@@ -40,7 +40,7 @@ fn every_action_has_its_primary_button_and_library_badge() {
             LaunchAction::ResumeInstall,
             "Продолжить установку",
             "Установка прервана",
-            "update",
+            "interrupted",
             true,
         ),
         (
@@ -54,7 +54,7 @@ fn every_action_has_its_primary_button_and_library_badge() {
             LaunchAction::RepairGame,
             "Восстановить",
             "Нужно восстановить",
-            "update",
+            "repair",
             true,
         ),
         (
@@ -75,7 +75,7 @@ fn every_action_has_its_primary_button_and_library_badge() {
             LaunchAction::RepairMods,
             "Восстановить моды",
             "Восстановить моды",
-            "update",
+            "repair",
             true,
         ),
         (
@@ -123,7 +123,7 @@ fn higher_priority_activity_controls_both_primary_button_and_status() {
     assert_eq!(running.status, "Игра уже запущена");
     assert_eq!(
         library_label(&LaunchAction::UpdateMods, true),
-        ("Игра запущена".to_owned(), "active".to_owned())
+        ("Игра запущена".to_owned(), "running".to_owned())
     );
     copy.running = false;
     let queued = present(&option, &copy, &maintenance, false);
@@ -275,7 +275,7 @@ fn library_describes_installed_copies_without_changing_the_launch_choice() {
     ];
     assert_eq!(
         library_copies_label(&interrupted, LaunchTarget::SteamVanilla, false),
-        ("Установка прервана".into(), "update".into())
+        ("Установка прервана".into(), "interrupted".into())
     );
     let interrupted_and_installed = [
         make(LaunchTarget::LocalModded, LaunchAction::ResumeInstall),
@@ -296,11 +296,11 @@ fn library_describes_installed_copies_without_changing_the_launch_choice() {
     ];
     assert_eq!(
         library_copies_label(&selected_needs_repair, LaunchTarget::LocalModded, false),
-        ("Нужно восстановить".into(), "update".into())
+        ("Нужно восстановить".into(), "repair".into())
     );
     assert_eq!(
         library_copies_label(&selected_needs_repair, LaunchTarget::LocalModded, true),
-        ("Игра запущена".into(), "active".into())
+        ("Игра запущена".into(), "running".into())
     );
     assert_eq!(
         library_copies_label(&[], LaunchTarget::LocalVanilla, false),

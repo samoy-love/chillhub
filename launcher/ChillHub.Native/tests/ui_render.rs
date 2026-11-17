@@ -1171,6 +1171,15 @@ fn real_ui_headless_layout_and_actions() {
             );
         }
         h.ui.set_operation_busy(false);
+        for (kind, icon) in [
+            ("running", "play"),
+            ("repair", "wrench"),
+            ("interrupted", "pause"),
+            ("queued", "clock"),
+            ("active", "download"),
+        ] {
+            assert_eq!(h.ui.invoke_library_status_icon(kind.into()), icon);
+        }
         let original_games = h.ui.get_games();
         let mut library_rows = slint::Model::iter(&original_games).collect::<Vec<_>>();
         for (row, (status, kind, progress)) in library_rows.iter_mut().zip([
@@ -1178,8 +1187,10 @@ fn real_ui_headless_layout_and_actions() {
             ("Не установлена", "idle", 0.),
             ("Есть обновление", "update", 0.),
             ("Скачиваем · 49%", "active", 0.49),
-            ("На паузе", "active", 0.),
+            ("На паузе", "paused", 0.32),
             ("Ошибка загрузки", "error", 0.),
+            ("В очереди", "queued", 0.),
+            ("Восстанавливаем · 68%", "recovery", 0.68),
             ("", "", 0.),
         ]) {
             row.status = status.into();
@@ -1200,6 +1211,19 @@ fn real_ui_headless_layout_and_actions() {
             assert_eq!(entry.accessible_value().as_deref(), Some(status));
         }
         h.capture("library-statuses", 900, 650, 1.0);
+        let mut activity_rows = slint::Model::iter(&original_games).collect::<Vec<_>>();
+        for (row, (status, kind)) in activity_rows.iter_mut().zip([
+            ("Игра запущена", "running"),
+            ("Нужно восстановить", "repair"),
+            ("Установка прервана", "interrupted"),
+        ]) {
+            row.status = status.into();
+            row.status_kind = kind.into();
+            row.status_progress = 0.;
+        }
+        h.ui.set_games(model(activity_rows));
+        h.capture("library-availability", 1360, 850, 1.0);
+        h.capture("library-availability", 900, 650, 1.0);
         h.ui.set_games(original_games);
         h.capture("main-small", 900, 500, 1.0);
         let previous_source = h.ui.get_source();

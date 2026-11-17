@@ -37,6 +37,7 @@ component Icon inherits Image {
     colorize: root.tint;
     source: root.name == "search" ? @image-url("assets/search.svg") :
         root.name == "download" ? @image-url("assets/download.svg") :
+        root.name == "clock" ? @image-url("assets/clock.svg") :
         root.name == "settings" ? @image-url("assets/settings.svg") :
         root.name == "play" ? @image-url("assets/play.svg") :
         root.name == "pause" ? @image-url("assets/pause.svg") :
@@ -599,6 +600,18 @@ component SeekBar inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
+    public pure function library-status-icon(kind: string) -> string {
+        kind == "ready" ? "check" :
+        kind == "running" ? "play" :
+        kind == "idle" ? "down" :
+        kind == "update" ? "up" :
+        kind == "paused" || kind == "interrupted" ? "pause" :
+        kind == "error" || kind == "confirmation" ? "info" :
+        kind == "queued" ? "clock" :
+        kind == "recovery" || kind == "repair" ? "wrench" :
+        kind == "active" ? "download" : "search"
+    }
+
     in property <string> window-title: "Chill Hub";
     title: root.window-title;
     icon: @image-url("assets/brand.png");
@@ -922,10 +935,12 @@ export component AppWindow inherits Window {
                     for game[i] in root.games: Rectangle {
                         x: 0px; y: i * 48px; width: parent.width; height: 48px;
                         property <string> status-copy: game.status == "" ? "Проверяем…" : game.status;
-                        property <color> status-color: game.status-kind == "ready" ? #b7d9c4 :
+                        property <color> status-color: game.status-kind == "ready" || game.status-kind == "running" ? #b7d9c4 :
                             game.status-kind == "error" ? #f2b8b8 :
-                            game.status-kind == "update" ? #ecc998 :
-                            game.status-kind == "active" ? #dfd1ff : #bcb8c6;
+                            game.status-kind == "update" || game.status-kind == "repair" ? #ecc998 :
+                            game.status-kind == "paused" || game.status-kind == "interrupted" ? #d3c5a9 :
+                            game.status-kind == "active" || game.status-kind == "recovery" || game.status-kind == "checking" ? #dfd1ff : #bcb8c6;
+                        property <string> status-icon: root.library-status-icon(game.status-kind);
                         border-radius: 9px;
                         background: row-touch.has-hover && root.selected-game != i ? #ffffff08 : transparent;
                         accessible-role: button;
@@ -936,12 +951,13 @@ export component AppWindow inherits Window {
                         if game.icon.width == 0: Rectangle { x: 8px; y: 9px; width: 30px; height: 30px; border-radius: 7px; background: #35313d; Icon { x: 7px; y: 7px; width: 16px; height: 16px; name: "package"; tint: #bbb0ce; } }
                         Image { x: 8px; y: 9px; width: 30px; height: 30px; source: game.icon; image-fit: contain; }
                         Text { x: 46px; y: 4px; width: parent.width - 54px; height: 20px; text: game.title; color: root.selected-game == i ? #ece5ff : Theme.ink; font-size: 13px; font-weight: 550; vertical-alignment: center; overflow: elide; }
-                        Rectangle { x: 46px; y: 29px; width: 6px; height: 6px; border-radius: 3px; background: parent.status-color; }
-                        Text { x: 58px; y: 23px; width: parent.width - 65px; height: 17px; text: parent.status-copy; color: parent.status-color; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                        Icon { x: 45px; y: 25px; width: 13px; height: 13px; name: parent.status-icon; tint: parent.status-color; }
+                        Text { x: 61px; y: 23px; width: parent.width - 68px; height: 17px; text: parent.status-copy; color: parent.status-color; font-size: 12px; vertical-alignment: center; overflow: elide; }
                         if game.status-progress > 0: Rectangle {
+                            property <color> progress-color: parent.status-color;
                             x: 46px; y: 43px; width: parent.width - 54px; height: 2px;
                             border-radius: 1px; background: #4c4256;
-                            Rectangle { x: 0px; y: 0px; width: parent.width * clamp(game.status-progress, 0, 1); height: 2px; border-radius: 1px; background: Theme.accent; }
+                            Rectangle { x: 0px; y: 0px; width: parent.width * clamp(game.status-progress, 0, 1); height: 2px; border-radius: 1px; background: parent.progress-color; }
                         }
                         row-key := FocusScope { x: 0px; y: 0px; width: parent.width; height: parent.height;
                             enabled: root.panel-kind == "";
