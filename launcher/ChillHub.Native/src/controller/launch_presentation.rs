@@ -69,6 +69,7 @@ pub(super) fn present<'a>(
                 LaunchAction::InstallGame => "Установить",
                 LaunchAction::ResumeInstall => "Продолжить установку",
                 LaunchAction::UpdateGame => "Обновить",
+                LaunchAction::RepairGame => "Восстановить",
                 LaunchAction::InstallMods => "Установить моды",
                 LaunchAction::UpdateMods => "Обновить моды",
                 LaunchAction::RepairMods => "Восстановить моды",
@@ -115,6 +116,7 @@ pub(super) fn library_label(action: &LaunchAction, running: bool) -> (String, St
     let (text, kind) = match action {
         LaunchAction::Play => ("Установлена", "ready"),
         LaunchAction::UpdateGame | LaunchAction::UpdateMods => ("Есть обновление", "update"),
+        LaunchAction::RepairGame => ("Нужно восстановить", "update"),
         LaunchAction::RepairMods => ("Восстановить моды", "update"),
         LaunchAction::InstallGame => ("Не установлена", "idle"),
         LaunchAction::ResumeInstall => ("Установка прервана", "update"),
@@ -147,7 +149,7 @@ pub(super) fn library_copies_label(
                 .min_by_key(|option| match option.action {
                     LaunchAction::Play => 0,
                     LaunchAction::UpdateGame | LaunchAction::UpdateMods => 1,
-                    LaunchAction::RepairMods => 2,
+                    LaunchAction::RepairGame | LaunchAction::RepairMods => 2,
                     _ => 3,
                 })
         })

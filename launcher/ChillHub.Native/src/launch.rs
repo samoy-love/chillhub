@@ -193,6 +193,7 @@ pub enum LaunchAction {
     InstallGame,
     ResumeInstall,
     UpdateGame,
+    RepairGame,
     InstallMods,
     UpdateMods,
     RepairMods,
@@ -298,21 +299,20 @@ pub fn options_with_steam(
         let outdated = !version_marker.eq_ignore_ascii_case(local_version.trim());
         let interrupted = local.join(".updating").exists();
         for target in targets {
-            let (action, note) = if interrupted && !installed {
-                (LaunchAction::ResumeInstall, "Установка прервана")
-            } else if interrupted {
-                (
-                    LaunchAction::UpdateGame,
-                    "Обновление не завершено. Восстановить игру",
-                )
+            let (action, note) = if interrupted {
+                if !installed {
+                    (LaunchAction::ResumeInstall, "Установка прервана")
+                } else if outdated {
+                    (LaunchAction::UpdateGame, "Обновление не завершено")
+                } else {
+                    (LaunchAction::RepairGame, "Восстановить файлы игры")
+                }
             } else if !installed && !exe_exists {
                 (LaunchAction::InstallGame, "Установить игру")
-            } else if !exe_exists {
-                (LaunchAction::UpdateGame, "Восстановить игру")
             } else if outdated {
                 (LaunchAction::UpdateGame, "Обновить игру")
-            } else if crate::integrity::needs_repair(&local, local_version) {
-                (LaunchAction::UpdateGame, "Восстановить файлы игры")
+            } else if !exe_exists || crate::integrity::needs_repair(&local, local_version) {
+                (LaunchAction::RepairGame, "Восстановить файлы игры")
             } else if target.modded() {
                 let (action, note) = mod_action(&local, game.mods.as_ref().unwrap());
                 match action {

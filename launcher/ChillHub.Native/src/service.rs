@@ -607,6 +607,7 @@ pub fn blocked(state: &Maintenance, action: &LaunchAction) -> bool {
             LaunchAction::InstallGame | LaunchAction::ResumeInstall => state.blocks.install,
             LaunchAction::InstallMods
             | LaunchAction::UpdateGame
+            | LaunchAction::RepairGame
             | LaunchAction::UpdateMods
             | LaunchAction::RepairMods => state.blocks.update,
             LaunchAction::Unavailable => false,

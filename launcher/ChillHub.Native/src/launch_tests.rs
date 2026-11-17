@@ -120,11 +120,30 @@ fn interrupted_local_install_uses_the_committed_version_to_distinguish_updates()
     // A crash after file promotion can leave the executable without a committed version.
     fs::rename(&partial, &game_exe).unwrap();
     check(LaunchAction::ResumeInstall, "Установка прервана");
+    fs::write(root.join(".version"), "0").unwrap();
+    check(LaunchAction::UpdateGame, "Обновление не завершено");
     fs::write(root.join(".version"), "1").unwrap();
-    check(
-        LaunchAction::UpdateGame,
-        "Обновление не завершено. Восстановить игру",
-    );
+    check(LaunchAction::RepairGame, "Восстановить файлы игры");
+}
+
+#[test]
+fn missing_local_executable_repairs_the_current_version_or_updates_an_older_one() {
+    let (_temp, paths, game, steam) = fixture();
+    let root = paths.game_root(&game.game_id).unwrap();
+    fs::remove_file(root.join("PEAK.exe")).unwrap();
+    for (installed, action) in [
+        ("1", LaunchAction::RepairGame),
+        ("0", LaunchAction::UpdateGame),
+    ] {
+        fs::write(root.join(".version"), installed).unwrap();
+        let options = options_with_steam(&game, &paths, Some(&steam)).unwrap();
+        for target in [LaunchTarget::LocalVanilla, LaunchTarget::LocalModded] {
+            let option = options.iter().find(|item| item.target == target).unwrap();
+            assert_eq!(option.action, action);
+            assert!(option.available());
+            assert!(!option.ready());
+        }
+    }
 }
 
 #[test]

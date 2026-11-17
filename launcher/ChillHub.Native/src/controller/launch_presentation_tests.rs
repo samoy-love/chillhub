@@ -51,6 +51,13 @@ fn every_action_has_its_primary_button_and_library_badge() {
             true,
         ),
         (
+            LaunchAction::RepairGame,
+            "Восстановить",
+            "Нужно восстановить",
+            "update",
+            true,
+        ),
+        (
             LaunchAction::InstallMods,
             "Установить моды",
             "Нужны моды",
@@ -287,12 +294,12 @@ fn library_describes_installed_copies_without_changing_the_launch_choice() {
         ("Установлена".into(), "ready".into())
     );
     let selected_needs_repair = [
-        make(LaunchTarget::LocalModded, LaunchAction::UpdateGame),
+        make(LaunchTarget::LocalModded, LaunchAction::RepairGame),
         make(LaunchTarget::SteamVanilla, LaunchAction::Play),
     ];
     assert_eq!(
         library_copies_label(&selected_needs_repair, LaunchTarget::LocalModded, false),
-        ("Есть обновление".into(), "update".into())
+        ("Нужно восстановить".into(), "update".into())
     );
     assert_eq!(
         library_copies_label(&selected_needs_repair, LaunchTarget::LocalModded, true),

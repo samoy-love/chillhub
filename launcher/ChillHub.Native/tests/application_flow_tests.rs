@@ -378,7 +378,7 @@ fn background_integrity_detects_missing_dll_offline_and_preserves_user_files() {
             .option(&game, LaunchTarget::LocalVanilla)
             .unwrap()
             .action,
-        LaunchAction::UpdateGame
+        LaunchAction::RepairGame
     );
     assert_eq!(
         server.requests.lock().unwrap().len(),
@@ -411,7 +411,7 @@ fn background_integrity_detects_missing_dll_offline_and_preserves_user_files() {
                 .option(&game, LaunchTarget::LocalVanilla)
                 .unwrap()
                 .action,
-            LaunchAction::UpdateGame,
+            LaunchAction::RepairGame,
             "the same broken game remains broken through its short path",
         );
         let aliased_root = aliased.paths.game_root("fixture").unwrap();
