@@ -413,26 +413,49 @@ fn largest_file_starts_in_the_first_worker_wave_and_resumes_after_pause() {
 
 #[test]
 fn disk_plan_counts_fresh_bytes_and_only_concurrent_replacement_overlap() {
+    struct SpaceCase {
+        name: &'static str,
+        sizes: &'static [(u8, u8)],
+        parallel: usize,
+        expected_units: u64,
+    }
+
     const UNIT: usize = 4096;
     let engine = TransferEngine::new().unwrap();
     let control = TransferControl::default();
-    let cases: [(&str, &[(u8, u8)], usize, u64); 4] = [
-        ("fresh", &[(20, 0), (30, 0), (50, 0)], 3, 100),
-        ("all shrink", &[(30, 100), (22, 100), (50, 100)], 2, 80),
-        (
-            "growth before shrink",
-            &[(33, 2), (28, 0), (20, 101)],
-            1,
-            79,
-        ),
-        (
-            "mixed three workers",
-            &[(31, 1), (30, 9), (5, 7), (10, 11), (8, 0)],
-            3,
-            83,
-        ),
+    let cases = [
+        SpaceCase {
+            name: "fresh",
+            sizes: &[(20, 0), (30, 0), (50, 0)],
+            parallel: 3,
+            expected_units: 100,
+        },
+        SpaceCase {
+            name: "all shrink",
+            sizes: &[(30, 100), (22, 100), (50, 100)],
+            parallel: 2,
+            expected_units: 80,
+        },
+        SpaceCase {
+            name: "growth before shrink",
+            sizes: &[(33, 2), (28, 0), (20, 101)],
+            parallel: 1,
+            expected_units: 79,
+        },
+        SpaceCase {
+            name: "mixed three workers",
+            sizes: &[(31, 1), (30, 9), (5, 7), (10, 11), (8, 0)],
+            parallel: 3,
+            expected_units: 83,
+        },
     ];
-    for (case, sizes, parallel, expected) in cases {
+    for SpaceCase {
+        name: case,
+        sizes,
+        parallel,
+        expected_units,
+    } in cases
+    {
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("game");
         if case != "fresh" {
@@ -483,7 +506,11 @@ fn disk_plan_counts_fresh_bytes_and_only_concurrent_replacement_overlap() {
             .unwrap();
         assert_eq!(plan.downloads.len(), sizes.len(), "{case}");
         assert!(plan.to_delete.is_empty(), "{case}");
-        assert_eq!(plan.required_free_bytes, expected * UNIT as u64, "{case}");
+        assert_eq!(
+            plan.required_free_bytes,
+            expected_units * UNIT as u64,
+            "{case}"
+        );
     }
 }
 

@@ -964,7 +964,7 @@ fn explicitly_selected_older_version_stays_playable_and_verification_keeps_the_p
 fn removing_completed_dependency_keeps_mods_runnable_but_removing_failed_one_does_not() {
     use chillhub_native::{
         queue::{DownloadQueue, QueueItem},
-        transfer::{SyncScope, TransferRequest},
+        transfer::{SyncScope, TransferError, TransferRequest},
     };
     for completed in [true, false] {
         let temp = tempfile::tempdir().unwrap();
@@ -1014,24 +1014,33 @@ fn removing_completed_dependency_keeps_mods_runnable_but_removing_failed_one_doe
         fs::write(&queue_path, serde_json::to_vec(&items).unwrap()).unwrap();
         let queue = DownloadQueue::new(&queue_path).unwrap();
         queue.remove("base").unwrap();
-        queue.resume("mods").unwrap();
-        let until = Instant::now() + Duration::from_secs(8);
-        loop {
-            let item = queue.snapshot().remove(0);
-            if completed && item.state == QueueState::Completed {
-                break;
+        if completed {
+            queue.resume("mods").unwrap();
+            let until = Instant::now() + Duration::from_secs(8);
+            loop {
+                let item = queue.snapshot().remove(0);
+                if item.state == QueueState::Completed {
+                    break;
+                }
+                assert!(Instant::now() < until, "{item:?}");
+                assert_ne!(item.state, QueueState::Failed, "{item:?}");
+                thread::sleep(Duration::from_millis(20));
             }
-            if !completed && item.state == QueueState::Paused && item.error.is_some() {
-                break;
-            }
-            assert!(Instant::now() < until, "{item:?}");
-            assert_ne!(item.state, QueueState::Failed, "{item:?}");
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert_eq!(root.join("winhttp.dll").exists(), completed);
-        if !completed {
+        } else {
+            let saved = fs::read(&queue_path).unwrap();
+            assert!(matches!(
+                queue.resume("mods"),
+                Err(TransferError::DependencyBlocked(_))
+            ));
+            let items = queue.snapshot();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].id, "mods");
+            assert_eq!(items[0].state, QueueState::Paused);
+            assert_eq!(items[0].request.depends_on.as_deref(), Some("base"));
+            assert_eq!(fs::read(&queue_path).unwrap(), saved);
             assert!(server.requests.lock().unwrap().is_empty());
         }
+        assert_eq!(root.join("winhttp.dll").exists(), completed);
         queue.shutdown();
     }
 }
