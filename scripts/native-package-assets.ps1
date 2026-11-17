@@ -23,7 +23,7 @@ foreach ($relative in $paths) {
     $part = Get-Item -LiteralPath $path -Force
     while ($part.FullName -ne $root) {
         if ($part.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Ссылка вместо медиа: $relative" }
-        $part = $part.Parent ?? $part.Directory
+        $part = [IO.Directory]::GetParent($part.FullName)
         if (!$part) { throw "Путь вне каталога: $relative" }
     }
     $relative
