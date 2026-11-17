@@ -1,14 +1,26 @@
 //! Non-blocking space hints and a user-selected fallback for unwritable libraries.
 use super::*;
 use chillhub_native::launch::LaunchAction;
+use chillhub_native::service::DownloadEstimate;
 
 pub(super) enum PlayFailure {
     General(String),
     Folder(PathBuf, String),
 }
-fn apply_estimate(ui: &AppWindow, estimate: &chillhub_native::service::DownloadEstimate) {
+fn set_hint(ui: &AppWindow, text: impl Into<SharedString>, space_low: bool) {
+    ui.set_install_hint(text.into());
+    ui.set_install_space_status(if space_low { "Мало места" } else { "" }.into());
+    ui.set_install_space_low(space_low);
+}
+
+pub(super) fn clear_hint(ui: &AppWindow) {
+    set_hint(ui, "", false);
+}
+
+fn apply_estimate(ui: &AppWindow, estimate: &DownloadEstimate) {
     controller::set_disk_label(ui, estimate.available_bytes);
-    ui.set_install_hint(describe(estimate).into());
+    let (hint, space_low) = describe(estimate);
+    set_hint(ui, hint, space_low);
 }
 impl From<String> for PlayFailure {
     fn from(value: String) -> Self {
@@ -69,8 +81,7 @@ pub(super) fn hint(ui: &AppWindow, state: &State) {
     if s.option
         .as_ref()
         .is_none_or(|o| matches!(o.action, LaunchAction::Play | LaunchAction::Unavailable))
-        || ui.get_operation_busy()
-        || !ui.get_can_play()
+        || !ui.get_show_install_info()
     {
         return;
     }
@@ -78,7 +89,7 @@ pub(super) fn hint(ui: &AppWindow, state: &State) {
     let generation = s.choice_generation;
     drop(s);
     state.borrow_mut().estimate_inflight = true;
-    ui.set_install_hint("Уточняем объём файлов и свободное место…".into());
+    set_hint(ui, "Уточняем объём файлов и свободное место…", false);
     controller::background(
         ui,
         move || {
@@ -89,44 +100,63 @@ pub(super) fn hint(ui: &AppWindow, state: &State) {
         },
         move |ui, state, result| {
             state.borrow_mut().estimate_inflight = false;
-            if state.borrow().choice_generation != generation {
+            let current_generation = state.borrow().choice_generation;
+            if !apply_current_result(ui, generation, current_generation, &result) {
                 hint(ui, state);
                 return;
             }
-            if ui.get_operation_busy() {
-                ui.set_install_hint("".into());
-                return;
-            }
-            match result {
-                Ok(e) => apply_estimate(ui, &e),
-                Err(error) => {
-                    ui.set_install_hint("Размер уточнится перед загрузкой".into());
-                    chillhub_native::diagnostics::log(
-                        &state.borrow().services.paths.data_dir,
-                        "install-estimate",
-                        &error,
-                    );
-                }
+            if ui.get_show_install_info()
+                && let Err(error) = result
+            {
+                chillhub_native::diagnostics::log(
+                    &state.borrow().services.paths.data_dir,
+                    "install-estimate",
+                    &error,
+                );
             }
         },
     );
 }
 
-fn describe(e: &chillhub_native::service::DownloadEstimate) -> String {
+fn apply_current_result(
+    ui: &AppWindow,
+    generation: u64,
+    current_generation: u64,
+    result: &Result<DownloadEstimate, String>,
+) -> bool {
+    if generation != current_generation {
+        return false;
+    }
+    if !ui.get_show_install_info() {
+        clear_hint(ui);
+    } else {
+        match result {
+            Ok(estimate) => apply_estimate(ui, estimate),
+            Err(_) => set_hint(ui, "Размер уточнится перед загрузкой", false),
+        }
+    }
+    true
+}
+
+fn describe(e: &DownloadEstimate) -> (String, bool) {
     let size = queue_ui::size;
     let available = e
         .available_bytes
         .map(|v| format!(" · свободно {}", size(v)))
         .unwrap_or_default();
-    let warning = if e.available_bytes.is_some_and(|v| v < e.required_free_bytes) {
+    let space_low = e.available_bytes.is_some_and(|v| v < e.required_free_bytes);
+    let warning = if space_low {
         "Недостаточно места. "
     } else {
         ""
     };
-    format!(
-        "{warning}Подготовить файлы: {} · нужно места: {}{available}",
-        size(e.bytes_to_prepare),
-        size(e.required_free_bytes)
+    (
+        format!(
+            "{warning}Подготовить файлы: {} · нужно места: {}{available}",
+            size(e.bytes_to_prepare),
+            size(e.required_free_bytes)
+        ),
+        space_low,
     )
 }
 

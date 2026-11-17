@@ -11,7 +11,8 @@ use i_slint_backend_testing::{
 };
 use serde_json::Value;
 use slint::{
-    ComponentHandle, Image, LogicalSize, ModelRc, SharedString, VecModel,
+    ComponentHandle, Image, LogicalSize, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString,
+    VecModel,
     platform::{Key, PointerEventButton, WindowEvent},
 };
 use std::{
@@ -407,7 +408,13 @@ impl Harness {
             .unwrap_or_else(|| panic!("Missing enabled control: {label}"));
         click_input(self.ui.window(), &element);
     }
-    fn capture(&mut self, name: &str, width: u32, height: u32, scale: f32) {
+    fn capture(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> SharedPixelBuffer<Rgba8Pixel> {
         resize(self.ui.window(), width, height, scale);
         settle();
         let snapshot = self
@@ -495,6 +502,74 @@ impl Harness {
             .unwrap();
             self.renders.push(serde_json::json!({"file":filename,"logicalWidth":width,"logicalHeight":height,"scale":scale,"physicalWidth":snapshot.width(),"physicalHeight":snapshot.height()}));
         }
+        snapshot
+    }
+    fn assert_install_estimate(&mut self, width: u32, height: u32, scale: f32) {
+        const ACTION: &str = "Установить игру";
+        const WARNING: &str = "Мало места";
+        const HINT: &str = "Недостаточно места. Подготовить файлы: 43,2 ГБ · нужно места: 46,7 ГБ · свободно 19,1 ГБ";
+
+        let previous_status = self.ui.get_status();
+        let previous_label = self.ui.get_play_label();
+        self.ui.set_status(ACTION.into());
+        self.ui.set_play_label(ACTION.into());
+        self.ui.set_install_hint(HINT.into());
+        self.ui.set_install_space_status(WARNING.into());
+        self.ui.set_install_space_low(true);
+        let warning = self.capture("install-estimate", width, height, scale);
+        assert!(self.ui.get_show_install_space_warning());
+        assert_eq!(self.ui.get_game_status_text(), WARNING);
+        assert_eq!(self.ui.get_shown_install_hint(), HINT);
+
+        let dot = ElementHandle::find_by_element_id(&self.ui, "AppWindow::game-status-dot")
+            .next()
+            .expect("game status indicator");
+        let hint = ElementHandle::find_by_element_id(&self.ui, "AppWindow::install-estimate-hint")
+            .next()
+            .expect("install estimate");
+        let feature = ElementHandle::find_by_element_id(&self.ui, "AppWindow::feature")
+            .next()
+            .expect("game feature card");
+        let button = ElementHandle::find_by_accessible_label(&self.ui, ACTION)
+            .find(|element| element.accessible_enabled().is_some())
+            .expect("install action");
+        assert_eq!(button.accessible_enabled(), Some(true));
+        assert_in_bounds(&dot, width as f32, height as f32, "install status");
+        assert_in_bounds(&button, width as f32, height as f32, "install action");
+        assert!(hint.absolute_position().y >= button.absolute_position().y + button.size().height);
+        assert!(
+            hint.absolute_position().y + hint.size().height
+                <= feature.absolute_position().y + feature.size().height
+        );
+        let position = dot.absolute_position();
+        let size = dot.size();
+        let x = ((position.x + size.width / 2.0) * scale) as usize;
+        let y = ((position.y + size.height / 2.0) * scale) as usize;
+        let sample = |snapshot: &SharedPixelBuffer<Rgba8Pixel>| {
+            let pixel = snapshot.as_slice()[y * snapshot.width() as usize + x];
+            [pixel.r, pixel.g, pixel.b]
+        };
+        assert_eq!(
+            sample(&warning),
+            [0xd8, 0xb2, 0x7b],
+            "warning status for {width}x{height}"
+        );
+
+        self.ui.set_install_hint("".into());
+        self.ui.set_install_space_status("".into());
+        self.ui.set_install_space_low(false);
+        settle();
+        let cleared = self.ui.window().take_snapshot().unwrap();
+        assert!(!self.ui.get_show_install_space_warning());
+        assert_eq!(self.ui.get_game_status_text(), ACTION);
+        assert!(self.ui.get_shown_install_hint().is_empty());
+        assert_eq!(
+            sample(&cleared),
+            [0xa7, 0xda, 0xba],
+            "cleared status for {width}x{height}"
+        );
+        self.ui.set_status(previous_status);
+        self.ui.set_play_label(previous_label);
     }
     fn assert_title_and_gutter(&self) {
         let title = ElementHandle::find_by_element_id(&self.ui, "AppWindow::hero-title")
@@ -828,9 +903,8 @@ fn real_ui_headless_layout_and_actions() {
         h.ui.set_maintenance_note("Меняем диск на сервере раздачи и проверяем файлы. Ожидаемое окончание — 10.11 в 22:30. Установленные игры остаются доступны.".into());
         h.capture("maintenance", 900, 500, 1.0);
         h.ui.set_maintenance_note("".into());
-        h.ui.set_install_hint("Недостаточно места. Подготовить файлы: 43,2 ГБ · нужно места: 46,7 ГБ · свободно 19,1 ГБ".into());
-        h.capture("install-estimate", 900, 500, 1.0);
-        h.ui.set_install_hint("".into());
+        h.assert_install_estimate(1707, 996, 1.5);
+        h.assert_install_estimate(900, 500, 1.0);
         for label in [
             "Восстановить моды",
             "Установить моды",

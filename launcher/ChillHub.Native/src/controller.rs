@@ -68,6 +68,7 @@ struct ChoiceProbe {
 }
 
 pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
+    install_ui::clear_hint(ui);
     let (game, target) = match selected(state) {
         Some(v) => v,
         None => {
@@ -94,7 +95,6 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
     ui.set_has_mods(visual.has_mods);
     ui.set_busy(true);
     ui.set_can_play(false);
-    ui.set_install_hint("".into());
     ui.set_can_verify_game(false);
     ui.set_can_verify_mods(false);
     ui.set_has_game_files(false);
@@ -726,6 +726,7 @@ pub(super) fn set_disk_label(ui: &AppWindow, available_bytes: Option<u64>) {
 }
 fn reload(ui: &AppWindow, state: &State) {
     state.borrow_mut().catalog_checked_at = std::time::Instant::now();
+    install_ui::clear_hint(ui);
     ui.set_loading(true);
     ui.set_load_error("".into());
     ui.set_can_play(false);
@@ -784,6 +785,7 @@ pub(super) fn apply_catalog(
     if state.borrow().catalog_generation != generation {
         return;
     }
+    install_ui::clear_hint(ui);
     ui.set_loading(false);
     let shortcut = take_catalog_shortcut(ui, state);
     match result {
@@ -1326,6 +1328,7 @@ fn start_selected_play(ui: &AppWindow, state: &State, shown_action: Option<Launc
     if state.borrow().launching.contains(&launch_key) {
         return;
     }
+    install_ui::clear_hint(ui);
     if launching {
         state.borrow_mut().launching.insert(launch_key.clone());
         ui.set_play_label("Запускаем…".into());

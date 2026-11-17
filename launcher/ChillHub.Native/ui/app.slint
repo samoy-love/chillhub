@@ -481,6 +481,13 @@ export component AppWindow inherits Window {
     in property <bool> update-error;
     in property <string> update-target;
     in property <string> install-hint;
+    in property <bool> install-space-low;
+    in property <string> install-space-status;
+    out property <bool> show-install-info: root.can-play && !root.busy && !root.operation-busy && !root.loading && root.game-title != "";
+    out property <bool> show-install-space-warning: root.show-install-info && root.install-space-low;
+    out property <string> shown-install-hint: root.show-install-info ? root.install-hint : "";
+    out property <string> game-status-text: root.show-install-space-warning ? root.install-space-status : root.status;
+    property <color> install-warning-color: #d8b27b;
     in property <bool> loading;
     in property <string> load-error;
     in property <string> connection-note;
@@ -767,7 +774,7 @@ export component AppWindow inherits Window {
                     maintenance-text := Text { x: 14px; y: 12px; width: parent.width - 28px; text: root.maintenance-note; color: #e5cca8; font-size: 12px; wrap: word-wrap; }
                 }
                 feature := Rectangle { x: 0px; y: maintenance-banner.height > 0px ? maintenance-banner.height + 12px : 0px;
-                    width: parent.width; height: root.hero-height + (root.install-hint == "" ? 98px : 138px);
+                    width: parent.width; height: root.hero-height + (root.shown-install-hint == "" ? 98px : 138px);
                     border-radius: 18px; background: #242328;
                     Rectangle { x: 0px; y: 0px;
                         width: parent.width; height: root.hero-height; clip: true;
@@ -795,13 +802,13 @@ export component AppWindow inherits Window {
                         Rectangle {
                             x: parent.width - self.width - 24px; y: 10px;
                             width: max(144px, min(320px, parent.width - (390px + 54px * root.spacious))); height: 27px;
-                            Rectangle { x: 0px; y: 9px; width: 6px; height: 6px; border-radius: 3px; background: root.can-play ? #a7daba : Theme.dim; }
-                            Text { x: 12px; width: parent.width - 12px; height: parent.height; text: root.status; color: #cbc6d2; font-size: 11px; wrap: word-wrap; vertical-alignment: center; }
+                            game-status-dot := Rectangle { x: 0px; y: 9px; width: 6px; height: 6px; border-radius: 3px; background: root.show-install-space-warning ? root.install-warning-color : root.can-play ? #a7daba : Theme.dim; }
+                            Text { x: 12px; width: parent.width - 12px; height: parent.height; text: root.game-status-text; color: root.show-install-space-warning ? root.install-warning-color : #cbc6d2; font-size: 11px; wrap: word-wrap; vertical-alignment: center; }
                         }
                         action-label-measure := Text { visible: false; text: root.play-label; font-size: 13px; font-weight: 700; }
                         ActionButton { x: parent.width - self.width - 24px; y: 39px; width: min(240px,max(132px + 38px * root.spacious,action-label-measure.preferred-width + 52px)); height: 40px; text: root.play-label; icon: "play"; primary: true; enabled: root.can-play && !root.busy && !root.operation-busy && root.panel-kind == ""; clicked => { root.play-requested(); } }
                         Text { x: 24px; y: 83px; width: parent.width - 48px; height: 13px; text: root.installed-version + (root.playtime-label != "" ? "   ·   " + root.playtime-label : ""); color: #aaa3b2; font-size: 9px; overflow: elide; }
-                        Text { x: 24px; y: 104px; width: parent.width - 48px; text: root.install-hint; color: Theme.dim; font-size: 11px; wrap: word-wrap; }
+                        install-estimate-hint := Text { x: 24px; y: 104px; width: parent.width - 48px; text: root.shown-install-hint; color: root.show-install-space-warning ? root.install-warning-color : Theme.dim; font-size: 11px; wrap: word-wrap; }
                     }
                     CornerMask { radius: 18px; }
                 }
