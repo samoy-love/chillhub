@@ -5,19 +5,19 @@
     {
       "file": "src/manifest.rs",
       "name": "src/manifest.rs:75:13: replace || with && in validate_relative",
-      "sourceSha256": "f7ef972aeb38718988a277023090c9a25bbbb2e5046ebbe62011025b36737224",
+      "sourceSha256": "69fc78f7fc792c5d74ccb09de7af2a009a98737f97ca1789d316f055d08be1bf",
       "reason": "Эквивалентно: сегменты . и .. независимо отклоняются проверкой ends_with точки."
     },
     {
       "file": "src/manifest.rs",
       "name": "src/manifest.rs:255:33: replace | with ^ in DirectoryGuard::acquire",
-      "sourceSha256": "f7ef972aeb38718988a277023090c9a25bbbb2e5046ebbe62011025b36737224",
+      "sourceSha256": "69fc78f7fc792c5d74ccb09de7af2a009a98737f97ca1789d316f055d08be1bf",
       "reason": "Эквивалентно: 0x1 и 0x2 не имеют общих битов; OR и XOR равны 0x3."
     },
     {
       "file": "src/manifest.rs",
       "name": "src/manifest.rs:256:42: replace | with ^ in DirectoryGuard::acquire",
-      "sourceSha256": "f7ef972aeb38718988a277023090c9a25bbbb2e5046ebbe62011025b36737224",
+      "sourceSha256": "69fc78f7fc792c5d74ccb09de7af2a009a98737f97ca1789d316f055d08be1bf",
       "reason": "Эквивалентно: 0x00200000 и 0x02000000 не имеют общих битов; OR и XOR совпадают."
     },
     {

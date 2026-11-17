@@ -258,12 +258,16 @@ impl DirectoryGuard {
         for dir in ancestors.into_iter().rev() {
             let file = match options.open(dir) {
                 Ok(file) => file,
-                Err(error) if error.kind() == io::ErrorKind::NotFound && !create => continue,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    create_directory_if_absent(dir)?;
-                    options.open(dir)?
-                }
-                Err(error) => return Err(error),
+                Err(error) => match error.kind() {
+                    io::ErrorKind::NotFound => {
+                        if !create {
+                            continue;
+                        }
+                        create_directory_if_absent(dir)?;
+                        options.open(dir)?
+                    }
+                    _ => return Err(error),
+                },
             };
             let meta = file.metadata()?;
             if !meta.is_dir() || is_reparse(&meta) {

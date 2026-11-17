@@ -197,6 +197,36 @@ fn directory_guard_reports_sharing_errors_in_both_modes() {
 
 #[cfg(windows)]
 #[test]
+fn locked_ancestor_preserves_sharing_error_without_creating_missing_descendants() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("locked");
+    let missing = directory.join("assets").join("plugins");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("keep"), b"original").unwrap();
+    let held = OpenOptions::new()
+        .access_mode(0x81)
+        .share_mode(0)
+        .custom_flags(0x02000000)
+        .open(&directory)
+        .unwrap();
+    for create in [false, true] {
+        let error = DirectoryGuard::acquire(&missing, create)
+            .err()
+            .expect("a locked ancestor must stop traversal before missing descendants");
+        assert_eq!(error.raw_os_error(), Some(32));
+        assert!(!directory.join("assets").exists());
+    }
+    drop(held);
+    assert_eq!(fs::read(directory.join("keep")).unwrap(), b"original");
+    drop(DirectoryGuard::acquire(&missing, false).unwrap());
+    assert!(!directory.join("assets").exists());
+    drop(DirectoryGuard::acquire(&missing, true).unwrap());
+    assert!(missing.is_dir());
+}
+
+#[cfg(windows)]
+#[test]
 fn junctions_cannot_redirect_content_access_outside_the_installation() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
