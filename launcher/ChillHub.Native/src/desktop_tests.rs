@@ -277,7 +277,7 @@ fn takeover_does_not_wait_for_old_io_and_drains_preserved_shortcuts_at_startup()
     let events = primary.events.clone();
     let (old_control, old_commands) = receive.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(old_control.is_active());
-    assert_eq!(old_commands, [earlier.clone()]);
+    assert_eq!(old_commands.as_slice(), std::slice::from_ref(&earlier));
     assert!(preserved.is_file());
 
     let (ready, promoted) = mpsc::channel();

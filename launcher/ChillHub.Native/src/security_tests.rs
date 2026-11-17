@@ -661,7 +661,7 @@ fn journal_failure_stops_following_mutations_and_stale_removal_keeps_the_folder_
         true,
         |input| {
             let current: SecurityRequest = serde_json::from_slice(input).unwrap();
-            assert_eq!(current.paths, [game.clone()]);
+            assert_eq!(current.paths.as_slice(), std::slice::from_ref(&game));
             assert_eq!(current.operation, SecurityOperation::Remove);
             calls += 1;
             Ok(exclusion_reply(&game, "removed", false))
