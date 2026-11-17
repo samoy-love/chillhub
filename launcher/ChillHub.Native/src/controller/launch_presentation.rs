@@ -25,6 +25,7 @@ pub(super) struct LaunchPresentation<'a> {
     pub(super) has_game_files: bool,
     pub(super) can_create_shortcut: bool,
     pub(super) can_play: bool,
+    pub(super) ready_to_play: bool,
     pub(super) play_label: &'static str,
     pub(super) status: &'a str,
     pub(super) installed_version: String,
@@ -99,6 +100,7 @@ pub(super) fn present<'a>(
         has_game_files: copy.has_game_files,
         can_create_shortcut: copy.has_executable,
         can_play: blocker.is_none() && option.available(),
+        ready_to_play: blocker.is_none() && option.action == LaunchAction::Play,
         play_label,
         status,
         installed_version,
@@ -160,10 +162,24 @@ pub(super) fn library_copies_label(
                 .iter()
                 .find(|option| option.action == LaunchAction::InstallGame)
         });
-    library_label(
-        &choice.map_or(LaunchAction::Unavailable, |option| option.action.clone()),
-        running,
-    )
+    let Some(copy) = choice else {
+        return library_label(&LaunchAction::Unavailable, running);
+    };
+    if !running
+        && copy.action == LaunchAction::Play
+        && !options.iter().any(|option| {
+            option.action == LaunchAction::Play
+                && option.target.via_steam() == preferred.via_steam()
+        })
+    {
+        let source = if copy.target.via_steam() {
+            "Готова в Steam"
+        } else {
+            "Готова локально"
+        };
+        return (source.into(), "ready".into());
+    }
+    library_label(&copy.action, running)
 }
 
 #[cfg(test)]

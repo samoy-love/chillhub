@@ -707,6 +707,7 @@ export component AppWindow inherits Window {
     in property <string> connection-note;
     in property <string> maintenance-note;
     in property <bool> can-play;
+    in property <bool> ready-to-play;
     in property <string> installed-version;
     in property <string> playtime-label;
     in property <[string]> versions;
@@ -1049,7 +1050,7 @@ export component AppWindow inherits Window {
                         launch-status := Rectangle {
                             x: launch-button.x; y: 14px; width: launch-button.width;
                             height: status-copy.preferred-height;
-                            game-status-dot := Rectangle { x: 0px; y: 6px; width: 6px; height: 6px; border-radius: 3px; background: root.show-install-space-warning ? root.install-warning-color : root.can-play ? #a7daba : Theme.dim; }
+                            game-status-dot := Rectangle { x: 0px; y: 6px; width: 6px; height: 6px; border-radius: 3px; background: root.show-install-space-warning ? root.install-warning-color : root.can-play && root.ready-to-play ? #a7daba : Theme.dim; }
                             status-copy := Text { x: 12px; width: parent.width - 12px; text: root.game-status-text; color: root.show-install-space-warning ? root.install-warning-color : #cbc6d2; font-size: 12px; wrap: word-wrap; }
                         }
                         launch-button := ActionButton {

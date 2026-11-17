@@ -92,6 +92,7 @@ fn every_action_has_its_primary_button_and_library_badge() {
         assert_eq!(view.play_label, button, "{:?}", option.action);
         assert_eq!(view.status, "Состояние выбранной копии");
         assert_eq!(view.can_play, can_play);
+        assert_eq!(view.ready_to_play, option.action == LaunchAction::Play);
         assert_eq!(
             library_label(&option.action, false),
             (badge.to_owned(), kind.to_owned())
@@ -135,18 +136,21 @@ fn higher_priority_activity_controls_both_primary_button_and_status() {
     assert_eq!(servicing.status, "Ожидаем завершения работ на сервере");
     for busy in [launching, running, queued] {
         assert!(!busy.can_play);
+        assert!(!busy.ready_to_play);
         assert!(!busy.can_verify_game);
         assert!(!busy.can_verify_mods);
         assert!(busy.has_game_files);
         assert!(busy.can_create_shortcut);
     }
     assert!(!servicing.can_play);
+    assert!(!servicing.ready_to_play);
     assert!(servicing.can_verify_game && servicing.can_verify_mods);
 
     let install = fixture_option(LaunchAction::InstallGame);
     let allowed = present(&install, &copy, &maintenance, false);
     assert_eq!(allowed.play_label, "Установить");
     assert!(allowed.can_play);
+    assert!(!allowed.ready_to_play);
 }
 
 #[test]
@@ -216,7 +220,7 @@ fn library_falls_back_to_the_most_ready_available_copy() {
         ),
         (
             [LaunchAction::UpdateGame, LaunchAction::Play],
-            "Установлена",
+            "Готова локально",
         ),
         (
             [LaunchAction::InstallGame, LaunchAction::InstallMods],
@@ -256,7 +260,7 @@ fn library_describes_installed_copies_without_changing_the_launch_choice() {
     ];
     assert_eq!(
         library_copies_label(&options, LaunchTarget::SteamModded, false),
-        ("Установлена".into(), "ready".into())
+        ("Готова локально".into(), "ready".into())
     );
     assert_eq!(options[0].action, LaunchAction::Unavailable);
 
@@ -283,12 +287,12 @@ fn library_describes_installed_copies_without_changing_the_launch_choice() {
     ];
     assert_eq!(
         library_copies_label(&interrupted_and_installed, LaunchTarget::LocalModded, false),
-        ("Установлена".into(), "ready".into())
+        ("Готова в Steam".into(), "ready".into())
     );
     let steam_only = [make(LaunchTarget::SteamVanilla, LaunchAction::Play)];
     assert_eq!(
         library_copies_label(&steam_only, LaunchTarget::LocalVanilla, false),
-        ("Установлена".into(), "ready".into())
+        ("Готова в Steam".into(), "ready".into())
     );
     let selected_needs_repair = [
         make(LaunchTarget::LocalModded, LaunchAction::RepairGame),
@@ -305,5 +309,40 @@ fn library_describes_installed_copies_without_changing_the_launch_choice() {
     assert_eq!(
         library_copies_label(&[], LaunchTarget::LocalVanilla, false),
         ("Копия недоступна".into(), "idle".into())
+    );
+}
+
+#[test]
+fn library_names_the_other_ready_source_without_changing_selected_copy_action() {
+    let steam = LaunchOption {
+        target: LaunchTarget::SteamVanilla,
+        ..fixture_option(LaunchAction::Play)
+    };
+    let local = fixture_option(LaunchAction::InstallGame);
+    let options = [local.clone(), steam];
+    assert_eq!(
+        library_copies_label(&options, local.target, false),
+        ("Готова в Steam".into(), "ready".into())
+    );
+    let selected = present(&local, &copy(), &Maintenance::default(), false);
+    assert_eq!(selected.play_label, "Установить");
+    assert!(selected.can_play);
+    assert!(!selected.ready_to_play);
+    assert_eq!(
+        library_copies_label(&options, local.target, true),
+        ("Игра запущена".into(), "running".into())
+    );
+    let unavailable_steam = LaunchOption {
+        target: LaunchTarget::SteamModded,
+        ..fixture_option(LaunchAction::Unavailable)
+    };
+    let ready_local = fixture_option(LaunchAction::Play);
+    assert_eq!(
+        library_copies_label(
+            &[unavailable_steam, ready_local],
+            LaunchTarget::SteamModded,
+            false
+        ),
+        ("Готова локально".into(), "ready".into())
     );
 }

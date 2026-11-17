@@ -231,6 +231,7 @@ impl Harness {
         ui.set_manage_details("На диске: 8,6 ГБ\nПоследняя версия в каталоге: 2.6.A\nПоследняя игра: 10.11.2026 19:42 · 53 мин".into());
         ui.set_has_modpack_link(true);
         ui.set_can_play(true);
+        ui.set_ready_to_play(true);
         ui.set_launcher_version(env!("CARGO_PKG_VERSION").into());
         ui.set_releases(model(
             chillhub_native::changelog::entries_since("1.7.20")
@@ -1224,6 +1225,21 @@ fn real_ui_headless_layout_and_actions() {
         h.ui.set_games(model(activity_rows));
         h.capture("library-availability", 1360, 850, 1.0);
         h.capture("library-availability", 900, 650, 1.0);
+        let mut other_source_rows = slint::Model::iter(&original_games).collect::<Vec<_>>();
+        let selected_row = &mut other_source_rows[h.ui.get_selected_game() as usize];
+        selected_row.status = "Готова в Steam".into();
+        selected_row.status_kind = "ready".into();
+        h.ui.set_games(model(other_source_rows));
+        let previous_play_label = h.ui.get_play_label();
+        let previous_status = h.ui.get_status();
+        h.ui.set_play_label("Установить".into());
+        h.ui.set_status("Установить игру".into());
+        h.ui.set_ready_to_play(false);
+        h.capture("library-other-source", 1360, 850, 1.0);
+        h.capture("library-other-source", 900, 650, 1.0);
+        h.ui.set_play_label(previous_play_label);
+        h.ui.set_status(previous_status);
+        h.ui.set_ready_to_play(true);
         h.ui.set_games(original_games);
         h.capture("main-small", 900, 500, 1.0);
         let previous_source = h.ui.get_source();

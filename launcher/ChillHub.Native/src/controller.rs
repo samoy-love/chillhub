@@ -206,6 +206,7 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
                     ui.set_has_game_files(presentation.has_game_files);
                     ui.set_can_create_shortcut(presentation.can_create_shortcut);
                     ui.set_can_play(presentation.can_play);
+                    ui.set_ready_to_play(presentation.ready_to_play);
                     ui.set_play_label(presentation.play_label.into());
                     ui.set_status(presentation.status.into());
                     ui.set_installed_version(presentation.installed_version.into());
