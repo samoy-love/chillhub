@@ -1,5 +1,5 @@
 //! Optional acceleration for ordinary game updates; explicit verification never trusts it.
-use super::{BUFFER, Result, TransferControl, atomic_write, hex};
+use super::{BUFFER, Result, TransferControl, allocated_bytes, atomic_write, hex};
 use crate::manifest::{ManifestFile, open_regular};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,6 +8,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -74,6 +75,11 @@ pub(super) struct HashCache {
     document: Document,
     dirty: bool,
 }
+
+pub(super) struct ReplacementSize {
+    pub size: u64,
+    pub allocated: u64,
+}
 impl HashCache {
     pub(super) fn load(directory: Option<&Path>, root: &Path) -> Self {
         // Canonicalization removes alternative spellings; a missing installation is a miss.
@@ -121,43 +127,53 @@ impl HashCache {
     }
 
     pub(super) fn verify(
-        &mut self,
+        cache: &Mutex<Self>,
         path: &Path,
         expected: &ManifestFile,
         force: bool,
         control: &TransferControl,
-    ) -> Result<bool> {
+        buffer: &mut [u8],
+    ) -> Result<(bool, Option<ReplacementSize>)> {
         control.checkpoint()?;
         let key = expected.path.to_lowercase();
-        let file = match open_regular(path, false, false, false) {
+        let mut file = match open_regular(path, false, false, false) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                self.invalidate(&expected.path);
-                return Ok(false);
+                cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .invalidate(&expected.path);
+                return Ok((false, None));
             }
             Err(e) => return Err(e.into()),
         };
         let metadata = file.metadata()?;
         let stamp = Stamp::read(&metadata);
-        if metadata.len() != expected.size {
-            self.invalidate(&expected.path);
-            return Ok(false);
-        }
-        if !force
-            && let (Some(stamp), Some(entry)) = (&stamp, self.document.entries.get_mut(&key))
-            && &entry.stamp == stamp
-            && entry.matches(expected)
         {
-            entry.used = nanos(SystemTime::now()).unwrap_or(0);
-            return Ok(true);
+            let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+            if !force
+                && let (Some(stamp), Some(entry)) = (&stamp, cache.document.entries.get_mut(&key))
+                && &entry.stamp == stamp
+                && entry.matches(expected)
+            {
+                entry.used = nanos(SystemTime::now()).unwrap_or(0);
+                return Ok((true, None));
+            }
+            cache.invalidate(&expected.path);
         }
-        self.invalidate(&expected.path);
-        let (valid, entry) = hash_open_file(file, expected, control)?;
+        let (valid, entry) = hash_open_file(&mut file, expected, control, buffer)?;
         if valid && let Some(entry) = entry {
-            self.document.entries.insert(key, entry);
-            self.dirty = true;
+            let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.path.is_some() {
+                cache.document.entries.insert(key, entry);
+                cache.dirty = true;
+            }
         }
-        Ok(valid)
+        let replaced = (!valid).then(|| ReplacementSize {
+            size: metadata.len(),
+            allocated: allocated_bytes(&file, &metadata),
+        });
+        Ok((valid, replaced))
     }
 
     pub(super) fn invalidate(&mut self, relative: &str) {
@@ -178,7 +194,7 @@ impl HashCache {
         let Some(verified) = verified else {
             return;
         };
-        if !verified.still_matches(path) {
+        if self.path.is_none() || !verified.still_matches(path) {
             return;
         }
         self.document.entries.insert(
@@ -259,51 +275,44 @@ pub(super) fn verify_for_promotion(
     expected: &ManifestFile,
     control: &TransferControl,
 ) -> Result<(bool, Option<VerifiedStamp>)> {
-    let file = match open_regular(path, false, false, false) {
+    let mut file = match open_regular(path, false, false, false) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((false, None)),
         Err(e) => return Err(e.into()),
     };
-    hash_open_file(file, expected, control)
+    hash_open_file(&mut file, expected, control, &mut vec![0; BUFFER])
         .map(|(valid, entry)| (valid, entry.map(|entry| VerifiedStamp(entry.stamp))))
 }
 fn hash_open_file(
-    mut file: fs::File,
+    file: &mut fs::File,
     expected: &ManifestFile,
     control: &TransferControl,
+    buffer: &mut [u8],
 ) -> Result<(bool, Option<Entry>)> {
     let metadata = file.metadata()?;
     if metadata.len() != expected.size {
         return Ok((false, None));
     }
     let before = Stamp::read(&metadata);
-    let mut sha = Sha256::new();
-    let mut blake = blake3::Hasher::new();
-    let mut buffer = vec![0; BUFFER];
+    let mut hashes = FileHashes::new(expected);
     loop {
         control.checkpoint()?;
-        let n = file.read(&mut buffer)?;
+        let n = file.read(buffer)?;
         if n == 0 {
             break;
         }
-        sha.update(&buffer[..n]);
-        blake.update(&buffer[..n]);
+        hashes.update(&buffer[..n]);
     }
-    let sha256 = hex(&sha.finalize());
-    let blake3 = blake.finalize().to_hex().to_string();
-    let valid = (expected.blake3.is_empty() || blake3.eq_ignore_ascii_case(&expected.blake3))
-        && expected
-            .sha256
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .is_none_or(|s| sha256.eq_ignore_ascii_case(s));
     // A writer racing the hash never seeds a trusted cache record.
     let after = Stamp::read(&file.metadata()?);
     if before != after {
         return Ok((false, None));
     }
+    let Some((sha256, blake3)) = hashes.matches(expected) else {
+        return Ok((false, None));
+    };
     Ok((
-        valid,
+        true,
         after.map(|stamp| Entry {
             stamp,
             sha256,
@@ -311,6 +320,73 @@ fn hash_open_file(
             used: nanos(SystemTime::now()).unwrap_or(0),
         }),
     ))
+}
+
+pub(super) struct FileHashes {
+    sha: Option<Sha256>,
+    blake: Option<blake3::Hasher>,
+}
+impl FileHashes {
+    pub(super) fn new(expected: &ManifestFile) -> Self {
+        Self {
+            sha: expected
+                .sha256
+                .as_ref()
+                .is_some_and(|s| !s.is_empty())
+                .then(Sha256::new),
+            blake: (!expected.blake3.is_empty()).then(blake3::Hasher::new),
+        }
+    }
+
+    pub(super) fn update(&mut self, bytes: &[u8]) {
+        if let Some(sha) = &mut self.sha {
+            sha.update(bytes);
+        }
+        if let Some(blake) = &mut self.blake {
+            blake.update(bytes);
+        }
+    }
+
+    fn matches(self, expected: &ManifestFile) -> Option<(String, String)> {
+        let sha256 = self.sha.map(|sha| hex(&sha.finalize())).unwrap_or_default();
+        let blake3 = self
+            .blake
+            .map(|blake| blake.finalize().to_hex().to_string())
+            .unwrap_or_default();
+        (sha256.eq_ignore_ascii_case(expected.sha256.as_deref().unwrap_or_default())
+            && blake3.eq_ignore_ascii_case(&expected.blake3))
+        .then_some((sha256, blake3))
+    }
+
+    pub(super) fn seal(
+        self,
+        file: fs::File,
+        path: &Path,
+        expected: &ManifestFile,
+        control: &TransferControl,
+    ) -> Result<Option<VerifiedStamp>> {
+        use super::TransferError;
+        control.checkpoint()?;
+        if self.matches(expected).is_none() || file.metadata()?.len() != expected.size {
+            return Err(TransferError::Integrity(expected.path.clone()));
+        }
+        file.sync_all()?;
+        let stamp = Stamp::read(&file.metadata()?).map(VerifiedStamp);
+        drop(file);
+        if stamp
+            .as_ref()
+            .is_some_and(|stamp| stamp.still_matches(path))
+        {
+            return Ok(stamp);
+        }
+        // Some filesystems update metadata as the writer closes. Recheck the
+        // contents before trusting a file whose stamp can't be carried across.
+        let (valid, stamp) = verify_for_promotion(path, expected, control)?;
+        if !valid {
+            return Err(TransferError::Integrity(expected.path.clone()));
+        }
+        Ok(stamp)
+    }
 }
 
 #[cfg(test)]

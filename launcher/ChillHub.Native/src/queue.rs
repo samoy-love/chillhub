@@ -18,6 +18,11 @@ use std::{
 
 const MAX_QUEUE_BYTES: usize = 16 * 1024 * 1024;
 const COMPLETED_HISTORY: usize = 50;
+const DEPENDENCY_INTERRUPTED: &str = "dependency_interrupted";
+const PREVIOUS_DOWNLOAD_INCOMPLETE: &str =
+    "Предыдущая загрузка не завершена. Сначала завершите установку игры";
+const PREVIOUS_DOWNLOAD_MISSING: &str = "Предыдущая загрузка отсутствует. Сначала установите игру";
+const DEPENDENCY_CYCLE: &str = "Задачи зависят друг от друга. Добавьте загрузку заново";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QueueState {
@@ -177,7 +182,7 @@ impl DownloadQueue {
             if !item.state.terminal()
                 && (item.state != QueueState::NeedsConfirmation || item.cleanup_files.is_empty())
             {
-                item.state = QueueState::Paused;
+                pause_for_shutdown(item);
             }
         }
         compact_completed(&mut items);
@@ -272,7 +277,7 @@ impl DownloadQueue {
                     && (item.state != QueueState::NeedsConfirmation
                         || item.cleanup_files.is_empty())
                 {
-                    item.state = QueueState::Paused;
+                    pause_for_shutdown(item);
                 }
             }
             state.items = items;
@@ -390,24 +395,31 @@ impl DownloadQueue {
             } else if state.items[index].state == QueueState::Waiting {
                 state.items[index].state = QueueState::Paused;
             }
+            Ok(())
         })
     }
     pub fn resume(&self, id: &str) -> Result<(), TransferError> {
         self.change(id, |state, index| {
-            if let Some(active) = state.active.as_mut().filter(|a| a.id == id) {
-                if state.items[index].state == QueueState::Pausing {
-                    active.requeue = true;
-                    state.items[index].request.approved_cleanup_files.clear();
+            // An automatically paused modpack is a continuation of its base install.
+            // Validate the chain before mutating state or persisting any work.
+            let chain = resume_chain(&state.items, index)?;
+            for index in chain.into_iter().rev() {
+                let item = &mut state.items[index];
+                if let Some(active) = state.active.as_mut().filter(|active| active.id == item.id) {
+                    if item.state == QueueState::Pausing {
+                        active.requeue = true;
+                        item.request.approved_cleanup_files.clear();
+                    }
+                } else if matches!(
+                    item.state,
+                    QueueState::Paused | QueueState::Failed | QueueState::Cancelled
+                ) {
+                    queue_again(item);
+                    let resumed = item.id.clone();
+                    queue_interrupted_dependents(&mut state.items, resumed);
                 }
-            } else if matches!(
-                state.items[index].state,
-                QueueState::Paused | QueueState::Failed | QueueState::Cancelled
-            ) {
-                state.items[index].state = QueueState::Waiting;
-                state.items[index].request.approved_cleanup_files.clear();
-                state.items[index].error = None;
-                state.items[index].progress = None;
             }
+            Ok(())
         })
     }
     pub fn confirm_cleanup(
@@ -427,6 +439,7 @@ impl DownloadQueue {
                 item.error = None;
                 confirmed = true;
             }
+            Ok(())
         })?;
         if !confirmed {
             return Err(TransferError::CleanupConfirmationChanged);
@@ -441,6 +454,7 @@ impl DownloadQueue {
             } else if !state.items[index].state.terminal() {
                 state.items[index].state = QueueState::Cancelled;
             }
+            Ok(())
         })
     }
     pub fn remove(&self, id: &str) -> Result<(), TransferError> {
@@ -485,7 +499,7 @@ impl DownloadQueue {
             .and_then(|target| state.items.iter().position(|i| i.id == target))
             .unwrap_or(state.items.len());
         state.items.insert(position, item);
-        if state.items[position].state == QueueState::Waiting {
+        if runnable(&state.items[position], &state.items) {
             let active_position = state
                 .active
                 .as_ref()
@@ -522,7 +536,7 @@ impl DownloadQueue {
     fn change(
         &self,
         id: &str,
-        update: impl FnOnce(&mut State, usize),
+        update: impl FnOnce(&mut State, usize) -> Result<(), TransferError>,
     ) -> Result<(), TransferError> {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let Some(index) = state.items.iter().position(|i| i.id == id) else {
@@ -531,7 +545,7 @@ impl DownloadQueue {
         let previous_items = state.items.clone();
         let previous_requeue = state.active.as_ref().map(|active| active.requeue);
         let was_terminal = state.items[index].state.terminal();
-        update(&mut state, index);
+        update(&mut state, index)?;
         let finished = (!was_terminal && state.items[index].state.terminal())
             .then(|| state.items[index].clone());
         persist_transition(
@@ -594,7 +608,7 @@ fn stop(shared: &Shared) {
             item.state,
             QueueState::Running | QueueState::Pausing | QueueState::Waiting
         ) {
-            item.state = QueueState::Paused;
+            pause_for_shutdown(item);
         }
     }
     if state.recovery_error.is_none() {
@@ -602,6 +616,80 @@ fn stop(shared: &Shared) {
     }
     publish(&mut state);
     shared.wake.notify_all();
+}
+
+fn pause_for_shutdown(item: &mut QueueItem) {
+    // A child that was waiting for its game may resume with that game. A child
+    // deliberately paused by the player stays paused until explicitly resumed.
+    if item.state == QueueState::Waiting && item.request.depends_on.is_some() {
+        item.report.error_code = Some(DEPENDENCY_INTERRUPTED.into());
+    }
+    item.state = QueueState::Paused;
+}
+
+fn dependency_interrupted(item: &QueueItem) -> bool {
+    item.state == QueueState::Paused
+        && (item.report.error_code.as_deref() == Some(DEPENDENCY_INTERRUPTED)
+            || matches!(
+                item.error.as_deref(),
+                Some(PREVIOUS_DOWNLOAD_INCOMPLETE | PREVIOUS_DOWNLOAD_MISSING | DEPENDENCY_CYCLE)
+            ))
+}
+
+fn resume_chain(items: &[QueueItem], index: usize) -> Result<Vec<usize>, TransferError> {
+    let mut chain = vec![index];
+    if !matches!(
+        items[index].state,
+        QueueState::Paused | QueueState::Failed | QueueState::Cancelled
+    ) {
+        return Ok(chain);
+    }
+    let resume_parents = dependency_interrupted(&items[index]);
+    let mut current = &items[index];
+    while let Some(previous) = &current.request.depends_on {
+        let parent = items
+            .iter()
+            .position(|other| &other.id == previous)
+            .ok_or(TransferError::DependencyBlocked(PREVIOUS_DOWNLOAD_MISSING))?;
+        if chain.contains(&parent) {
+            return Err(TransferError::DependencyBlocked(DEPENDENCY_CYCLE));
+        }
+        current = &items[parent];
+        match current.state {
+            QueueState::Completed => break,
+            QueueState::NeedsConfirmation => {
+                return Err(TransferError::NeedsCleanupConfirmation(
+                    current.cleanup_files.clone(),
+                ));
+            }
+            _ => chain.push(parent),
+        }
+    }
+    if !resume_parents {
+        chain.truncate(1);
+    }
+    Ok(chain)
+}
+
+fn queue_again(item: &mut QueueItem) {
+    item.state = QueueState::Waiting;
+    item.request.approved_cleanup_files.clear();
+    item.error = None;
+    item.progress = None;
+    item.report.error_code = None;
+}
+
+fn queue_interrupted_dependents(items: &mut [QueueItem], resumed: String) {
+    let mut parents = vec![resumed];
+    while let Some(parent) = parents.pop() {
+        for child in &mut *items {
+            if child.request.depends_on.as_deref() == Some(&parent) && dependency_interrupted(child)
+            {
+                queue_again(child);
+                parents.push(child.id.clone());
+            }
+        }
+    }
 }
 fn read_items(path: &Path) -> io::Result<Vec<QueueItem>> {
     let file = match fs::File::open(path) {
@@ -919,27 +1007,18 @@ fn settle_dependencies(state: &mut State) -> bool {
         let mut dependency = item.request.depends_on.as_deref();
         while let Some(id) = dependency {
             if !seen.insert(id) {
-                changes.push((
-                    index,
-                    "Задачи зависят друг от друга. Добавьте загрузку заново",
-                ));
+                changes.push((index, DEPENDENCY_CYCLE));
                 break;
             }
             match state.items.iter().find(|i| i.id == id) {
                 None => {
-                    changes.push((
-                        index,
-                        "Предыдущая загрузка отсутствует. Сначала установите игру",
-                    ));
+                    changes.push((index, PREVIOUS_DOWNLOAD_MISSING));
                     break;
                 }
                 Some(parent)
                     if matches!(parent.state, QueueState::Failed | QueueState::Cancelled) =>
                 {
-                    changes.push((
-                        index,
-                        "Предыдущая загрузка не завершена. Сначала завершите установку игры",
-                    ));
+                    changes.push((index, PREVIOUS_DOWNLOAD_INCOMPLETE));
                     break;
                 }
                 Some(parent) if parent.state == QueueState::Completed => break,
@@ -951,6 +1030,7 @@ fn settle_dependencies(state: &mut State) -> bool {
     for (index, error) in changes {
         state.items[index].state = QueueState::Paused;
         state.items[index].error = Some(error.into());
+        state.items[index].report.error_code = Some(DEPENDENCY_INTERRUPTED.into());
     }
     changed
 }

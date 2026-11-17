@@ -212,6 +212,7 @@ impl Harness {
                     has_mods: g["HasMods"].as_bool().unwrap(),
                     status: "Установлена".into(),
                     status_kind: "ready".into(),
+                    status_progress: 0.,
                 })
                 .collect(),
         ));
@@ -579,8 +580,14 @@ impl Harness {
             ElementHandle::find_by_element_id(&self.ui, "AppWindow::hero-description")
                 .next()
                 .unwrap();
+        let feature = ElementHandle::find_by_element_id(&self.ui, "AppWindow::feature")
+            .next()
+            .unwrap();
+        let launch_bar = ElementHandle::find_by_element_id(&self.ui, "AppWindow::launch-bar")
+            .next()
+            .unwrap();
         assert!(
-            (title.absolute_position().y - 163.0).abs() < 0.5,
+            (title.absolute_position().y - feature.absolute_position().y - 64.0).abs() < 0.5,
             "the title anchor must not move with description length"
         );
         assert!(
@@ -591,6 +598,11 @@ impl Harness {
             description.absolute_position().y
                 >= title.absolute_position().y + title.size().height + 5.0,
             "title and description must not overlap"
+        );
+        assert!(
+            description.absolute_position().y + description.size().height + 20.0
+                <= launch_bar.absolute_position().y,
+            "the launch controls have a separate surface below the full description"
         );
         let list = ElementHandle::find_by_element_id(&self.ui, "AppWindow::library-scroll")
             .next()
@@ -634,6 +646,29 @@ fn assert_in_bounds(element: &ElementHandle, width: f32, height: f32, context: &
         "{context}: {:?} position={p:?} size={s:?} window={width}x{height}",
         element.id()
     );
+}
+
+fn assert_download_numbers_fit(ui: &AppWindow) {
+    let values: Vec<_> = ElementHandle::find_by_element_id(ui, "QueueMetric::value-copy").collect();
+    assert_eq!(values.len(), 4);
+    let mut values = values;
+    values.sort_by(|left, right| {
+        left.absolute_position()
+            .x
+            .total_cmp(&right.absolute_position().x)
+    });
+    let slot = values[1].absolute_position().x - values[0].absolute_position().x - 12.0;
+    let total = ElementHandle::find_by_element_id(ui, "QueueMetric::note-copy")
+        .next()
+        .expect("total is displayed under the processed amount");
+    assert!(slot > 0.0);
+    for value in values.iter().chain(std::iter::once(&total)) {
+        assert!(
+            value.size().width <= slot + 0.5,
+            "counter of width {} overflows slot {slot}",
+            value.size().width
+        );
+    }
 }
 
 #[test]
@@ -752,10 +787,10 @@ fn real_ui_headless_layout_and_actions() {
             .ui
             .on_search_edited(move |value| weak.upgrade().unwrap().set_search(value));
         // Close the modal and explicitly materialize/focus a different live control.
-        let filter = ElementHandle::find_by_accessible_label(&keyboard.ui, "Только игры с модами")
-            .next()
-            .expect("mods filter button is available");
-        click_input(keyboard.ui.window(), &filter);
+        let game = ElementHandle::find_by_accessible_label(&keyboard.ui, "PEAK")
+            .find(|e| e.accessible_enabled().is_some())
+            .expect("library row is available");
+        click_input(keyboard.ui.window(), &game);
         text_key(keyboard.ui.window(), "q");
         assert_eq!(
             keyboard.ui.get_search(),
@@ -815,7 +850,7 @@ fn real_ui_headless_layout_and_actions() {
             "Ctrl+K focuses library search in EN layout"
         );
         // Re-materialize the focus tree outside the input before the RU alias.
-        click_input(keyboard.ui.window(), &filter);
+        click_input(keyboard.ui.window(), &game);
         text_key(keyboard.ui.window(), "q");
         assert_eq!(
             keyboard.ui.get_search(),
@@ -891,6 +926,36 @@ fn real_ui_headless_layout_and_actions() {
             );
         }
         h.ui.set_operation_busy(false);
+        let original_games = h.ui.get_games();
+        let mut library_rows = slint::Model::iter(&original_games).collect::<Vec<_>>();
+        for (row, (status, kind, progress)) in library_rows.iter_mut().zip([
+            ("Установлена", "ready", 0.),
+            ("Не установлена", "idle", 0.),
+            ("Есть обновление", "update", 0.),
+            ("Скачиваем · 49%", "active", 0.49),
+            ("На паузе", "active", 0.),
+            ("Ошибка загрузки", "error", 0.),
+            ("", "", 0.),
+        ]) {
+            row.status = status.into();
+            row.status_kind = kind.into();
+            row.status_progress = progress;
+        }
+        h.ui.set_games(model(library_rows.clone()));
+        h.capture("library-statuses", 1360, 850, 1.0);
+        for row in library_rows {
+            let entry = ElementHandle::find_by_accessible_label(&h.ui, row.title.as_str())
+                .find(|e| e.accessible_enabled().is_some())
+                .expect("game row");
+            let status = if row.status.is_empty() {
+                "Проверяем…"
+            } else {
+                row.status.as_str()
+            };
+            assert_eq!(entry.accessible_value().as_deref(), Some(status));
+        }
+        h.capture("library-statuses", 900, 650, 1.0);
+        h.ui.set_games(original_games);
         h.capture("main-small", 900, 500, 1.0);
         let previous_source = h.ui.get_source();
         h.ui.set_source("steam".into());
@@ -1013,11 +1078,7 @@ fn real_ui_headless_layout_and_actions() {
     }
     let cases = [
         ("settings", "Настройки", ""),
-        (
-            "downloads",
-            "Загрузки",
-            "Загруженные файлы проверяются перед установкой.",
-        ),
+        ("downloads", "Загрузки", ""),
         ("mods", "Состав модпака · 233", ""),
         (
             "manage",
@@ -1060,7 +1121,73 @@ fn real_ui_headless_layout_and_actions() {
             "Эти игры остались на диске, но больше не опубликованы. Их можно оставить или удалить выбранные папки. Сохранения внутри удаляемых папок тоже будут удалены.",
         ),
     ];
-    h.ui.set_queue(model(vec![QueueRow{id:"running".into(),title:"PEAK · PeakFriendsEdition 2.0.15".into(),detail:"BepInEx/plugins/AdditionalContent/библиотека-модификаций.dll\nФайлы: 104 из 213\nОбработано 4,2 ГБ из 8,6 ГБ\nИз интернета: 1,8 ГБ · 18 МБ/с\nИспользовано с диска: 2,4 ГБ".into(),progress:0.49,state:"Скачивается".into(),can_pause:true,can_cancel:true,..Default::default()},QueueRow{id:"failure".into(),title:"Lethal Company".into(),detail:"Не удалось получить файл. Соединение прервалось во время скачивания длинного пути BepInEx/plugins/AdditionalContent/VeryLongRussianFileName/конфигурация-модификации.json. Уже загруженные данные сохранены; можно продолжить.".into(),progress:0.28,state:"Ошибка — можно продолжить".into(),can_resume:true,can_cancel:true,..Default::default()},QueueRow{id:"confirm".into(),title:"R.E.P.O. · Moo Modpack".into(),detail:"Перед заменой файлов закройте игру и подтвердите продолжение.".into(),progress:0.75,state:"Нужно подтверждение".into(),can_confirm:true,can_cancel:true,..Default::default()}]));
+    h.ui.set_queue_active(QueueRow {
+        id: "running".into(),
+        title: "PEAK".into(),
+        icon: picture(&h.base, "Assets/Media/peak/icon.png"),
+        operation: "Установка игры".into(),
+        state: "Скачиваем".into(),
+        file: "BepInEx/plugins/AdditionalContent/библиотека-модификаций.dll".into(),
+        downloading: true,
+        processing: true,
+        processed: "4,2 ГБ".into(),
+        processed_total: "8,6 ГБ".into(),
+        transferred: "1,8 ГБ".into(),
+        speed: "18,0 МБ/с".into(),
+        eta: "≈ 4 мин".into(),
+        progress: 0.49,
+        progress_label: "49%".into(),
+        can_pause: true,
+        can_cancel: true,
+        ..Default::default()
+    });
+    h.ui.set_queue(model(vec![
+        QueueRow {
+            id: "dependent".into(),
+            title: "PEAK".into(),
+            icon: picture(&h.base, "Assets/Media/peak/icon.png"),
+            operation: "Модпак".into(),
+            state: "После установки игры".into(),
+            can_reorder: true,
+            can_move_down: true,
+            can_cancel: true,
+            ..Default::default()
+        },
+        QueueRow {
+            id: "waiting".into(),
+            title: "Drive Beyond Horizons с длинным названием пакета".into(),
+            icon: picture(&h.base, "Assets/Media/drive-beyond-horizons/icon.png"),
+            operation: "Игра".into(),
+            state: "В очереди".into(),
+            can_reorder: true,
+            can_move_up: true,
+            can_move_down: true,
+            can_cancel: true,
+            ..Default::default()
+        },
+        QueueRow {
+            id: "confirm".into(),
+            title: "R.E.P.O.".into(),
+            icon: picture(&h.base, "Assets/Media/repo/icon.png"),
+            operation: "Обновление модпака".into(),
+            state: "Требуется подтверждение".into(),
+            detail: "Перед заменой файлов закройте игру и подтвердите продолжение.".into(),
+            can_confirm: true,
+            can_cancel: true,
+            ..Default::default()
+        },
+    ]));
+    h.ui.set_queue_history(model(vec![QueueRow {
+        id: "failure".into(),
+        title: "Lethal Company".into(),
+        icon: picture(&h.base, "Assets/Media/lethal-company/icon.png"),
+        operation: "Установка игры".into(),
+        detail: "Соединение прервалось во время скачивания файла BepInEx/plugins/AdditionalContent/VeryLongRussianFileName/конфигурация-модификации.json.".into(),
+        state: "Не удалось завершить".into(),
+        can_resume: true,
+        can_remove: true,
+        ..Default::default()
+    }]));
     h.ui.set_orphans(model(vec![OrphanRow{id:"old-game".into(),title:"Игра из прежнего каталога с длинным названием".into(),path:r"D:\Игры для совместных вечеров\Большая коллекция\ChillHub\old-game\очень-длинное-имя-папки-без-пробелов-для-проверки-переноса".into(),selected:true,..Default::default()}]));
     h.ui.set_orphan_selection_count(1);
     let original_orphans = h.ui.get_orphans();
@@ -1375,35 +1502,77 @@ fn real_ui_headless_layout_and_actions() {
                 [false, false, true, true, false, false, false],
             ),
         ] {
-            h.ui.set_queue(model(vec![QueueRow {
+            let item = QueueRow {
                 id: name.into(),
-                title: "PEAK · модпак".into(),
+                title: "PEAK".into(),
+                icon: picture(&h.base, "Assets/Media/peak/icon.png"),
+                operation: "Обновление модпака".into(),
                 state: state.into(),
-                detail: if name == "pausing" || name == "cancelling" {
-                    "Ждём безопасного завершения текущей операции с файлом."
-                } else if name == "completed" {
-                    "Все файлы установлены и проверены."
-                } else {
-                    "Обработано 4,2 ГБ из 8,6 ГБ"
-                }
-                .into(),
-                progress: if name == "completed" { 1.0 } else { 0.49 },
+                progress: 0.49,
+                processing: matches!(name, "running" | "pausing" | "cancelling"),
                 can_pause: actions[0],
                 can_resume: actions[1],
                 can_cancel: actions[2],
                 can_confirm: actions[3],
-                can_prioritize: actions[4],
+                can_reorder: actions[4],
+                can_move_up: name == "waiting",
+                can_move_down: name == "paused",
                 can_remove: actions[5],
                 security_blocked: actions[6],
-            }]));
+                ..Default::default()
+            };
+            let item = match name {
+                "running" => QueueRow {
+                    file: "BepInEx/plugins/AdditionalContent/библиотека-модификаций.dll".into(),
+                    progress_label: "49%".into(),
+                    downloading: true,
+                    processed: "928,0 КБ".into(),
+                    processed_total: "2,0 МБ".into(),
+                    transferred: "1,8 ГБ".into(),
+                    speed: "18,0 МБ/с".into(),
+                    eta: "≈ 4 мин".into(),
+                    ..item
+                },
+                "pausing" | "cancelling" => QueueRow {
+                    detail: "Завершаем текущую операцию с файлом.".into(),
+                    ..item
+                },
+                "failed" | "blocked" => QueueRow {
+                    detail: "Не удалось получить файл. Проверьте подключение и повторите загрузку."
+                        .into(),
+                    ..item
+                },
+                "confirmation" => QueueRow {
+                    detail: "В папке игры найдены файлы, которых нет в выбранной версии.".into(),
+                    ..item
+                },
+                _ => item,
+            };
+            h.ui.set_queue_active(QueueRow::default());
+            h.ui.set_queue(model(Vec::new()));
+            h.ui.set_queue_history(model(Vec::new()));
+            if item.can_remove {
+                h.ui.set_queue_history(model(vec![item]));
+            } else if name == "waiting" {
+                h.ui.set_queue(model(vec![item]));
+            } else {
+                h.ui.set_queue_active(item);
+            }
             for (w, height, scale) in [(900, 500, 1.0), (1120, 720, 2.0)] {
                 h.capture(&format!("queue-{name}"), w, height, scale);
+                if name == "running" {
+                    assert_download_numbers_fit(&h.ui);
+                }
                 for (index, label) in [
                     "Приостановить",
-                    "Продолжить",
+                    if actions[5] {
+                        "Повторить"
+                    } else {
+                        "Продолжить"
+                    },
                     "Отменить",
                     "Подтвердить",
-                    "В начало",
+                    "Поднять в очереди",
                     "Убрать из списка",
                     "Антивирус",
                 ]
@@ -1415,12 +1584,88 @@ fn real_ui_headless_layout_and_actions() {
                     assert_eq!(button.is_some(), actions[index], "{name}: {label}");
                     if let Some(button) = button {
                         assert_in_bounds(&button, w as f32, height as f32, label);
+                        let min_width = if index == 4 { 32.0 } else { 68.0 };
+                        assert!(button.size().width >= min_width, "{name}: {label} hit area");
+                        if index == 4 {
+                            assert_eq!(button.accessible_enabled(), Some(name == "waiting"));
+                            let down = ElementHandle::find_by_accessible_label(
+                                &h.ui,
+                                "Опустить в очереди",
+                            )
+                            .find(|e| e.accessible_enabled().is_some())
+                            .expect("down reorder action");
+                            assert_eq!(down.accessible_enabled(), Some(name == "paused"));
+                            assert_in_bounds(&down, w as f32, height as f32, "down reorder action");
+                        }
                     }
                 }
             }
+            if let Some((label, verb)) = match name {
+                "waiting" => Some(("Поднять в очереди", "move-up")),
+                "running" => Some(("Отменить", "cancel")),
+                "paused" => Some(("Продолжить", "resume")),
+                "failed" => Some(("Повторить", "resume")),
+                "blocked" => Some(("Антивирус", "security")),
+                "completed" => Some(("Убрать из списка", "remove")),
+                "confirmation" => Some(("Подтвердить", "confirm")),
+                _ => None,
+            } {
+                h.click_pointer(label);
+                let expected = format!("queue:{name}:{verb}");
+                assert!(
+                    h.actions.borrow().contains(&expected),
+                    "{label}: {expected}"
+                );
+            }
+            if name == "paused" {
+                h.click_pointer("Опустить в очереди");
+                assert!(
+                    h.actions
+                        .borrow()
+                        .contains(&"queue:paused:move-down".to_string())
+                );
+            }
+            if name == "running" {
+                let mut active = h.ui.get_queue_active();
+                active.processed = "17179869183,9 ГБ".into();
+                active.processed_total = "17179869184,0 ГБ".into();
+                active.transferred = "17179869183,9 ГБ".into();
+                active.speed = "1023,9 МБ/с".into();
+                active.eta = "≈ 486258747388 ч 59 мин".into();
+                h.ui.set_queue_active(active);
+                h.capture("queue-large-counters", 900, 500, 1.0);
+                assert_download_numbers_fit(&h.ui);
+            }
         }
     }
+    h.ui.set_queue_active(QueueRow::default());
     h.ui.set_queue(model(Vec::new()));
+    if h.qa {
+        for (count, expected_height) in [(0, 220.0), (1, 232.0), (2, 296.0), (12, 436.0)] {
+            h.ui.set_queue_history(model(
+                (0..count)
+                    .map(|index| QueueRow {
+                        id: format!("history-{index}").into(),
+                        title: format!("Завершённая загрузка {}", index + 1).into(),
+                        operation: "Установка игры".into(),
+                        state: "Готово".into(),
+                        can_remove: true,
+                        ..Default::default()
+                    })
+                    .collect(),
+            ));
+            h.capture(&format!("queue-history-{count}"), 900, 500, 1.0);
+            let modal = ElementHandle::find_by_element_id(&h.ui, "AppWindow::modal")
+                .next()
+                .expect("download panel");
+            assert_eq!(
+                modal.size().height,
+                expected_height,
+                "history with {count} records"
+            );
+        }
+    }
+    h.ui.set_queue_history(model(Vec::new()));
     h.capture("queue-empty", 1120, 720, 1.0);
     if h.qa {
         h.ui.set_queue_error("Не удалось прочитать сохранённую очередь: файл слишком большой. Исходная очередь оставлена на месте. Новые загрузки пока недоступны. Уже установленные игры и сохранения не изменены. Если ошибка повторится после перезапуска, приложите журнал к сообщению в поддержку.".into());
@@ -2057,6 +2302,9 @@ fn real_ui_headless_layout_and_actions() {
         "Escape respects the helper close guard"
     );
     auxiliary.set_can_close(true);
+    let copied_folder = Rc::new(std::cell::Cell::new(-1));
+    let folder_callback = copied_folder.clone();
+    auxiliary.on_copy_folder(move |index| folder_callback.set(index));
     let weak = auxiliary.as_weak();
     auxiliary.on_provider_changed(move |provider| {
         let ui = weak.upgrade().unwrap();
@@ -2084,6 +2332,18 @@ fn real_ui_headless_layout_and_actions() {
             false,
         ),
         (
+            "aux-security-other",
+            "Исключения антивируса",
+            "Откройте настройки вашего антивируса и найдите раздел исключений. Скопируйте нужные пути из списка.",
+            false,
+        ),
+        (
+            "aux-security-remove",
+            "Исключения антивируса",
+            "Удалим только исключения Chill Hub. Остальные записи не изменятся.",
+            false,
+        ),
+        (
             "aux-error",
             "Обновление остановлено",
             "Предыдущая версия восстановлена. Игры и настройки остались на месте. После закрытия помощника можно повторно открыть Chill Hub.",
@@ -2091,17 +2351,30 @@ fn real_ui_headless_layout_and_actions() {
         ),
     ] {
         auxiliary.set_heading(heading.into());
-        auxiliary.set_provider_visible(name == "aux-security");
+        let other = name == "aux-security-other";
+        let removing = name == "aux-security-remove";
+        auxiliary.set_provider_visible(name == "aux-security" || other);
+        auxiliary.set_owned_removal_available(name == "aux-security" || other);
         auxiliary.set_provider_names(model(vec![
             "Защитник Windows".into(),
             "Kaspersky".into(),
             "ESET".into(),
             "Avast".into(),
+            "Другой антивирус".into(),
         ]));
-        auxiliary.set_selected_provider(0);
+        auxiliary.set_selected_provider(if other { 4 } else { 0 });
+        auxiliary.set_folders(model(if name == "aux-security" || other {
+            vec![
+                r"D:\Games\ChillHub".into(),
+                r"C:\Users\Игрок\AppData\Local\ChillHubUpdateStaging".into(),
+            ]
+        } else {
+            Vec::new()
+        }));
+        auxiliary.set_selected_folder(0);
         auxiliary.set_details(details.into());
         auxiliary.set_paths(
-            if name == "aux-security" {
+            if name == "aux-security" || removing {
                 "D:\\Games\\ChillHub\nC:\\Users\\Игрок\\AppData\\Local\\ChillHubUpdateStaging"
             } else if busy {
                 "C:\\Users\\Игрок\\AppData\\Local\\ChillHub"
@@ -2116,6 +2389,8 @@ fn real_ui_headless_layout_and_actions() {
                 "Не удалось заменить файл: доступ запрещён. Возможно, его использует другой процесс. Закройте оставшиеся окна лаунчера и повторите обновление.\n\nЕсли ошибка повторится, откройте папку с журналами и приложите последний журнал к сообщению в поддержку. Состояние восстановления сохранено; повторное открытие лаунчера предложит следующий безопасный шаг."
             } else if busy {
                 "Не закрывайте помощник до завершения."
+            } else if other {
+                ""
             } else {
                 "Изменения пока не внесены."
             }
@@ -2126,7 +2401,11 @@ fn real_ui_headless_layout_and_actions() {
         auxiliary.set_progress_visible(busy);
         auxiliary.set_progress(0.62);
         auxiliary.set_primary_text(
-            if name == "aux-error" {
+            if other {
+                ""
+            } else if removing {
+                "Удалить исключения"
+            } else if name == "aux-error" {
                 "Закрыть"
             } else if busy {
                 "Обновляем…"
@@ -2135,7 +2414,16 @@ fn real_ui_headless_layout_and_actions() {
             }
             .into(),
         );
-        auxiliary.set_secondary_text("Отмена".into());
+        auxiliary.set_secondary_text(
+            if other {
+                "Закрыть"
+            } else if removing {
+                "Назад"
+            } else {
+                "Отмена"
+            }
+            .into(),
+        );
         for (w, he, scale) in [(480, 420, 1.0), (640, 620, 1.5), (640, 620, 2.0)] {
             resize(auxiliary.window(), w, he, scale);
             settle();
@@ -2207,6 +2495,28 @@ fn real_ui_headless_layout_and_actions() {
             .unwrap();
             h.renders.push(serde_json::json!({"file":filename,"logicalWidth":640,"logicalHeight":620,"scale":1.0}));
             key(auxiliary.window(), Key::Escape);
+        }
+        if h.qa && other {
+            resize(auxiliary.window(), 480, 420, 1.0);
+            settle();
+            assert!(
+                ElementHandle::find_by_accessible_label(&auxiliary, "Открыть инструкцию")
+                    .next()
+                    .is_none()
+            );
+            let choice = ElementHandle::find_by_accessible_label(&auxiliary, "Выберите папку")
+                .find(|e| e.accessible_enabled() == Some(true))
+                .expect("folder selector");
+            choice.invoke_accessible_default_action();
+            settle();
+            key(auxiliary.window(), Key::DownArrow);
+            key(auxiliary.window(), Key::Return);
+            let copy = ElementHandle::find_by_accessible_label(&auxiliary, "Копировать")
+                .find(|e| e.accessible_enabled() == Some(true))
+                .expect("copy chosen folder");
+            assert_in_bounds(&copy, 480., 420., "copy chosen folder");
+            click_input(auxiliary.window(), &copy);
+            assert_eq!(copied_folder.get(), 1);
         }
     }
     auxiliary.hide().unwrap();
@@ -2302,12 +2612,34 @@ fn real_ui_headless_layout_and_actions() {
             .into(),
         );
         setup.set_message(if error {"Операция не завершена: файл занят. Закройте лаунчер и повторите установку. Ваши игры сохранятся."} else if busy {"Подготавливаем файлы. Это может занять несколько минут."} else if done {"Операция завершена."} else {""}.into());
-        for (w, he, scale) in [(560, 480, 1.0), (740, 690, 1.5), (740, 690, 2.0)] {
+        for (w, he, scale) in [
+            (560, 480, 1.0),
+            (680, 560, 1.0),
+            (740, 690, 1.5),
+            (740, 690, 2.0),
+        ] {
             resize(setup.window(), w, he, scale);
             settle();
             let snapshot = setup.window().take_snapshot().unwrap();
             assert_eq!(snapshot.width(), (w as f32 * scale) as u32);
             if h.qa {
+                if name == "setup-install" {
+                    let scroll =
+                        ElementHandle::find_by_element_id(&setup, "SetupWindow::body-scroll")
+                            .next()
+                            .expect("setup form scroll area");
+                    let shortcut = ElementHandle::find_by_accessible_label(
+                        &setup,
+                        "Создать ярлык на рабочем столе",
+                    )
+                    .find(|e| e.accessible_enabled() == Some(true))
+                    .expect("setup shortcut checkbox");
+                    assert!(
+                        shortcut.absolute_position().y + shortcut.size().height
+                            <= scroll.absolute_position().y + scroll.size().height + 0.5,
+                        "shortcut checkbox is visible without scrolling at {w}x{he}"
+                    );
+                }
                 if busy {
                     let progress =
                         ElementHandle::find_by_element_id(&setup, "SetupWindow::setup-progress")

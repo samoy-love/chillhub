@@ -7,18 +7,48 @@ use chillhub_native::{
 use slint::ComponentHandle;
 
 fn main() -> Result<(), String> {
-    if std::env::args().nth(1).as_deref() == Some("--setup-ui") {
-        return chillhub_native::setup::run(std::env::args().skip(2).collect());
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if let Some(result) = setup_exit_code(
+        &args,
+        chillhub_native::setup::run,
+        chillhub_native::setup::run_uninstall_cleanup,
+        chillhub_native::setup::installed_release_is_newer,
+    ) {
+        let code = result?;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
     }
     let log = HelperLog::open(HelperKind::Updater);
     if let Ok(log) = &log {
         let _ = log.record("start", "Запущен модуль обновления");
     }
-    let result = helper_runtime::caught(|| run(log.clone()));
+    let result = helper_runtime::caught(|| run(log.clone(), args));
     if result.is_err() {
         helper_runtime::record_result(&log, &result);
     }
     result
+}
+
+fn setup_exit_code(
+    args: &[String],
+    run_ui: impl FnOnce(Vec<String>) -> Result<(), String>,
+    cleanup: impl FnOnce(Vec<String>) -> Result<(), String>,
+    compare_installed: impl FnOnce(&str) -> Result<bool, String>,
+) -> Option<Result<i32, String>> {
+    let (command, args) = args.split_first()?;
+    match command.as_str() {
+        "--setup-ui" => Some(run_ui(args.to_vec()).map(|()| 0)),
+        "--setup-cleanup" => Some(cleanup(args.to_vec()).map(|()| 0)),
+        "--setup-compare-installed" => {
+            let [version] = args else {
+                return Some(Ok(2));
+            };
+            Some(Ok(compare_installed(version).map(i32::from).unwrap_or(2)))
+        }
+        _ => None,
+    }
 }
 
 fn finish(ui: &AuxiliaryWindow, result: Result<(), String>, caption: &str) {
@@ -40,11 +70,10 @@ fn finish(ui: &AuxiliaryWindow, result: Result<(), String>, caption: &str) {
     }
 }
 
-fn run(log: Result<HelperLog, String>) -> Result<(), String> {
+fn run(log: Result<HelperLog, String>, args: Vec<String>) -> Result<(), String> {
     helper_runtime::select_renderer()?;
     let ui = AuxiliaryWindow::new().map_err(|e| e.to_string())?;
     helper_runtime::style_window(ui.window());
-    let args: Vec<_> = std::env::args().skip(1).collect();
     start(
         &ui,
         log,

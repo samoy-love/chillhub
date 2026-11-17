@@ -67,10 +67,19 @@ pub struct SessionHandle {
     pub warning: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct CompletedSession {
+    game_id: String,
+    duration_ms: u64,
+}
+
+type CompletionHandler = dyn Fn(CompletedSession) + Send + Sync;
+
 #[derive(Clone)]
 pub struct PlaytimeStore {
     data_dir: PathBuf,
     watching: Arc<Mutex<HashSet<(u32, u64)>>>,
+    completion_handler: Arc<Mutex<Option<Arc<CompletionHandler>>>>,
 }
 
 enum AccountingFailure {
@@ -91,7 +100,32 @@ impl PlaytimeStore {
         Self {
             data_dir: paths.data_dir.clone(),
             watching: Arc::new(Mutex::new(HashSet::new())),
+            completion_handler: Default::default(),
         }
+    }
+
+    pub(crate) fn set_metrics_api(&self, api: crate::net::ApiClient) {
+        let directory = self.data_dir.clone();
+        self.set_completion_handler(move |session| {
+            crate::diagnostics::metric(
+                &api,
+                &directory,
+                crate::diagnostics::Metric {
+                    event: "game_session".into(),
+                    game_id: session.game_id,
+                    result: "ok".into(),
+                    duration_ms: session.duration_ms,
+                    ..Default::default()
+                },
+            );
+        });
+    }
+
+    fn set_completion_handler(&self, handler: impl Fn(CompletedSession) + Send + Sync + 'static) {
+        *self
+            .completion_handler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(handler));
     }
 
     fn lock(&self) -> Result<fs::File, String> {
@@ -341,8 +375,16 @@ impl PlaytimeStore {
         // A small journal makes the two-file commit idempotent after a power interruption.
         pending.remove(&pid.to_string());
         let restore = session.modded_dir.into_iter().collect::<Vec<_>>();
-        let journal =
-            serde_json::json!({"Playtime": all, "Pending": pending, "RestoreModdedDirs": restore});
+        let completion = CompletedSession {
+            game_id: session.game_id,
+            duration_ms: (elapsed as u64).saturating_mul(1000),
+        };
+        let journal = serde_json::json!({
+            "Playtime": all,
+            "Pending": pending,
+            "RestoreModdedDirs": restore,
+            "CompletedSession": completion,
+        });
         let journal_path = self.data_dir.join("playtime.commit.json");
         write_json(&journal_path, &journal)?;
         write_json(&all_path, &all)?;
@@ -350,9 +392,7 @@ impl PlaytimeStore {
         // Keep the commit journal until loader cleanup finishes as well.
         // Otherwise a crash after removing Pending permanently loses the
         // only record telling us to restore plain-game behaviour.
-        restore_session_loaders(&journal)?;
-        fs::remove_file(journal_path).map_err(|e| e.to_string())?;
-        Ok(())
+        self.finalize_commit_locked(&journal_path, &journal)
     }
 
     pub fn recover_commit(&self) -> Result<(), String> {
@@ -372,8 +412,30 @@ impl PlaytimeStore {
             serde_json::from_value(journal["Pending"].clone()).map_err(|e| e.to_string())?;
         write_json(&self.data_dir.join("playtime.json"), &all)?;
         write_json(&self.data_dir.join("playtime.sessions.json"), &pending)?;
-        restore_session_loaders(&journal)?;
-        fs::remove_file(path).map_err(|e| e.to_string())
+        self.finalize_commit_locked(&path, &journal)
+    }
+
+    fn finalize_commit_locked(
+        &self,
+        path: &Path,
+        journal: &serde_json::Value,
+    ) -> Result<(), String> {
+        restore_session_loaders(journal)?;
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+        let handler = self
+            .completion_handler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(handler) = handler
+            && let Some(session) = journal.get("CompletedSession").and_then(|completion| {
+                serde_json::from_value::<CompletedSession>(completion.clone()).ok()
+            })
+            && crate::paths::validate_game_id(&session.game_id).is_ok()
+        {
+            handler(session);
+        }
+        Ok(())
     }
 }
 

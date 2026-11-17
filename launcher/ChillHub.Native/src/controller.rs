@@ -3,6 +3,7 @@ mod launch_presentation;
 #[cfg(test)]
 mod queue_tests;
 mod settings;
+pub(super) mod shortcut_install;
 mod ui_action;
 #[cfg(test)]
 pub(super) mod update_tests;
@@ -13,13 +14,13 @@ use super::*;
 use chillhub_native::{
     diagnostics::Metric,
     feedback::{FeedbackDraft, SendResult},
-    launch::{self, LaunchAction, LaunchOutcome, LaunchService},
+    launch::{self, LaunchAction, LaunchOutcome},
     queue::{QueueEvent, QueueState},
     service,
     transfer::{CleanupFile, TransferControl},
     update::{self, UpdateCheck, UpdatePaths, UpdateRelease},
 };
-use launch_presentation::{InstalledCopyFacts, library_label};
+use launch_presentation::{InstalledCopyFacts, library_copies_label};
 use settings::{
     AfterSave, load as load_settings, save as save_settings, save_live as save_live_settings,
 };
@@ -37,6 +38,7 @@ pub(super) enum Confirmation {
     Security(Vec<PathBuf>),
     Recovery(update::StagedUpdate),
     Shortcut(ShortcutRequest),
+    InstallShortcut(GameRecord, LaunchTarget),
 }
 
 static ICON_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -65,6 +67,18 @@ pub(super) fn selected(state: &State) -> Option<(GameRecord, LaunchTarget)> {
 struct ChoiceProbe {
     option: LaunchOption,
     copy: InstalledCopyFacts,
+    library_label: (String, String),
+}
+
+fn running_copies(options: &[LaunchOption]) -> std::collections::HashSet<PathBuf> {
+    options
+        .iter()
+        .map(|option| option.game_dir.clone())
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .filter(|path| chillhub_native::playtime::processes_in(path).is_ok_and(|p| !p.is_empty()))
+        .collect()
 }
 
 pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
@@ -99,6 +113,7 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
     ui.set_can_verify_mods(false);
     ui.set_has_game_files(false);
     ui.set_can_create_shortcut(false);
+    ui.set_play_label("Проверяем…".into());
     ui.set_status("Проверяем установленную копию…".into());
     services.api.event(
         "launch.choice",
@@ -108,35 +123,52 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
         ui,
         Activity::Choice,
         move || {
-            let result = services.option(&game, target).map(|option| {
-                let running = chillhub_native::playtime::processes_in(&option.game_dir)
-                    .is_ok_and(|processes| !processes.is_empty());
-                let version_marker = launch::read_marker(&option.game_dir, ".version");
-                let has_executable = launch::resolve_game_exe(
-                    &option.game_dir,
-                    &game.exe_relative_path,
-                    game.mods
-                        .as_ref()
-                        .map(|mods| mods.exe_names.as_slice())
-                        .unwrap_or_default(),
-                )
-                .is_ok();
+            let result = launch::options(&game, &services.paths).and_then(|options| {
+                let running = running_copies(&options);
+                let library_label = library_copies_label(&options, target, !running.is_empty());
+                let option = options
+                    .into_iter()
+                    .find(|option| option.target == target)
+                    .ok_or_else(|| "Этот вариант игры недоступен".to_owned())?;
+                // A missing Steam installation has no root. It must not be
+                // interpreted as the current working directory by file probes.
+                let has_root = !option.game_dir.as_os_str().is_empty();
+                let version_marker = if has_root {
+                    launch::read_marker(&option.game_dir, ".version")
+                } else {
+                    String::new()
+                };
+                let has_executable = has_root
+                    && launch::resolve_game_exe(
+                        &option.game_dir,
+                        &game.exe_relative_path,
+                        game.mods
+                            .as_ref()
+                            .map(|mods| mods.exe_names.as_slice())
+                            .unwrap_or_default(),
+                    )
+                    .is_ok();
                 let copy = InstalledCopyFacts {
-                    can_verify_game: !target.via_steam()
+                    can_verify_game: has_root
+                        && !target.via_steam()
                         && service::can_verify_game(&game, &option.game_dir),
-                    can_verify_mods: service::can_verify_mods(&option.game_dir),
-                    has_game_files: option.game_dir.is_dir(),
+                    can_verify_mods: has_root && service::can_verify_mods(&option.game_dir),
+                    has_game_files: has_root && option.game_dir.is_dir(),
                     has_executable,
-                    running,
+                    running: running.contains(&option.game_dir),
                     version_marker,
                     playtime_seconds: services
                         .playtime
                         .totals(&game.game_id)
                         .unwrap_or_default()
                         .total_seconds,
-                    queued: services.queue.has_pending_for_root(&option.game_dir),
+                    queued: has_root && services.queue.has_pending_for_root(&option.game_dir),
                 };
-                ChoiceProbe { option, copy }
+                Ok(ChoiceProbe {
+                    option,
+                    copy,
+                    library_label,
+                })
             });
             let saved = services.config.update(|c| {
                 if epoch.load(Ordering::SeqCst) == generation {
@@ -152,7 +184,11 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
             }
             ui.set_busy(false);
             match result {
-                Ok(ChoiceProbe { option, copy }) => {
+                Ok(ChoiceProbe {
+                    option,
+                    copy,
+                    library_label,
+                }) => {
                     let launching = selected(state).is_some_and(|(game, target)| {
                         state
                             .borrow()
@@ -174,14 +210,13 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
                     ui.set_status(presentation.status.into());
                     ui.set_installed_version(presentation.installed_version.into());
                     ui.set_playtime_label(presentation.playtime_label.into());
-                    let label = library_label(&option.action, copy.running);
                     let id = state
                         .borrow()
                         .records
                         .get(state.borrow().selected)
                         .map(|g| g.game_id.clone());
                     if let Some(id) = id {
-                        state.borrow_mut().library_status.insert(id, label);
+                        state.borrow_mut().library_status.insert(id, library_label);
                     }
                     state.borrow_mut().option = Some(option);
                     sync_library_rows(ui, state);
@@ -189,6 +224,7 @@ pub(super) fn refresh_choice(ui: &AppWindow, state: &State) {
                 }
                 Err(error) => {
                     ui.set_can_play(false);
+                    ui.set_play_label("Недоступно".into());
                     ui.set_status(error.into());
                     state.borrow_mut().option = None;
                 }
@@ -239,7 +275,7 @@ pub(super) fn initialize(ui: &AppWindow, state: &State) {
     background(
         ui,
         move || {
-            let loaders = LaunchService::new(services.paths.clone()).recover_loader_sessions();
+            let loaders = services.launch_service().recover_loader_sessions();
             (loaders, services.playtime.reconcile())
         },
         |ui, state, (loaders, playtime)| {
@@ -787,7 +823,10 @@ pub(super) fn apply_catalog(
     }
     install_ui::clear_hint(ui);
     ui.set_loading(false);
-    let shortcut = take_catalog_shortcut(ui, state);
+    let mut shortcut = take_catalog_shortcut(ui, state);
+    if shortcut.is_some() {
+        state.borrow_mut().defer_startup_changelog = true;
+    }
     match result {
         Err(error) => {
             ui.set_load_error(error.to_string().into());
@@ -797,6 +836,15 @@ pub(super) fn apply_catalog(
             }
         }
         Ok((snapshot, games)) => {
+            if let Some(request) = &mut shortcut
+                && let Some(game) = snapshot
+                    .library
+                    .items
+                    .iter()
+                    .find(|game| game.game_id.eq_ignore_ascii_case(&request.game_id))
+            {
+                request.game_id.clone_from(&game.game_id);
+            }
             let index = {
                 let mut s = state.borrow_mut();
                 s.offline = snapshot.offline;
@@ -857,14 +905,15 @@ pub(super) fn apply_catalog(
                     .iter()
                     .any(|g| g.game_id == request.game_id)
                 {
-                    // Capture the requested game now. A delayed callback could
-                    // otherwise launch a different game selected in the meantime.
-                    start_selected_play(ui, state, None);
+                    // A game shortcut selects its card. A missing local copy gets
+                    // an explicit install-and-play offer, never a silent download.
+                    shortcut_install::offer(ui, state, &request);
                 } else {
                     offer_shortcut(ui, state, request);
                 }
             } else if ui.get_panel_kind().is_empty()
                 && !ui.get_operation_busy()
+                && !state.borrow().defer_startup_changelog
                 && state.borrow().pending_shortcuts.is_empty()
                 && chillhub_native::changelog::should_show(
                     &state.borrow().prefs.last_seen_changelog_version,
@@ -874,7 +923,9 @@ pub(super) fn apply_catalog(
                 open_panel(ui, state, "changelog");
             }
             security_offers::catalog_ready(ui, state);
-            orphan_ui::catalog_ready(ui, state);
+            if snapshot.all_entries_valid {
+                orphan_ui::catalog_ready(ui, state);
+            }
         }
     }
 }
@@ -899,21 +950,27 @@ fn refresh_library_states(ui: &AppWindow, state: &State) {
                             &error,
                         );
                     }
-                    let target = prefs.remembered(&g.game_id).unwrap_or(
-                        if g.mods.as_ref().is_some_and(|m| !m.steam_app_id.is_empty()) {
-                            LaunchTarget::SteamModded
-                        } else if g.mods.is_some() {
-                            LaunchTarget::LocalModded
+                    let target = prefs.remembered(&g.game_id).unwrap_or_else(|| {
+                        if g.has_latest && !g.latest_version.is_empty() {
+                            if g.mods.as_ref().is_some_and(|mods| mods.has_latest) {
+                                LaunchTarget::LocalModded
+                            } else {
+                                LaunchTarget::LocalVanilla
+                            }
+                        } else if g
+                            .mods
+                            .as_ref()
+                            .is_some_and(|mods| !mods.steam_app_id.is_empty())
+                        {
+                            LaunchTarget::SteamVanilla
                         } else {
                             LaunchTarget::LocalVanilla
-                        },
-                    );
-                    let label = services
-                        .option(&g, target)
-                        .map(|option| {
-                            let running = chillhub_native::playtime::processes_in(&option.game_dir)
-                                .is_ok_and(|p| !p.is_empty());
-                            library_label(&option.action, running)
+                        }
+                    });
+                    let label = launch::options(&g, &services.paths)
+                        .map(|options| {
+                            let running = running_copies(&options);
+                            library_copies_label(&options, target, !running.is_empty())
                         })
                         .unwrap_or(("Не удалось проверить".into(), "error".into()));
                     (g.game_id, label)
@@ -934,6 +991,44 @@ fn refresh_library_states(ui: &AppWindow, state: &State) {
         },
     );
 }
+fn library_queue_task<'a>(tasks: &'a [QueueItem], game_id: &str) -> Option<&'a QueueItem> {
+    let belongs = |task: &&QueueItem| task.request.game_id == game_id;
+    tasks
+        .iter()
+        .filter(belongs)
+        .filter(|task| !queue_ui::can_remove(task.state))
+        .min_by_key(|task| match task.state {
+            QueueState::Running | QueueState::Pausing | QueueState::Cancelling => 0,
+            QueueState::NeedsConfirmation => 1,
+            QueueState::Waiting => 2,
+            _ => 3,
+        })
+        .or_else(|| {
+            tasks
+                .iter()
+                .rev()
+                .find(belongs)
+                .filter(|task| task.state == QueueState::Failed)
+        })
+}
+
+fn library_queue_label(task: &QueueItem) -> &'static str {
+    match task.state {
+        QueueState::Failed => "Ошибка загрузки",
+        QueueState::NeedsConfirmation => "Нужен выбор",
+        QueueState::Pausing => "Ставим на паузу",
+        QueueState::Running => match task.progress.as_ref().map(|progress| progress.stage) {
+            Some(
+                chillhub_native::transfer::TransferStage::Checking
+                | chillhub_native::transfer::TransferStage::Verifying,
+            ) => "Проверяем",
+            Some(chillhub_native::transfer::TransferStage::Activating) => "Устанавливаем",
+            _ => queue_ui::state_label(task),
+        },
+        _ => queue_ui::state_label(task),
+    }
+}
+
 pub(super) fn sync_library_rows(ui: &AppWindow, state: &State) {
     let model = ui.get_games();
     let s = state.borrow();
@@ -946,27 +1041,11 @@ pub(super) fn sync_library_rows(ui: &AppWindow, state: &State) {
             .get(row.id.as_str())
             .cloned()
             .unwrap_or_default();
-        let queue = s
-            .tasks
-            .iter()
-            .rev()
-            .find(|t| {
-                t.request.game_id == row.id.as_str()
-                    && !matches!(
-                        t.state,
-                        QueueState::Completed | QueueState::Cancelled | QueueState::Failed
-                    )
-            })
-            .or_else(|| {
-                s.tasks
-                    .iter()
-                    .rev()
-                    .find(|t| t.request.game_id == row.id.as_str())
-                    .filter(|t| t.state == QueueState::Failed)
-            });
+        let queue = library_queue_task(&s.tasks, row.id.as_str());
+        let progress = queue.and_then(queue_ui::stage_progress).unwrap_or(0.);
         if let Some(task) = queue {
             label = (
-                queue_ui::state_label(task).into(),
+                library_queue_label(task).into(),
                 if task.state == QueueState::Failed {
                     "error"
                 } else {
@@ -974,15 +1053,17 @@ pub(super) fn sync_library_rows(ui: &AppWindow, state: &State) {
                 }
                 .into(),
             );
-            if task.state == QueueState::Running
-                && task.progress.as_ref().is_some_and(|p| p.total_bytes > 0)
-            {
-                label.0 = format!("{} · {:.0}%", label.0, queue_ui::progress(task) * 100.);
+            if let Some(progress) = queue_ui::stage_progress(task) {
+                label.0 = format!("{} · {}%", label.0, (progress * 100.).floor());
             }
         }
-        if row.status.as_str() != label.0 || row.status_kind.as_str() != label.1 {
+        if row.status.as_str() != label.0
+            || row.status_kind.as_str() != label.1
+            || row.status_progress != progress
+        {
             row.status = label.0.into();
             row.status_kind = label.1.into();
+            row.status_progress = progress;
             model.set_row_data(index, row);
         }
     }
@@ -1051,6 +1132,9 @@ fn load_icons(ui: &AppWindow, state: &State, generation: u64) {
                                         model.set_row_data(visible_index, row);
                                     }
                                 }
+                                if ui.get_panel_kind() == "downloads" {
+                                    refresh_queue_rows(&ui, state);
+                                }
                             }
                         });
                     }
@@ -1061,6 +1145,7 @@ fn load_icons(ui: &AppWindow, state: &State, generation: u64) {
     });
 }
 fn queue_finished(ui: &AppWindow, state: &State, task: QueueItem) {
+    state.borrow_mut().shortcut_installs.observe_finished(&task);
     let s = state.borrow();
     if task.state == QueueState::Completed {
         chillhub_native::installed_apps::refresh(
@@ -1125,6 +1210,7 @@ fn queue_finished(ui: &AppWindow, state: &State, task: QueueItem) {
     {
         security_offers::installed_mods(ui, state, task.request.root);
     }
+    shortcut_install::pump(ui, state);
 }
 
 fn report_queue_metrics(task: &QueueItem, mut report: impl FnMut(Metric)) {
@@ -1171,6 +1257,34 @@ fn report_queue_metrics(task: &QueueItem, mut report: impl FnMut(Metric)) {
         });
     }
 }
+fn refresh_queue_rows_for(ui: &AppWindow, state: &AppState, tasks: &[QueueItem]) {
+    let rows = queue_ui::rows(tasks, &state.queue_speeds, |id| {
+        if let Some((index, game)) = state
+            .catalog
+            .iter()
+            .enumerate()
+            .find(|(_, game)| game.id == id)
+        {
+            return (
+                game.title.as_str().into(),
+                state.icons.get(index).cloned().unwrap_or_default(),
+            );
+        }
+        let title = state
+            .records
+            .iter()
+            .find(|game| game.game_id == id)
+            .map_or(id, |game| game.title.as_str());
+        (title.into(), Image::default())
+    });
+    queue_ui::apply_rows(ui, rows);
+}
+
+pub(super) fn refresh_queue_rows(ui: &AppWindow, state: &State) {
+    let state = state.borrow();
+    refresh_queue_rows_for(ui, &state, &state.tasks);
+}
+
 fn queue_changed(ui: &AppWindow, state: &State, tasks: Vec<QueueItem>) {
     state
         .borrow_mut()
@@ -1181,74 +1295,7 @@ fn queue_changed(ui: &AppWindow, state: &State, tasks: Vec<QueueItem>) {
         s.tasks.iter().map(|t| (&t.id, t.state)).collect::<Vec<_>>()
             != tasks.iter().map(|t| (&t.id, t.state)).collect::<Vec<_>>()
     };
-    let mut waiting_position = 0;
-    let rows = tasks
-        .iter()
-        .map(|task| {
-            let title = state
-                .borrow()
-                .records
-                .iter()
-                .find(|g| g.game_id == task.request.game_id)
-                .map(|g| g.title.clone())
-                .unwrap_or_else(|| task.request.game_id.clone());
-            let progress = queue_ui::progress(task);
-            let detail = queue_ui::detail(
-                task,
-                state.borrow().queue_speeds.rate(task),
-                state.borrow().queue_speeds.eta(task),
-            );
-            let state_name = if task.state == QueueState::Waiting {
-                waiting_position += 1;
-                if waiting_position == 1 {
-                    "Следующая в очереди".to_string()
-                } else {
-                    format!("В очереди · {waiting_position}-я")
-                }
-            } else {
-                queue_ui::state_label(task).to_string()
-            };
-            QueueRow {
-                id: task.id.clone().into(),
-                title: format!(
-                    "{title} · {}",
-                    if task.request.scope == chillhub_native::transfer::SyncScope::OwnFilesOnly {
-                        "моды"
-                    } else {
-                        "игра"
-                    }
-                )
-                .into(),
-                detail: detail.into(),
-                progress: if task.state == QueueState::Completed {
-                    1.
-                } else {
-                    progress
-                },
-                state: state_name.into(),
-                can_pause: matches!(task.state, QueueState::Running | QueueState::Waiting),
-                can_resume: matches!(
-                    task.state,
-                    QueueState::Paused | QueueState::Failed | QueueState::Cancelled
-                ),
-                can_cancel: matches!(
-                    task.state,
-                    QueueState::Waiting
-                        | QueueState::Running
-                        | QueueState::Paused
-                        | QueueState::NeedsConfirmation
-                ),
-                can_confirm: task.state == QueueState::NeedsConfirmation,
-                can_prioritize: queue_ui::can_prioritize(
-                    task.state,
-                    tasks.first().is_some_and(|first| first.id == task.id),
-                ),
-                can_remove: queue_ui::can_remove(task.state),
-                security_blocked: task.state == QueueState::Failed
-                    && task.report.error_code.as_deref() == Some("sync_security_blocked"),
-            }
-        })
-        .collect::<Vec<_>>();
+    refresh_queue_rows_for(ui, &state.borrow(), &tasks);
     let active_count = tasks
         .iter()
         .filter(|t| {
@@ -1259,24 +1306,13 @@ fn queue_changed(ui: &AppWindow, state: &State, tasks: Vec<QueueItem>) {
         })
         .count();
     ui.set_downloads_active(active_count as i32);
-    let active = tasks
-        .iter()
-        .find(|t| t.state == QueueState::Running)
-        .or_else(|| {
-            tasks.iter().find(|t| {
-                matches!(
-                    t.state,
-                    QueueState::Paused | QueueState::Waiting | QueueState::NeedsConfirmation
-                )
-            })
-        });
+    let active = queue_ui::active_task(&tasks)
+        .or_else(|| tasks.iter().find(|task| task.state == QueueState::Waiting));
     let summary = active
         .map(|t| {
             let label = queue_ui::state_label(t);
-            if t.progress.as_ref().is_some_and(|p| p.total_bytes > 0)
-                && t.state == QueueState::Running
-            {
-                format!("{label} · {:.0}%", queue_ui::progress(t) * 100.)
+            if let Some(progress) = queue_ui::stage_progress(t) {
+                format!("{label} · {}%", (progress * 100.).floor())
             } else {
                 label.into()
             }
@@ -1289,18 +1325,18 @@ fn queue_changed(ui: &AppWindow, state: &State, tasks: Vec<QueueItem>) {
             }
         });
     ui.set_downloads_summary(summary.clone().into());
-    ui.set_downloads_progress(active.map_or(0., queue_ui::progress));
+    ui.set_downloads_progress(active.and_then(queue_ui::stage_progress).unwrap_or(0.));
     desktop::set_status(&if summary.is_empty() {
         "Chill Hub".into()
     } else {
         format!("Chill Hub · {summary}")
     });
-    ui.set_queue(Rc::new(VecModel::from(rows)).into());
     if ui.get_queue_recovery_needed() && state.borrow().services.queue.recovery_error().is_none() {
         ui.set_queue_recovery_needed(false);
         ui.set_queue_error(Default::default());
     }
     state.borrow_mut().tasks = tasks;
+    shortcut_install::pump(ui, state);
     sync_library_rows(ui, state);
     if changed {
         refresh_library_states(ui, state);
@@ -1348,19 +1384,21 @@ fn start_selected_play(ui: &AppWindow, state: &State, shown_action: Option<Launc
         move || -> Result<Option<LaunchOutcome>, install_ui::PlayFailure> {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let option = services.option(&game, target)?;
-            if option.action==LaunchAction::Play && shown_action.is_some_and(|shown|shown!=LaunchAction::Play) {
-                return Err("Состояние игры изменилось. Проверьте кнопку и нажмите её снова, чтобы запустить игру.".to_string().into());
+            if shown_action.is_some_and(|shown| shown != option.action) {
+                return Err("Состояние игры изменилось. Проверьте действие на кнопке и нажмите её снова.".to_string().into());
             }
-            if !(offline && option.action == LaunchAction::Play) {
+            if offline && option.action == LaunchAction::Play {
+                services.cached_launch_maintenance_check()?;
+            } else {
                 services.maintenance_check(&option.action)?;
             }
             if !option.available() {
                 return Err(option.note.into());
             }
             if option.action == LaunchAction::Play {
-                let launched = LaunchService::new(services.paths.clone()).launch(&game, target)?;
+                let launched = services.launch_service().launch(&game, target)?;
                 if matches!(&launched, LaunchOutcome::Started(_)) {
-                    record_game_launch(&services, game.game_id, game.latest_version);
+                    record_catalog_game_launch(&services, game, target, &option.game_dir);
                 }
                 Ok(Some(launched))
             } else {
@@ -1409,7 +1447,11 @@ fn start_selected_play(ui: &AppWindow, state: &State, shown_action: Option<Launc
                         },
                     );
                 }
-                Ok(None) => open_panel(ui, state, "downloads"),
+                Ok(None) => {
+                    // Like the original queue dock, an installation must leave
+                    // the library available so another game can be queued.
+                    toast(ui, state, "Игра добавлена в загрузки");
+                }
                 Err(install_ui::PlayFailure::General(error)) => {
                     report_failure(ui, state, "launch", &error)
                 }
@@ -1449,6 +1491,21 @@ fn record_game_launch(services: &Services, game_id: String, version: String) {
         },
     );
 }
+fn record_catalog_game_launch(
+    services: &Services,
+    game: GameRecord,
+    target: LaunchTarget,
+    directory: &std::path::Path,
+) {
+    let installed = (!target.via_steam())
+        .then(|| launch::read_marker(directory, ".version"))
+        .filter(|version| !version.is_empty());
+    record_game_launch(
+        services,
+        game.game_id,
+        installed.unwrap_or(game.latest_version),
+    );
+}
 fn show_game_started(
     ui: &AppWindow,
     state: &State,
@@ -1462,27 +1519,11 @@ fn show_game_started(
     watch_game(ui, session);
 }
 fn watch_game(ui: &AppWindow, session: chillhub_native::playtime::SessionHandle) {
-    let services =
-        ACTIVE_STATE.with(|slot| slot.borrow().as_ref().map(|s| s.borrow().services.clone()));
     background(
         ui,
         move || {
-            let start = chrono::Utc::now();
             while session.process.is_running() {
                 std::thread::sleep(Duration::from_secs(1));
-            }
-            if let Some(services) = services {
-                chillhub_native::diagnostics::metric(
-                    &services.api,
-                    &services.paths.data_dir,
-                    chillhub_native::diagnostics::Metric {
-                        event: "game_session".into(),
-                        game_id: session.game_id,
-                        result: "ok".into(),
-                        duration_ms: (chrono::Utc::now() - start).num_milliseconds().max(0) as u64,
-                        ..Default::default()
-                    },
-                );
             }
         },
         |ui, state, ()| refresh_choice(ui, state),
@@ -1660,6 +1701,9 @@ fn report_failure(ui: &AppWindow, state: &State, kind: &str, error: &str) {
         error,
     );
     toast(ui, state, error);
+    if !ui.window().is_visible() {
+        desktop::notify("Chill Hub", error, true);
+    }
 }
 fn show_available_update(ui: &AppWindow, release: &UpdateRelease) {
     ui.set_update_checked(true);
@@ -1810,7 +1854,10 @@ fn action(ui: &AppWindow, state: &State, requested: UiAction) {
                     background_for(
                         ui,
                         Activity::Operation,
-                        move || LaunchService::new(services.paths).launch_shortcut(&request),
+                        move || {
+                            services.maintenance_check(&LaunchAction::Play)?;
+                            services.launch_service().launch_shortcut(&request)
+                        },
                         |ui, state, r| {
                             ui.set_operation_busy(false);
                             match r {
@@ -1822,6 +1869,9 @@ fn action(ui: &AppWindow, state: &State, requested: UiAction) {
                             }
                         },
                     );
+                }
+                Some(Confirmation::InstallShortcut(game, target)) => {
+                    shortcut_install::install(ui, state, game, target);
                 }
                 Some(Confirmation::Security(paths)) => operation(ui, state, move || {
                     chillhub_native::security::launch_helper(
@@ -2017,7 +2067,9 @@ fn action(ui: &AppWindow, state: &State, requested: UiAction) {
                         }
                         Err(e) => {
                             ui.set_update_error(true);
-                            ui.set_panel_body(format!("Не удалось проверить обновления. Проверьте подключение и попробуйте снова.\n\n{e}").into());
+                            ui.set_panel_body(
+                                format!("Не удалось проверить обновления.\n\n{e}").into(),
+                            );
                         }
                     }
                 },
@@ -2327,9 +2379,11 @@ pub(super) fn bind(ui: &AppWindow, state: &State) {
                 "resume" => queue.resume(&id),
                 "cancel" => queue.cancel(&id),
                 "remove" => queue.remove(&id),
-                "first" => {
-                    let first = queue.snapshot().first().map(|i| i.id.clone());
-                    queue.move_before(&id, first.as_deref())
+                "move-up" | "move-down" => {
+                    match queue_ui::move_target(&queue.snapshot(), &id, value == "move-up") {
+                        Some(before) => queue.move_before(&id, before.as_deref()),
+                        None => Ok(()),
+                    }
                 }
                 _ => Ok(()),
             }

@@ -38,7 +38,22 @@ pub fn matching_guide(name: &str) -> usize {
         .unwrap_or(guides().len() - 1)
 }
 
-pub fn discovered_names() -> Vec<String> {
+const SECURITY_CENTER_PRODUCTS: &str = r#"
+$names = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntivirusProduct -OperationTimeoutSec 4 | ForEach-Object { $_.displayName })
+ConvertTo-Json -InputObject $names -Compress
+"#;
+
+fn security_center_names() -> Vec<String> {
+    powershell(SECURITY_CENTER_PRODUCTS, None)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<Option<String>>>(&text).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn uninstall_registry_names() -> Vec<String> {
     let mut names = Vec::new();
     #[cfg(windows)]
     {
@@ -57,31 +72,59 @@ pub fn discovered_names() -> Vec<String> {
                     continue;
                 };
                 for key in uninstall.enum_keys().filter_map(Result::ok) {
-                    let Ok(entry) = uninstall.open_subkey_with_flags(key, KEY_READ) else {
+                    let Ok(entry) = uninstall.open_subkey_with_flags(key, KEY_READ | view) else {
                         continue;
                     };
                     let Ok(name) = entry.get_value::<String, _>("DisplayName") else {
                         continue;
                     };
-                    if matching_guide(&name) != guides().len() - 1
-                        && !names.iter().any(|n: &String| n.eq_ignore_ascii_case(&name))
-                    {
-                        names.push(name);
-                    }
+                    names.push(name);
                 }
             }
         }
     }
-    names.sort();
     names
 }
 
-pub fn recommended_guide() -> usize {
-    discovered_names()
+fn discovered_names(center: Vec<String>, uninstall: Vec<String>) -> Vec<String> {
+    let other = guides().len() - 1;
+    let mut names = std::collections::BTreeMap::new();
+    for candidate in center.into_iter().chain(
+        uninstall
+            .into_iter()
+            .filter(|name| matching_guide(name) != other),
+    ) {
+        let name = candidate.trim();
+        if !name.is_empty() {
+            names
+                .entry(name.to_lowercase())
+                .or_insert_with(|| name.to_owned());
+        }
+    }
+    names.into_values().collect()
+}
+
+fn recommended_guide_from(names: &[String]) -> usize {
+    let other = guides().len() - 1;
+    let matches: Vec<_> = names.iter().map(|name| matching_guide(name)).collect();
+    if let Some(vendor) = matches
         .iter()
-        .map(|n| matching_guide(n))
-        .find(|i| *i > 0 && *i < guides().len() - 1)
-        .unwrap_or(0)
+        .copied()
+        .find(|index| *index > 0 && *index < other)
+    {
+        return vendor;
+    }
+    if matches.contains(&other) || !matches.contains(&0) {
+        return other;
+    }
+    0
+}
+
+pub fn recommended_guide() -> usize {
+    recommended_guide_from(&discovered_names(
+        security_center_names(),
+        uninstall_registry_names(),
+    ))
 }
 
 pub fn open_guide(index: usize) -> Result<(), String> {

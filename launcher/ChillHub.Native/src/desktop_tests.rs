@@ -1,6 +1,23 @@
 use super::*;
 use chillhub_native::{config::ConfigStore, launch::LaunchAction, paths::AppPaths};
 
+#[test]
+fn tray_keeps_ready_launch_in_background_but_surfaces_install_or_stale_action() {
+    assert!(!tray_requires_window(true, Some(&LaunchAction::Play)));
+    assert!(tray_requires_window(false, Some(&LaunchAction::Play)));
+    for action in [
+        LaunchAction::InstallGame,
+        LaunchAction::UpdateGame,
+        LaunchAction::InstallMods,
+        LaunchAction::UpdateMods,
+        LaunchAction::RepairMods,
+        LaunchAction::Unavailable,
+    ] {
+        assert!(tray_requires_window(true, Some(&action)));
+    }
+    assert!(tray_requires_window(true, None));
+}
+
 fn consume_requests(data: &Path, now: SystemTime) -> Vec<Vec<String>> {
     let Some(mut prepared) = prepare_requests(data, now, None) else {
         return Vec::new();

@@ -111,6 +111,100 @@ fn resumed_or_restored_tasks_require_fresh_cleanup_consent() {
 }
 
 #[test]
+fn dependent_resume_rejects_cycles_missing_parents_and_unconfirmed_cleanup() {
+    let temp = tempfile::tempdir().unwrap();
+    for (kind, parent_state) in [
+        ("missing", QueueState::Failed),
+        ("cycle", QueueState::Paused),
+        ("cleanup", QueueState::NeedsConfirmation),
+    ] {
+        let path = temp.path().join(format!("{kind}.json"));
+        let mut child = item("modpack", QueueState::Paused);
+        child.report.error_code = Some(DEPENDENCY_INTERRUPTED.into());
+        child.request.depends_on = Some("base".into());
+        let mut items = vec![child];
+        if kind != "missing" {
+            let mut parent = item("base", parent_state);
+            if kind == "cycle" {
+                parent.request.depends_on = Some("modpack".into());
+            }
+            items.push(parent);
+        }
+        let saved = serde_json::to_vec(&items).unwrap();
+        fs::write(&path, &saved).unwrap();
+        let queue = DownloadQueue::new(&path).unwrap();
+        let result = queue.resume("modpack");
+        if kind == "cleanup" {
+            assert!(matches!(
+                result,
+                Err(TransferError::NeedsCleanupConfirmation(_))
+            ));
+        } else {
+            assert!(matches!(result, Err(TransferError::DependencyBlocked(_))));
+        }
+        assert_eq!(fs::read(path).unwrap(), saved);
+        assert_eq!(queue.snapshot()[0].state, QueueState::Paused);
+        queue.shutdown();
+    }
+}
+
+#[test]
+fn resuming_the_game_preserves_explicit_pause_and_cancel_of_modpacks() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = item("base", QueueState::Paused);
+    let mut paused = item("paused", QueueState::Paused);
+    paused.request.depends_on = Some(base.id.clone());
+    let mut cancelled = item("cancelled", QueueState::Cancelled);
+    cancelled.request.depends_on = Some(base.id.clone());
+    cancelled.report.error_code = Some(DEPENDENCY_INTERRUPTED.into());
+    let mut waiting_when_closed = item("restored", QueueState::Waiting);
+    waiting_when_closed.request.depends_on = Some(base.id.clone());
+    pause_for_shutdown(&mut waiting_when_closed);
+    let mut grandchild = item("grandchild", QueueState::Waiting);
+    grandchild.request.depends_on = Some(waiting_when_closed.id.clone());
+    pause_for_shutdown(&mut grandchild);
+    let mut explicit_grandchild = item("explicit-grandchild", QueueState::Paused);
+    explicit_grandchild.request.depends_on = Some(waiting_when_closed.id.clone());
+    let mut blocked_by_user_pause = item("blocked-by-user-pause", QueueState::Waiting);
+    blocked_by_user_pause.request.depends_on = Some(paused.id.clone());
+    pause_for_shutdown(&mut blocked_by_user_pause);
+    let queue = DownloadQueue {
+        shared: Arc::new(Shared {
+            state: Mutex::new(state(vec![
+                base,
+                paused,
+                cancelled,
+                waiting_when_closed,
+                grandchild,
+                explicit_grandchild,
+                blocked_by_user_pause,
+            ])),
+            wake: Condvar::new(),
+            path: temp.path().join("queue.json"),
+        }),
+        worker: Mutex::new(None),
+    };
+    queue.resume("base").unwrap();
+    let states: Vec<_> = queue
+        .snapshot()
+        .into_iter()
+        .map(|item| item.state)
+        .collect();
+    assert_eq!(
+        states,
+        [
+            QueueState::Waiting,
+            QueueState::Paused,
+            QueueState::Cancelled,
+            QueueState::Waiting,
+            QueueState::Waiting,
+            QueueState::Paused,
+            QueueState::Paused,
+        ]
+    );
+}
+
+#[test]
 fn legacy_path_only_preview_is_restored_on_pause_and_cannot_be_confirmed() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("downloads.json");

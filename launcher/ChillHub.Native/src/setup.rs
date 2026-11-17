@@ -11,6 +11,40 @@ use std::{
     sync::Arc,
 };
 
+mod cleanup;
+pub use cleanup::run_uninstall_cleanup;
+
+const INSTALL_ENV: &str = "CHILLHUB_NATIVE_SETUP_INSTALL";
+const GAMES_ENV: &str = "CHILLHUB_NATIVE_SETUP_GAMES";
+
+fn engine_paths() -> Result<(PathBuf, PathBuf), String> {
+    Ok((
+        std::env::var_os(INSTALL_ENV)
+            .ok_or("Не удалось определить папку установки")?
+            .into(),
+        std::env::var_os(GAMES_ENV).unwrap_or_default().into(),
+    ))
+}
+
+fn installed_release() -> Option<String> {
+    use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ChillHub")
+        .and_then(|key| key.get_value::<String, _>("DisplayVersion"))
+        .ok()
+}
+
+fn downgrade_from(version: &str) -> Result<Option<String>, String> {
+    crate::update::version_parts(version)?;
+    Ok(installed_release().filter(|installed| {
+        crate::update::compare_release_versions(installed, version).is_ok_and(|order| order.is_gt())
+    }))
+}
+
+pub fn installed_release_is_newer(version: &str) -> Result<bool, String> {
+    downgrade_from(version).map(|downgrade| downgrade.is_some())
+}
+
 #[derive(Clone, Debug)]
 struct Request {
     removing: bool,
@@ -24,6 +58,13 @@ struct Request {
 
 impl Request {
     fn parse(args: &[String]) -> Result<Self, String> {
+        Self::parse_with_engine_paths(args, engine_paths)
+    }
+
+    fn parse_with_engine_paths(
+        args: &[String],
+        engine_paths: impl FnOnce() -> Result<(PathBuf, PathBuf), String>,
+    ) -> Result<Self, String> {
         if args.len() != 5
             || !matches!(
                 args[0].as_str(),
@@ -32,12 +73,19 @@ impl Request {
         {
             return Err("Откройте установщик Chill Hub, чтобы начать установку.".into());
         }
+        let removing = args[0].ends_with("uninstall");
+        let preview = args[0].starts_with("preview-");
+        let (install, games) = if !preview && args[2].is_empty() && args[3].is_empty() {
+            engine_paths()?
+        } else {
+            (PathBuf::from(&args[2]), PathBuf::from(&args[3]))
+        };
         let request = Self {
-            removing: args[0].ends_with("uninstall"),
-            preview: args[0].starts_with("preview-"),
+            removing,
+            preview,
             engine: args[1].clone().into(),
-            install: args[2].clone().into(),
-            games: args[3].clone().into(),
+            install,
+            games,
             version: args[4].clone(),
             allow_downgrade: false,
         };
@@ -129,6 +177,9 @@ fn engine_command(request: &Request, shortcut: bool, delete_games: bool) -> Comm
     if request.removing {
         if delete_games {
             cmd.arg("/DELETEGAMES");
+            cmd.env(cleanup::EXPECTED_GAMES_ENV, &request.games);
+        } else {
+            cmd.env_remove(cleanup::EXPECTED_GAMES_ENV);
         }
     } else {
         if request.allow_downgrade {
@@ -232,17 +283,11 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
     ui.set_version(request.version.clone().into());
     ui.set_install_path(request.install.to_string_lossy().as_ref().into());
     ui.set_games_path(request.games.to_string_lossy().as_ref().into());
-    if !request.removing && !request.preview {
-        use winreg::{RegKey, enums::HKEY_CURRENT_USER};
-        let installed = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ChillHub")
-            .and_then(|key| key.get_value::<String, _>("DisplayVersion"))
-            .unwrap_or_default();
-        if crate::update::version_parts(&installed).ok()
-            > crate::update::version_parts(&request.version).ok()
-        {
-            ui.set_downgrade_from(installed.into());
-        }
+    if !request.removing
+        && !request.preview
+        && let Some(installed) = downgrade_from(&request.version)?
+    {
+        ui.set_downgrade_from(installed.into());
     }
     ui.on_cancel(|| {
         let _ = slint::quit_event_loop();
@@ -324,14 +369,13 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
             let _ = slint::quit_event_loop();
             return;
         }
-        let paths = (|| {
-            let install = directory(ui.get_install_path().as_str())?;
-            let games = directory(ui.get_games_path().as_str())?;
-            if !request.removing {
-                validate_paths(&install, &games)?;
-            }
-            Ok::<_, String>((install, games))
-        })();
+        let delete_games = ui.get_delete_games();
+        let paths = submit_paths(
+            request.removing,
+            delete_games,
+            ui.get_install_path().as_str(),
+            ui.get_games_path().as_str(),
+        );
         let (install, games) = match paths {
             Ok(paths) => paths,
             Err(e) => {
@@ -345,7 +389,6 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
         request.install = install;
         request.games = games;
         let shortcut = ui.get_desktop_shortcut();
-        let delete_games = ui.get_delete_games();
         ui.set_busy(true);
         ui.set_error(false);
         ui.set_message("Подготавливаем файлы. Это может занять несколько минут.".into());
@@ -382,6 +425,23 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
         });
     });
     Ok(ui)
+}
+
+fn submit_paths(
+    removing: bool,
+    delete_games: bool,
+    install: &str,
+    games: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let install = directory(install)?;
+    if removing && !delete_games {
+        return Ok((install, PathBuf::from(games)));
+    }
+    let games = directory(games)?;
+    if !removing {
+        validate_paths(&install, &games)?;
+    }
+    Ok((install, games))
 }
 
 #[cfg(test)]

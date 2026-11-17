@@ -36,6 +36,25 @@ fn directory_normalization_is_idempotent_for_programmatic_manifests() {
 }
 
 #[test]
+fn temporary_file_cannot_overlap_an_implicit_manifest_directory() {
+    let manifest = Manifest {
+        files: ["game.bin", "game.bin.PART/plugin.dll"]
+            .map(|path| ManifestFile {
+                path: path.into(),
+                blake3: "a".repeat(64),
+                ..Default::default()
+            })
+            .into(),
+        ..Default::default()
+    };
+    assert!(
+        validate_manifest(&manifest)
+            .unwrap_err()
+            .contains("временным файлом")
+    );
+}
+
+#[test]
 fn manifest_path_limits_and_component_boundaries_are_enforced() {
     for length in [1023, 1024] {
         assert!(validate_relative(&"a".repeat(length)).is_ok());

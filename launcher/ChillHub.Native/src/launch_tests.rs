@@ -96,6 +96,59 @@ fn absent_exe_and_unfinished_update_cannot_be_launched() {
     );
 }
 #[test]
+fn interrupted_first_steam_mod_install_can_be_resumed_without_published_markers() {
+    let (_temp, paths, mut game, steam) = fixture();
+    fs::remove_file(steam.game_dir.join(".mods.version")).unwrap();
+    fs::write(steam.game_dir.join(".updating"), "interrupted").unwrap();
+    let options = options_with_steam(&game, &paths, Some(&steam)).unwrap();
+    let modded = options
+        .iter()
+        .find(|o| o.target == LaunchTarget::SteamModded)
+        .unwrap();
+    assert_eq!(modded.action, LaunchAction::InstallMods);
+    assert!(modded.available());
+    assert!(!modded.ready());
+    assert_eq!(
+        options
+            .iter()
+            .find(|o| o.target == LaunchTarget::SteamVanilla)
+            .unwrap()
+            .action,
+        LaunchAction::Unavailable
+    );
+    assert!(
+        LaunchService::new(paths.clone())
+            .plan_with_steam(&game, LaunchTarget::SteamModded, Some(&steam))
+            .is_err()
+    );
+    fs::write(steam.game_dir.join(".mods.version"), "pack1").unwrap();
+    assert_eq!(
+        options_with_steam(&game, &paths, Some(&steam)).unwrap()[0].action,
+        LaunchAction::RepairMods
+    );
+    game.mods.as_mut().unwrap().has_latest = false;
+    assert_eq!(
+        options_with_steam(&game, &paths, Some(&steam)).unwrap()[0].action,
+        LaunchAction::Unavailable
+    );
+}
+
+#[test]
+fn missing_steam_executable_preserves_game_folder_for_management_without_allowing_launch() {
+    let (_temp, paths, game, steam) = fixture();
+    fs::remove_file(&steam.steam_exe).unwrap();
+    for option in options_with_steam(&game, &paths, Some(&steam))
+        .unwrap()
+        .iter()
+        .filter(|option| option.target.via_steam())
+    {
+        assert_eq!(option.game_dir, steam.game_dir);
+        assert!(!option.available());
+        assert_eq!(option.note, "Steam не найден");
+        assert!(option.game_dir.join("PEAK.exe").is_file());
+    }
+}
+#[test]
 fn mods_only_and_plain_only_have_correct_supported_targets() {
     let (_temp, paths, mut game, steam) = fixture();
     game.latest_version.clear();
@@ -802,6 +855,73 @@ fn modpack_install_publishes_only_verified_inventory_and_keeps_game_plain() {
         options_with_steam(&catalog, &paths, Some(&steam)).unwrap()[0].action,
         LaunchAction::RepairMods
     );
+}
+
+#[test]
+fn modpack_presence_rereads_inventory_and_unicode_files_between_probes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let plugins = root.join("BepInEx").join("Дополнения");
+    fs::create_dir_all(&plugins).unwrap();
+    let first = plugins.join("Первый.dll");
+    let second = plugins.join("Второй.dll");
+    let inventory = root.join(".mods.manifest.json");
+    fs::write(&first, b"one").unwrap();
+    fs::write(&second, b"two").unwrap();
+    fs::write(&inventory, r#"{"files":[{"path":"BepInEx/Дополнения/Первый.dll"},{"path":"BepInEx/Дополнения/Второй.dll"},{"path":"DOORSTOP_CONFIG.INI"}]}"#).unwrap();
+    assert!(!modpack_broken(root));
+    fs::remove_file(&second).unwrap();
+    assert!(modpack_broken(root));
+    fs::write(&second, b"two").unwrap();
+    assert!(!modpack_broken(root));
+    fs::write(
+        &inventory,
+        r#"{"files":[{"path":"BepInEx/Дополнения/Третий.dll"}]}"#,
+    )
+    .unwrap();
+    assert!(modpack_broken(root));
+}
+
+#[cfg(windows)]
+#[test]
+fn modpack_presence_accepts_internal_junctions_and_rejects_replaced_outside_parents() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("game");
+    let inside = root.join("files");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&inside).unwrap();
+    fs::create_dir(&outside).unwrap();
+    for file in ["one.dll", "two.dll"] {
+        fs::write(inside.join(file), b"inside").unwrap();
+        fs::write(outside.join(file), b"outside").unwrap();
+    }
+    let inventory = root.join(".mods.manifest.json");
+    fs::write(
+        inventory,
+        r#"{"files":[{"path":"plugins/one.dll"},{"path":"plugins/two.dll"}]}"#,
+    )
+    .unwrap();
+    let link = root.join("plugins");
+    let junction = |target: &Path| {
+        let result = Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "junction fixture: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    junction(&inside);
+    assert!(!modpack_broken(&root));
+    fs::remove_dir(&link).unwrap();
+    junction(&outside);
+    assert!(modpack_broken(&root));
+    fs::remove_dir(&link).unwrap();
+    assert_eq!(fs::read(outside.join("two.dll")).unwrap(), b"outside");
 }
 
 #[test]

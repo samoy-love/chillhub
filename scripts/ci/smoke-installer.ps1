@@ -24,7 +24,8 @@ param(
     # manifests/launcher/latest.json, и именно расхождение здесь давало вечный
     # цикл самообновления в 1.0.2, 1.0.3, 1.1.7 и 1.1.8.
     [Parameter(Mandatory = $true)][string]$ExpectedVersion,
-    [string]$InstallDir
+    [string]$InstallDir,
+    [switch]$NativeCleanup
 )
 
 $ErrorActionPreference = 'Stop'
@@ -276,6 +277,9 @@ try {
     Set-Content -LiteralPath (Join-Path $staleDir 'x.dll') -Value 'мусор'
     $statusFile = Join-Path $InstallDir 'launcher.update-status'
     Set-Content -LiteralPath $statusFile -Value 'ok' -NoNewline
+    if ($NativeCleanup -and $ExpectedVersion -match '^\d+(\.\d+){1,3}$') {
+        Set-ItemProperty -Path $UninstKey -Name 'DisplayVersion' -Value "$ExpectedVersion-rc.1"
+    }
 
     $code2 = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
     Test-Assert -What "установка поверх существующей завершилась успешно" -Condition ($code2 -eq 0) -Detail "код возврата $code2"
@@ -330,6 +334,20 @@ try {
     # проверяется отсутствие всего остального, а огрызок доубирает cleanup.
     Write-Host "[smoke] тихое удаление" -ForegroundColor Cyan
     $uninstaller = Join-Path $InstallDir 'Uninstall.exe'
+    $securityJournal = Join-Path $appDataDir 'security-exclusions.json'
+    if ($NativeCleanup) {
+        $journal = '{"AddedPaths":["C:\\Games\\ChillHub"],"IntroductionShown":true}'
+        Set-Content -LiteralPath $securityJournal -Value $journal -NoNewline -Encoding utf8
+        # The unsafe configured path must fail before files, registry entries or
+        # settings disappear. With no game deletion selected, it is irrelevant.
+        $driveRoot = [IO.Path]::GetPathRoot($gamesDir)
+        Set-ItemProperty -LiteralPath $AppKey -Name 'GamesDir' -Value $driveRoot
+        $refused = Start-Process -FilePath $uninstaller -ArgumentList '/S', '/DELETEGAMES', "_?=$InstallDir" -PassThru -Wait
+        Test-Assert -What "деинсталлятор отклонил удаление корня диска" -Condition ($refused.ExitCode -ne 0)
+        Test-Assert -What "отказ оставил установленный лаунчер" -Condition (Test-Path -LiteralPath (Join-Path $InstallDir 'ChillHub.exe'))
+        Test-Assert -What "отказ оставил настройки" -Condition (Test-Path -LiteralPath $configPath)
+        Test-Assert -What "отказ оставил запись в списке программ" -Condition (Test-Path -LiteralPath $UninstKey)
+    }
     $up = Start-Process -FilePath $uninstaller -ArgumentList '/S', "_?=$InstallDir" -PassThru -Wait
     Test-Assert -What "деинсталлятор завершился успешно" -Condition ($up.ExitCode -eq 0) -Detail "код возврата $($up.ExitCode)"
 
@@ -341,7 +359,16 @@ try {
 
     # Служебные каталоги лаунчера уходят ВСЕГДА, без всяких галочек: удаление
     # программы значит удаление программы (см. секцию Uninstall у installer.nsi).
-    Test-Assert -What "%APPDATA%\ChillHub удалён вместе с лаунчером" -Condition (-not (Test-Path -LiteralPath $appDataDir)) -Detail $appDataDir
+    if ($NativeCleanup) {
+        Test-Assert -What "настройки удалены, когда папка игр недопустима для удаления" -Condition (-not (Test-Path -LiteralPath $configPath))
+        Test-Assert -What "журнал исключений сохранён без изменений" -Condition ((Get-Content -LiteralPath $securityJournal -Raw -ErrorAction SilentlyContinue) -ceq $journal)
+        if (Test-Path -LiteralPath $securityJournal) {
+            Remove-Item -LiteralPath $securityJournal
+        }
+    }
+    else {
+        Test-Assert -What "%APPDATA%\ChillHub удалён вместе с лаунчером" -Condition (-not (Test-Path -LiteralPath $appDataDir)) -Detail $appDataDir
+    }
     Test-Assert -What "%LOCALAPPDATA%\ChillHub удалён вместе с лаунчером" -Condition (-not (Test-Path -LiteralPath $localAppDataDir)) -Detail $localAppDataDir
 
     # А вот папка с играми — пользовательские данные, и без явной галочки она

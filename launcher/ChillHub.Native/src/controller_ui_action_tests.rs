@@ -55,6 +55,7 @@ fn apply_fixture_catalog(ui: &AppWindow, state: &State, offline: bool) {
             chillhub_native::net::CatalogSnapshot {
                 library: LibraryResponse { items: records },
                 offline,
+                all_entries_valid: !offline,
                 fetched_at: String::new(),
                 warning: None,
             },
@@ -73,19 +74,23 @@ pub(super) fn start_shortcut_during_catalog_refresh(
     s.toast_timer.stop();
     let seen_version = std::mem::take(&mut s.prefs.last_seen_changelog_version);
     s.shortcut = Some(ShortcutRequest {
-        game_id: "fixture".into(),
+        game_id: "FIXTURE".into(),
         target: Some(LaunchTarget::LocalModded),
         ..Default::default()
     });
     drop(s);
     apply_fixture_catalog(ui, state, true);
-    if !ui.get_operation_busy() || ui.get_game_title() != "Проверочная игра" {
-        return Err("the cached catalog did not dispatch its installed shortcut".into());
+    if ui.get_operation_busy() || ui.get_game_title() != "Проверочная игра" {
+        return Err(
+            "the cached catalog did not select its installed shortcut without launching".into(),
+        );
     }
     apply_fixture_catalog(ui, state, false);
     state.borrow_mut().prefs.last_seen_changelog_version = seen_version;
-    if ui.get_panel_kind() == "changelog" || !ui.get_operation_busy() {
-        return Err("fresh catalog interrupted the shortcut launch with release notes".into());
+    if ui.get_panel_kind() == "changelog" || ui.get_operation_busy() {
+        return Err(
+            "fresh catalog interrupted shortcut navigation with an unrelated action".into(),
+        );
     }
     Ok(())
 }
@@ -95,8 +100,7 @@ pub(super) fn check_shortcut_launch_finished(ui: &AppWindow, state: &State) -> R
     let s = state.borrow();
     if ui.get_panel_kind() == "changelog"
         || !ui.get_can_play()
-        || ui.get_toast().is_empty()
-        || ui.get_toast() == "Игра запущена"
+        || !ui.get_toast().is_empty()
         || !matches!(selected, Some((game, LaunchTarget::LocalModded)) if game.game_id == "fixture")
         || s.tasks
             .iter()

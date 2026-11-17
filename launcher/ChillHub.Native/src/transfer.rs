@@ -6,7 +6,7 @@ mod hash_cache;
 use crate::manifest::{self, DirectoryGuard, Manifest, ManifestFile, open_regular, safe_join};
 use base64::Engine as _;
 use fs2::FileExt;
-use hash_cache::HashCache;
+use hash_cache::{FileHashes, HashCache, VerifiedStamp};
 use reqwest::{
     StatusCode,
     blocking::Client,
@@ -15,9 +15,10 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    cmp::Reverse,
     collections::{HashMap, HashSet},
     fmt, fs,
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -28,6 +29,8 @@ use std::{
 use url::Url;
 
 const BUFFER: usize = 256 * 1024;
+const HASH_WORKERS: usize = 4;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_MANIFEST: u64 = 32 * 1024 * 1024;
 const PRIME: u64 = 0x100000001b3;
 
@@ -43,6 +46,7 @@ pub enum TransferError {
     AntivirusBlocked(String),
     ReplacementDeferred(String),
     PendingReplacement,
+    DependencyBlocked(&'static str),
     Busy,
     NoSpace {
         drive: String,
@@ -73,6 +77,7 @@ impl fmt::Display for TransferError {
                 f,
                 "Сначала завершите предыдущую загрузку для этой папки и повторите действие"
             ),
+            Self::DependencyBlocked(message) => f.write_str(message),
             Self::ReplacementDeferred(path) => write!(
                 f,
                 "Файл {path} занят. Закройте игру и повторите загрузку. Если это не поможет, перезагрузите компьютер: скачанный файл сохранён для замены."
@@ -197,6 +202,13 @@ pub struct TransferPlan {
     pub total_manifest_bytes: u64,
     pub hash_mismatches: usize,
     request: TransferRequest,
+}
+
+pub(crate) struct TransferInspection {
+    pub manifest: Manifest,
+    pub needs_repair: bool,
+    pub required_free_bytes: u64,
+    pub total_download_bytes: u64,
 }
 
 #[derive(Default)]
@@ -373,9 +385,37 @@ impl TransferEngine {
     pub fn plan_manifest(
         &self,
         request: &TransferRequest,
+        manifest: Manifest,
+        control: &TransferControl,
+        event: &(dyn Fn(TransferEvent) + Sync),
+    ) -> Result<TransferPlan> {
+        self.plan_files(request, manifest, control, event, true)
+    }
+
+    /// A size hint or background repair check needs only manifest-owned content.
+    /// Only planning an executable transfer scans extra files for cleanup consent.
+    pub(crate) fn inspect_manifest(
+        &self,
+        request: &TransferRequest,
+        manifest: Manifest,
+        control: &TransferControl,
+    ) -> Result<TransferInspection> {
+        let plan = self.plan_files(request, manifest, control, &|_| {}, false)?;
+        Ok(TransferInspection {
+            manifest: plan.manifest,
+            needs_repair: !plan.downloads.is_empty(),
+            required_free_bytes: plan.required_free_bytes,
+            total_download_bytes: plan.total_download_bytes,
+        })
+    }
+
+    fn plan_files(
+        &self,
+        request: &TransferRequest,
         mut manifest: Manifest,
         control: &TransferControl,
         event: &(dyn Fn(TransferEvent) + Sync),
+        include_cleanup: bool,
     ) -> Result<TransferPlan> {
         validate_request(request)?;
         manifest.normalize_empty_dirs();
@@ -394,6 +434,7 @@ impl TransferEngine {
         }
         let _guard = DirectoryGuard::acquire(&request.root, false)
             .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
+        let root_present = request.root.try_exists()?;
         let foreign = folded(&request.foreign_paths);
         let preserve = folded(&request.preserve_paths);
         let wanted: HashSet<_> = manifest
@@ -401,48 +442,91 @@ impl TransferEngine {
             .iter()
             .map(|f| f.path.to_lowercase())
             .collect();
-        let mut downloads = Vec::new();
-        let mut replaced_bytes = 0u64;
         let total_bytes = manifest
             .files
             .iter()
             .try_fold(0u64, |n, f| n.checked_add(f.size))
             .ok_or_else(|| TransferError::InvalidManifest("size overflow".into()))?;
-        let mut checked = 0u64;
-        let mut hash_mismatches = 0;
-        let mut hashes = HashCache::load(self.hash_cache_dir.as_deref(), &request.root);
-        for (index, file) in manifest.files.iter().enumerate() {
-            control.checkpoint()?;
-            if manifest::is_service_path(&file.path) || foreign.contains(&file.path.to_lowercase())
-            {
-                continue;
-            }
-            let path = path_in(&request.root, &file.path)?;
-            if !(preserve.contains(&file.path.to_lowercase()) && path.is_file())
-                && !hashes.verify(&path, file, request.force_rehash, control)?
-            {
-                if fs::metadata(&path).is_ok_and(|metadata| metadata.len() == file.size) {
-                    hash_mismatches += 1;
+        let hashes = Mutex::new(HashCache::load(
+            self.hash_cache_dir.as_deref(),
+            &request.root,
+        ));
+        let checking = Progress::new(total_bytes, manifest.files.len(), 0);
+        checking.emit(TransferStage::Checking, "", event, true);
+        let next = AtomicUsize::new(0);
+        let stopped = AtomicBool::new(false);
+        let workers = hash_worker_count().min(manifest.files.len());
+        let mut replacements = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..workers)
+                .map(|_| {
+                    scope.spawn(|| -> Result<_> {
+                        let mut replacements = Vec::new();
+                        let mut buffer = vec![0; BUFFER];
+                        let result = (|| {
+                            while !stopped.load(Ordering::Relaxed) {
+                                let index = next.fetch_add(1, Ordering::Relaxed);
+                                let Some(file) = manifest.files.get(index) else {
+                                    break;
+                                };
+                                control.checkpoint()?;
+                                let key = file.path.to_lowercase();
+                                let eligible = !manifest::is_service_path(&file.path)
+                                    && !foreign.contains(&key);
+                                if eligible && !root_present {
+                                    // No descendants can exist yet. Execute revalidates paths.
+                                    replacements.push((index, None, 0));
+                                } else if eligible {
+                                    let path = path_in(&request.root, &file.path)?;
+                                    if !(preserve.contains(&key) && path.is_file()) {
+                                        let (valid, size) = HashCache::verify(
+                                            &hashes,
+                                            &path,
+                                            file,
+                                            request.force_rehash,
+                                            control,
+                                            &mut buffer,
+                                        )
+                                        .map_err(|error| antivirus_error(error, &file.path))?;
+                                        if !valid {
+                                            replacements.push((
+                                                index,
+                                                size,
+                                                allocated_part_bytes(&path),
+                                            ));
+                                        }
+                                    }
+                                }
+                                checking.completed.fetch_add(file.size, Ordering::Relaxed);
+                                checking.files.fetch_add(1, Ordering::Relaxed);
+                                checking.emit(TransferStage::Checking, &file.path, event, false);
+                            }
+                            Ok(replacements)
+                        })();
+                        if result.is_err() {
+                            stopped.store(true, Ordering::Relaxed);
+                        }
+                        result
+                    })
+                })
+                .collect();
+            let mut replacements = Vec::new();
+            let mut error = None;
+            for worker in workers {
+                match worker.join().expect("hash worker panicked") {
+                    Ok(mut result) => replacements.append(&mut result),
+                    Err(e) => {
+                        error.get_or_insert(e);
+                    }
                 }
-                replaced_bytes = replaced_bytes
-                    .saturating_add(fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
-                downloads.push(file.clone());
             }
-            checked = checked.saturating_add(file.size);
-            event(TransferEvent {
-                stage: TransferStage::Checking,
-                current_file: file.path.clone(),
-                completed_bytes: checked,
-                total_bytes,
-                network_bytes: 0,
-                reused_bytes: 0,
-                completed_files: index + 1,
-                total_files: manifest.files.len(),
-            });
-        }
-        hashes.save();
+            error.map_or(Ok(replacements), Err)
+        })?;
+        hashes
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner())
+            .save();
         let mut to_delete = Vec::new();
-        if request.root.exists() {
+        if include_cleanup && request.root.exists() {
             let candidates = match request.scope {
                 SyncScope::OwnFilesOnly => request.previous_owned_paths.clone(),
                 SyncScope::WholeRoot => collect_files(&request.root)?,
@@ -465,7 +549,8 @@ impl TransferEngine {
                 }
                 let candidate = path_in(&request.root, &path)?;
                 if candidate.is_file()
-                    && let Some(file) = cleanup::snapshot(&candidate, &path, control)?
+                    && let Some(file) = cleanup::snapshot(&candidate, &path, control)
+                        .map_err(|error| antivirus_error(error, &path))?
                 {
                     to_delete.push(file);
                 }
@@ -473,16 +558,32 @@ impl TransferEngine {
         }
         to_delete.sort_by(|a, b| a.path.cmp(&b.path));
         to_delete.dedup_by(|a, b| a.path == b.path);
+        checking.emit(TransferStage::Checking, "", event, true);
+        replacements.sort_unstable_by_key(|(index, _, _)| *index);
+        let mut downloads = Vec::with_capacity(replacements.len());
+        let mut growth = 0u64;
+        let mut overlap = Vec::with_capacity(replacements.len());
+        let mut hash_mismatches = 0;
+        for (index, old, existing_part) in replacements {
+            let file = &manifest.files[index];
+            hash_mismatches += usize::from(old.as_ref().is_some_and(|old| old.size == file.size));
+            let old_size = old.map_or(0, |old| old.allocated);
+            let remaining = file.size.saturating_sub(existing_part);
+            growth += remaining.saturating_sub(old_size);
+            overlap.push(remaining.min(old_size));
+            downloads.push(file.clone());
+        }
         let total_download_bytes: u64 = downloads.iter().map(|f| f.size).sum();
-        let mut largest: Vec<_> = downloads.iter().map(|f| f.size).collect();
-        largest.sort_unstable_by(|a, b| b.cmp(a));
-        let temp_space: u64 = largest
+        // The same bytes move from `.part` to the final filename. Count all
+        // positive growth (shrinking files could be processed later), plus the
+        // largest overlaps while old and new files exist side by side. Credit
+        // only space already allocated to an ordinary, unshared partial file.
+        overlap.sort_unstable_by(|a, b| b.cmp(a));
+        let temp_space: u64 = overlap
             .into_iter()
             .take(request.max_parallel.clamp(1, 16))
             .sum();
-        let required_free_bytes = total_download_bytes
-            .saturating_sub(replaced_bytes)
-            .saturating_add(temp_space);
+        let required_free_bytes = growth + temp_space;
         Ok(TransferPlan {
             manifest,
             downloads,
@@ -584,15 +685,21 @@ impl TransferEngine {
             plan.downloads.len(),
             request.bytes_per_second,
         );
+        stats.emit(TransferStage::Downloading, "", event, true);
+        // Start large transfers while other workers can still handle small files.
+        // Stable ordering keeps manifest order for equal sizes and leaves the plan intact.
+        let mut downloads: Vec<_> = plan.downloads.iter().collect();
+        downloads.sort_by_key(|file| Reverse(file.size));
         let next = AtomicUsize::new(0);
         let stopped = AtomicBool::new(false);
         let error = Mutex::new(None);
         std::thread::scope(|scope| {
-            for _ in 0..request.max_parallel.clamp(1, 16).min(plan.downloads.len()) {
+            for _ in 0..request.max_parallel.clamp(1, 16).min(downloads.len()) {
                 scope.spawn(|| {
+                    let mut buffer = vec![0; BUFFER];
                     while !stopped.load(Ordering::Acquire) {
                         let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(file) = plan.downloads.get(index) else {
+                        let Some(&file) = downloads.get(index) else {
                             break;
                         };
                         if let Err(e) = self.transfer_file(
@@ -603,6 +710,7 @@ impl TransferEngine {
                             &stats,
                             event,
                             &hashes,
+                            &mut buffer,
                         ) {
                             stopped.store(true, Ordering::Release);
                             let mut saved = error.lock().unwrap_or_else(|e| e.into_inner());
@@ -690,16 +798,26 @@ impl TransferEngine {
         stats: &Progress,
         event: &(dyn Fn(TransferEvent) + Sync),
         hashes: &Mutex<HashCache>,
+        buffer: &mut [u8],
     ) -> Result<()> {
         control.checkpoint()?;
-        let destination = path_in(&request.root, &file.path)?;
+        manifest::validate_relative(&file.path).map_err(TransferError::UnsafePath)?;
+        let part_name = format!("{}.part", file.path);
+        manifest::validate_relative(&part_name).map_err(TransferError::UnsafePath)?;
+        let mut destination = request.root.clone();
+        destination.extend(file.path.split('/'));
         let parent = destination.parent().unwrap();
         let _guard = DirectoryGuard::acquire(parent, true)?;
-        let part = path_in(&request.root, &format!("{}.part", file.path))?;
+        let part = destination.with_file_name(part_name.rsplit('/').next().unwrap());
+        // Both paths have the same validated parent, held through the rename.
+        manifest::reject_link(&destination)
+            .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
+        manifest::reject_link(&part).map_err(|e| TransferError::UnsafePath(e.to_string()))?;
         let (mut ready, mut verified_stamp) =
             hash_cache::verify_for_promotion(&part, file, control)?;
         let mut credited = 0u64;
         if ready {
+            open_regular(&part, true, false, false)?.sync_all()?;
             set_credit(stats, &mut credited, file.size);
         }
         if !ready {
@@ -710,31 +828,38 @@ impl TransferEngine {
                     continue;
                 }
                 let _donor_guard = DirectoryGuard::acquire(source.parent().unwrap(), false)?;
-                if !verify_file(&source, file, control)? {
+                let mut source_file = open_regular(&source, false, false, false)?;
+                if source_file.metadata()?.len() != file.size
+                    || (fs::metadata(&part).is_ok_and(|meta| meta.len() != 0)
+                        && !verify_file(&source, file, control)?)
+                {
                     continue;
                 }
-                let mut source_file = open_regular(&source, false, false, false)?;
                 let mut out = open_regular(&part, true, true, true)?;
-                let mut buffer = vec![0; BUFFER];
-                loop {
+                let mut digests = FileHashes::new(file);
+                let mut remaining = file.size;
+                while remaining != 0 {
                     control.checkpoint()?;
-                    let n = source_file.read(&mut buffer)?;
+                    let next = remaining.min(buffer.len() as u64) as usize;
+                    let n = source_file.read(&mut buffer[..next])?;
                     if n == 0 {
                         break;
                     }
                     out.write_all(&buffer[..n])?;
+                    digests.update(&buffer[..n]);
+                    remaining -= n as u64;
                 }
-                out.sync_all()?;
-                drop(out);
-                let verified = hash_cache::verify_for_promotion(&part, file, control)?;
-                if verified.0 {
-                    verified_stamp = verified.1;
-                    stats.reused.fetch_add(file.size, Ordering::Relaxed);
-                    set_credit(stats, &mut credited, file.size);
-                    ready = true;
-                    break;
+                match digests.seal(out, &part, file, control) {
+                    Ok(stamp) => {
+                        verified_stamp = stamp;
+                        stats.reused.fetch_add(file.size, Ordering::Relaxed);
+                        set_credit(stats, &mut credited, file.size);
+                        ready = true;
+                        break;
+                    }
+                    Err(TransferError::Integrity(_)) => remove_regular(&part)?,
+                    Err(error) => return Err(error),
                 }
-                remove_regular(&part)?;
             }
         }
         let url = file_url(&request.content_base_url, &file.path)?;
@@ -753,10 +878,9 @@ impl TransferEngine {
                 &mut credited,
                 event,
             ) {
-                Ok(()) => {
-                    let verified = hash_cache::verify_for_promotion(&part, file, control)?;
-                    ready = verified.0;
-                    verified_stamp = verified.1;
+                Ok(stamp) => {
+                    ready = true;
+                    verified_stamp = stamp;
                 }
                 Err(TransferError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(TransferError::Io(error)) => return Err(TransferError::Io(error)),
@@ -768,7 +892,16 @@ impl TransferEngine {
             let mut last = None;
             for attempt in 0..3 {
                 control.checkpoint()?;
-                match self.download_whole(&url, &part, file, control, stats, &mut credited, event) {
+                match self.download_whole(
+                    &url,
+                    &part,
+                    file,
+                    control,
+                    stats,
+                    &mut credited,
+                    event,
+                    buffer,
+                ) {
                     Ok(stamp) => {
                         ready = true;
                         verified_stamp = stamp;
@@ -793,7 +926,6 @@ impl TransferEngine {
             }
         }
         control.checkpoint()?;
-        stats.emit(TransferStage::Verifying, &file.path, event, false);
         // Every successful path above has verified the complete file, including donors
         // and block reconstruction. Do not reread multi-gigabyte files a second time.
         debug_assert!(ready);
@@ -803,7 +935,6 @@ impl TransferEngine {
         {
             return Err(TransferError::Integrity(file.path.clone()));
         }
-        open_regular(&part, true, false, false)?.sync_all()?;
         if let Err(error) = atomic_replace(&part, &destination) {
             if cfg!(windows) && deferred::is_locked(&error) {
                 return deferred::save_pending(request, &part, file);
@@ -822,7 +953,7 @@ impl TransferEngine {
             fs::set_permissions(&destination, permissions)?;
         }
         stats.files.fetch_add(1, Ordering::Relaxed);
-        stats.emit(TransferStage::Downloading, &file.path, event, true);
+        stats.emit(TransferStage::Downloading, &file.path, event, false);
         Ok(())
     }
 
@@ -836,12 +967,14 @@ impl TransferEngine {
         stats: &Progress,
         credited: &mut u64,
         event: &(dyn Fn(TransferEvent) + Sync),
-    ) -> Result<Option<hash_cache::VerifiedStamp>> {
+        buffer: &mut [u8],
+    ) -> Result<Option<VerifiedStamp>> {
         let mut offset = fs::metadata(part).map(|m| m.len()).unwrap_or(0);
         if offset >= file.size && part.exists() {
             if offset == file.size {
                 let verified = hash_cache::verify_for_promotion(part, file, control)?;
                 if verified.0 {
+                    open_regular(part, true, false, false)?.sync_all()?;
                     set_credit(stats, credited, file.size);
                     return Ok(verified.1);
                 }
@@ -885,37 +1018,48 @@ impl TransferEngine {
         }
         let mut output = open_regular(part, true, true, offset == 0)?;
         output.set_len(offset)?;
-        output.seek(SeekFrom::Start(offset))?;
-        let mut buffer = vec![0; BUFFER];
-        loop {
+        let mut digests = FileHashes::new(file);
+        let mut prefix = offset;
+        while prefix != 0 {
             control.checkpoint()?;
-            let n = response
-                .read(&mut buffer)
-                .map_err(|e| TransferError::Network(e.to_string()))?;
-            if n == 0 {
-                break;
-            }
-            stats.received(n as u64, control)?;
-            if offset + n as u64 > file.size {
-                return Err(TransferError::Protocol(
-                    "response exceeds manifest size".into(),
-                ));
-            }
-            output.write_all(&buffer[..n])?;
-            offset += n as u64;
-            set_credit(stats, credited, offset);
-            stats.emit(TransferStage::Downloading, &file.path, event, false);
+            let n = prefix.min(buffer.len() as u64) as usize;
+            output.read_exact(&mut buffer[..n])?;
+            digests.update(&buffer[..n]);
+            prefix -= n as u64;
         }
-        output.sync_all()?;
-        drop(output);
+        let capacity = (file.size - offset).min(BUFFER as u64) as usize;
+        let mut output = BufWriter::with_capacity(capacity, output);
+        let result = (|| {
+            loop {
+                control.checkpoint()?;
+                let n = response
+                    .read(buffer)
+                    .map_err(|e| TransferError::Network(e.to_string()))?;
+                if n == 0 {
+                    break;
+                }
+                stats.received(n as u64, control)?;
+                if n as u64 > file.size - offset {
+                    return Err(TransferError::Protocol(
+                        "response exceeds manifest size".into(),
+                    ));
+                }
+                output.write_all(&buffer[..n])?;
+                digests.update(&buffer[..n]);
+                offset += n as u64;
+                set_credit(stats, credited, offset);
+                stats.emit(TransferStage::Downloading, &file.path, event, false);
+            }
+            Ok(())
+        })();
+        // Commit the buffered prefix even on cancellation or a broken response;
+        // the next attempt reads and hashes those bytes before appending to them.
+        let output = output.into_inner().map_err(|err| err.into_error())?;
+        result?;
         if offset != file.size {
             return Err(TransferError::Network("truncated response".into()));
         }
-        let verified = hash_cache::verify_for_promotion(part, file, control)?;
-        if !verified.0 {
-            return Err(TransferError::Integrity(file.path.clone()));
-        }
-        Ok(verified.1)
+        digests.seal(output, part, file, control)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -930,19 +1074,22 @@ impl TransferEngine {
         stats: &Progress,
         credited: &mut u64,
         event: &(dyn Fn(TransferEvent) + Sync),
-    ) -> Result<()> {
-        let mut next = blocks.verify_prefix(part, control)?;
+    ) -> Result<Option<VerifiedStamp>> {
+        let mut buffer = vec![0; blocks.block_size];
+        let mut digests = FileHashes::new(file);
+        let (mut next, output) = blocks.verify_prefix(part, &mut buffer, &mut digests, control)?;
         let mut position = blocks.offset(next);
         set_credit(stats, credited, position);
         if next == blocks.count() {
-            return Ok(());
+            return digests.seal(output.expect("verified block prefix"), part, file, control);
         }
         let offsets = blocks.find_in_old(old, control)?;
         let mut source = open_regular(old, false, false, false)?;
-        let mut output = open_regular(part, true, true, false)?;
-        output.set_len(position)?;
+        let mut output = match output {
+            Some(file) => file,
+            None => open_regular(part, true, true, true)?,
+        };
         output.seek(SeekFrom::Start(position))?;
-        let mut buffer = vec![0; blocks.block_size];
         while next < blocks.count() {
             control.checkpoint()?;
             let length = blocks.length(next);
@@ -952,6 +1099,7 @@ impl TransferEngine {
                     && blocks.matches(next, &buffer[..length])
                 {
                     output.write_all(&buffer[..length])?;
+                    digests.update(&buffer[..length]);
                     position += length as u64;
                     stats.reused.fetch_add(length as u64, Ordering::Relaxed);
                     set_credit(stats, credited, position);
@@ -1000,6 +1148,7 @@ impl TransferEngine {
                             return Err(TransferError::Integrity(file.path.clone()));
                         }
                         output.write_all(&buffer[..length])?;
+                        digests.update(&buffer[..length]);
                         position += length as u64;
                         set_credit(stats, credited, position);
                         next += 1;
@@ -1038,8 +1187,7 @@ impl TransferEngine {
                 }
             }
         }
-        output.sync_all()?;
-        Ok(())
+        digests.seal(output, part, file, control)
     }
 }
 
@@ -1123,13 +1271,19 @@ impl Blocks {
         data.len() == self.length(index)
             && Sha256::digest(data)[..8] == self.digests[index * 16 + 8..index * 16 + 16]
     }
-    fn verify_prefix(&self, path: &Path, control: &TransferControl) -> Result<usize> {
-        if !path.exists() {
-            return Ok(0);
-        }
-        let mut file = open_regular(path, true, false, false)?;
+    fn verify_prefix(
+        &self,
+        part: &Path,
+        buffer: &mut [u8],
+        digests: &mut FileHashes,
+        control: &TransferControl,
+    ) -> Result<(usize, Option<fs::File>)> {
+        let mut file = match open_regular(part, true, false, false) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((0, None)),
+            Err(error) => return Err(error.into()),
+        };
         let size = file.metadata()?.len();
-        let mut buffer = vec![0; self.block_size];
         let mut good = 0;
         while good < self.count() {
             control.checkpoint()?;
@@ -1141,10 +1295,11 @@ impl Blocks {
             if !self.matches(good, &buffer[..length]) {
                 break;
             }
+            digests.update(&buffer[..length]);
             good += 1;
         }
         file.set_len(self.offset(good))?;
-        Ok(good)
+        Ok((good, Some(file)))
     }
     fn find_in_old(&self, path: &Path, control: &TransferControl) -> Result<Vec<Option<u64>>> {
         self.find_in_old_counted(path, control, 1024 * 1024 * 1024)
@@ -1188,8 +1343,8 @@ impl Blocks {
             }
             let window = self.block_size;
             // A contiguous window avoids a full-window copy on every hash hit.
-            // Extra read-ahead is fixed, rather than four more 64 MiB blocks.
-            let mut buffer = vec![0u8; window + BUFFER];
+            let read_ahead = (window * 4).min(4 * 1024 * 1024);
+            let mut buffer = vec![0u8; window + read_ahead];
             let mut filled = read_available(&mut source, &mut buffer)?;
             if filled < window {
                 return Ok((offsets, 0));
@@ -1233,7 +1388,7 @@ impl Blocks {
                     }
                 }
                 let step = if matched || aligned_only { window } else { 1 };
-                let previous = pos;
+                let outgoing = buffer[pos];
                 pos += step;
                 if pos + window > filled {
                     let keep = filled - pos;
@@ -1245,10 +1400,10 @@ impl Blocks {
                     if filled < window {
                         break;
                     }
-                    hash = rolling(&buffer[..window]);
-                } else if step == 1 {
+                }
+                if step == 1 {
                     hash = hash
-                        .wrapping_sub((buffer[previous] as u64).wrapping_mul(factor))
+                        .wrapping_sub((outgoing as u64).wrapping_mul(factor))
                         .wrapping_mul(PRIME)
                         .wrapping_add(buffer[pos + window - 1] as u64);
                 } else {
@@ -1283,6 +1438,59 @@ fn rolling(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0u64, |hash, byte| {
         hash.wrapping_mul(PRIME).wrapping_add(*byte as u64)
     })
+}
+fn hash_worker_count() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get().min(HASH_WORKERS))
+}
+
+fn allocated_part_bytes(destination: &Path) -> u64 {
+    let mut name = destination.file_name().unwrap().to_os_string();
+    name.push(".part");
+    let part = destination.with_file_name(name);
+    let Ok(file) = open_regular(&part, false, false, false) else {
+        return 0;
+    };
+    file.metadata()
+        .map_or(0, |meta| allocated_bytes(&file, &meta))
+}
+
+fn allocated_bytes(_file: &fs::File, metadata: &fs::Metadata) -> u64 {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_COMPRESSED, FILE_ATTRIBUTE_SPARSE_FILE, FILE_STANDARD_INFO,
+            FileStandardInfo, GetFileInformationByHandleEx,
+        };
+        if metadata.file_attributes() & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE)
+            != 0
+        {
+            return 0;
+        }
+        let mut info = FILE_STANDARD_INFO::default();
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                _file.as_raw_handle().cast(),
+                FileStandardInfo,
+                (&mut info as *mut FILE_STANDARD_INFO).cast(),
+                size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+        };
+        if ok != 0 && info.NumberOfLinks == 1 {
+            return u64::try_from(info.AllocationSize)
+                .unwrap_or(0)
+                .min(metadata.len());
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() == 1 {
+            return metadata.blocks().saturating_mul(512).min(metadata.len());
+        }
+    }
+    0
 }
 fn read_available(source: &mut fs::File, buffer: &mut [u8]) -> io::Result<usize> {
     let mut read = 0;
@@ -1440,16 +1648,11 @@ pub fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
     manifest::check_no_links(destination).map_err(|e| TransferError::UnsafePath(e.to_string()))?;
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Storage::FileSystem::{
             MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
         };
-        let src: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-        let dst: Vec<u16> = destination
-            .as_os_str()
-            .encode_wide()
-            .chain(Some(0))
-            .collect();
+        let src = windows_move_path(source);
+        let dst = windows_move_path(destination);
         let replace = || unsafe {
             MoveFileExW(
                 src.as_ptr(),
@@ -1485,6 +1688,32 @@ pub fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
         fs::File::open(destination.parent().unwrap())?.sync_all()?;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_move_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let slash = u16::from(b'\\');
+    let mut wide: Vec<_> = path
+        .as_os_str()
+        .encode_wide()
+        .map(|ch| if ch == u16::from(b'/') { slash } else { ch })
+        .collect();
+    let verbatim = [slash, slash, u16::from(b'?'), slash];
+    // Rust's std::fs handles extended Windows paths internally. MoveFileExW
+    // needs the prefix supplied by us on systems without long-path opt-in.
+    if wide.len() >= 259 && !wide.starts_with(&verbatim) {
+        let mut extended = verbatim.to_vec();
+        if wide.starts_with(&[slash, slash]) {
+            extended.extend(r"UNC\".encode_utf16());
+            extended.extend(&wide[2..]);
+        } else {
+            extended.extend(&wide);
+        }
+        wide = extended;
+    }
+    wide.push(0);
+    wide
 }
 
 fn drive_label(path: &Path) -> String {
@@ -1646,12 +1875,17 @@ impl Progress {
         callback: &(dyn Fn(TransferEvent) + Sync),
         force: bool,
     ) {
-        let mut last = self.last_event.lock().unwrap_or_else(|e| e.into_inner());
-        if !force && last.elapsed() < Duration::from_millis(100) {
+        let mut last = if force {
+            self.last_event.lock().unwrap_or_else(|e| e.into_inner())
+        } else if let Ok(last) = self.last_event.try_lock() {
+            last
+        } else {
+            return;
+        };
+        if !force && last.elapsed() < PROGRESS_INTERVAL {
             return;
         }
         *last = Instant::now();
-        drop(last);
         callback(TransferEvent {
             stage,
             current_file: file.into(),

@@ -20,10 +20,14 @@ use std::{
 mod legacy;
 #[path = "update_maintenance.rs"]
 mod maintenance;
+#[cfg(windows)]
+mod security_window;
 pub use maintenance::{
     IntegrityReport, cleanup_completed_sessions, ensure_update_allowed, update_attempt_count,
     verify_installed_release,
 };
+#[cfg(all(windows, feature = "helper-ui"))]
+pub(crate) use security_window::mark_security_update_window;
 
 pub const PRESERVED: &[&str] = &[
     "config.json",
@@ -122,6 +126,12 @@ pub fn version_parts(value: &str) -> Result<[u32; 4], String> {
     Ok(parsed)
 }
 
+pub(crate) fn compare_release_versions(a: &str, b: &str) -> Result<std::cmp::Ordering, String> {
+    version_parts(a)?;
+    version_parts(b)?;
+    Ok(crate::net::compare_version_segments(a, b))
+}
+
 /// Only the configured production origin can distribute executable updates.
 pub fn trusted_url(raw: &str) -> Result<url::Url, String> {
     let url = url::Url::parse(raw).map_err(|_| "Некорректный адрес обновления")?;
@@ -143,7 +153,7 @@ pub fn check_release(
     api: &str,
     current: &str,
 ) -> Result<UpdateCheck, String> {
-    let current_parts = version_parts(current)?;
+    version_parts(current)?;
     let base = api.trim_end_matches('/');
     trusted_url(base)?;
     let response = client
@@ -155,14 +165,20 @@ pub fn check_release(
     let response = response
         .error_for_status()
         .map_err(|e| format!("Сервер обновлений недоступен: {e}"))?;
-    interpret_release(response.take(64 * 1024), base, current, current_parts)
+    let check = interpret_release(response.take(64 * 1024), base, current)?;
+    validate_offer(check, |release| {
+        trusted_url(&release.manifest_url)?;
+        let engine = TransferEngine::for_update().map_err(|e| e.to_string())?;
+        engine
+            .fetch_manifest(&release.manifest_url, &TransferControl::default())
+            .map_err(|error| format!("Не удалось получить манифест обновления: {error}"))
+    })
 }
 
 fn interpret_release(
     response: impl Read,
     base: &str,
     current: &str,
-    current_parts: [u32; 4],
 ) -> Result<UpdateCheck, String> {
     #[derive(Deserialize)]
     struct Latest {
@@ -170,7 +186,7 @@ fn interpret_release(
     }
     let latest: Latest = serde_json::from_reader(response)
         .map_err(|_| "Сервер прислал некорректный номер версии")?;
-    if version_parts(&latest.version)? <= current_parts {
+    if !compare_release_versions(&latest.version, current)?.is_gt() {
         return Ok(UpdateCheck::Current {
             current: current.into(),
             remote: latest.version,
@@ -181,6 +197,16 @@ fn interpret_release(
         content_base_url: format!("{base}/content/launcher/{}/files", latest.version),
         version: latest.version,
     }))
+}
+
+fn validate_offer(
+    check: UpdateCheck,
+    load_manifest: impl FnOnce(&UpdateRelease) -> Result<Manifest, String>,
+) -> Result<UpdateCheck, String> {
+    if let UpdateCheck::Available(release) = &check {
+        release_payload(release, &load_manifest(release)?)?;
+    }
+    Ok(check)
 }
 
 pub fn is_preserved(path: &str) -> bool {
@@ -275,6 +301,18 @@ fn normalized_payload(manifest: &Manifest) -> Result<(Vec<StagedFile>, Vec<Strin
     Ok((files, dirs))
 }
 
+fn release_payload(
+    release: &UpdateRelease,
+    manifest: &Manifest,
+) -> Result<(Vec<StagedFile>, Vec<String>), String> {
+    if manifest.version != release.version
+        || (!manifest.game_id.is_empty() && manifest.game_id != "launcher")
+    {
+        return Err("Версия пакета не совпала с выбранным обновлением".into());
+    }
+    normalized_payload(manifest)
+}
+
 pub fn stage_update(
     release: &UpdateRelease,
     paths: &UpdatePaths,
@@ -283,7 +321,7 @@ pub fn stage_update(
 ) -> Result<StagedUpdate, String> {
     paths.validate()?;
     ensure_update_allowed(paths, &release.version)?;
-    if version_parts(&release.version)? <= version_parts(env!("CARGO_PKG_VERSION"))? {
+    if !compare_release_versions(&release.version, env!("CARGO_PKG_VERSION"))?.is_gt() {
         return Err("Переход на эту версию не требуется".into());
     }
     trusted_url(&release.manifest_url)?;
@@ -303,12 +341,7 @@ fn stage_manifest(
     control: &TransferControl,
     progress: &(dyn Fn(TransferEvent) + Sync),
 ) -> Result<StagedUpdate, String> {
-    if manifest.version != release.version
-        || (!manifest.game_id.is_empty() && manifest.game_id != "launcher")
-    {
-        return Err("Версия пакета не совпала с выбранным обновлением".into());
-    }
-    let (files, empty_dirs) = normalized_payload(&manifest)?;
+    let (files, empty_dirs) = release_payload(release, &manifest)?;
     let session = paths.staging.join(uuid::Uuid::new_v4().to_string());
     let stage_lease = maintenance::StageLease::begin(paths, &session, &release.version)?;
     let payload = session.join("payload");
@@ -371,7 +404,7 @@ fn update_request(release: &UpdateRelease, payload: PathBuf) -> TransferRequest 
 
 fn validate_staged(staged: &StagedUpdate) -> Result<(), String> {
     staged.paths.validate()?;
-    if version_parts(&staged.version)? <= version_parts(&staged.current_version)? {
+    if !compare_release_versions(&staged.version, &staged.current_version)?.is_gt() {
         return Err("Обновление не повышает версию".into());
     }
     if !within(&staged.session, &staged.paths.staging)
@@ -458,6 +491,8 @@ fn launch_job(
     if !same_path(&exe, &staged.paths.install.join(LAUNCHER_NAME)) {
         return Err("Обновление доступно только для установленного ChillHub.exe".into());
     }
+    #[cfg(windows)]
+    security_window::prepare_for_update(&staged.paths.install)?;
     let job = UpdateJob {
         staged: staged.clone(),
         parent_pid: std::process::id(),

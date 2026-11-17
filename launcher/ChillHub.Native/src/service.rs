@@ -57,6 +57,7 @@ impl Services {
         );
         queue.set_speed_limit(prefs.speed_limit_mbps.max(0) as u64 * 1024 * 1024);
         let playtime = PlaytimeStore::new(&paths);
+        playtime.set_metrics_api(api.clone());
         let feedback = Arc::new(crate::feedback::FeedbackService::new(
             api.clone(),
             paths.data_dir.clone(),
@@ -73,6 +74,17 @@ impl Services {
             prefs,
         ))
     }
+    pub fn replace_api(&mut self, api: ApiClient) {
+        self.playtime.set_metrics_api(api.clone());
+        self.api = api;
+    }
+    pub fn launch_service(&self) -> launch::LaunchService {
+        launch::LaunchService {
+            paths: self.paths.clone(),
+            config: ConfigStore::new(self.paths.clone()),
+            playtime: self.playtime.clone(),
+        }
+    }
     pub fn option(&self, game: &GameRecord, target: LaunchTarget) -> Result<LaunchOption, String> {
         launch::options(game, &self.paths)?
             .into_iter()
@@ -87,17 +99,16 @@ impl Services {
         crate::integrity::check(game, &self.paths, &self.api)
     }
     pub fn maintenance_check(&self, action: &LaunchAction) -> Result<(), String> {
-        // Installed games remain playable during a network outage. A fresh positive block
-        // is authoritative; network failures never masquerade as a maintenance response.
         match self.api.maintenance() {
-            Ok(m) if blocked(&m, action) => Err(if m.message.is_empty() {
-                "На сервере идут работы. Попробуйте позже".into()
-            } else {
-                m.message
-            }),
-            Err(e) if *action != LaunchAction::Play => Err(e.to_string()),
-            _ => Ok(()),
+            Ok(state) => enforce_maintenance(&state, action),
+            Err(_) if *action == LaunchAction::Play => self.cached_launch_maintenance_check(),
+            Err(error) => Err(error.to_string()),
         }
+    }
+    pub fn cached_launch_maintenance_check(&self) -> Result<(), String> {
+        self.api.confirmed_maintenance().map_or(Ok(()), |state| {
+            enforce_maintenance(&state, &LaunchAction::Play)
+        })
     }
     pub fn enqueue_game(
         &self,
@@ -149,15 +160,18 @@ impl Services {
         } else {
             None
         };
+        let installing_bundle = needs_base && launch::read_marker(&root, ".version").is_empty();
         if needs_base {
-            let action = if launch::read_marker(&root, ".version").is_empty() {
+            let action = if installing_bundle {
                 LaunchAction::InstallGame
             } else {
                 LaunchAction::UpdateGame
             };
             self.maintenance_check(&action)?;
         }
-        if needs_mods {
+        // A first local install includes its modpack under the same install gate.
+        // Adding/updating a modpack in an existing copy remains an update operation.
+        if needs_mods && !installing_bundle {
             let action = if launch::read_marker(&root, ".mods.version").is_empty() {
                 LaunchAction::InstallMods
             } else if force {
@@ -397,7 +411,7 @@ impl Services {
         let mut estimate = DownloadEstimate::default();
         for (request, manifest) in requests {
             let plan = engine
-                .plan_manifest(&request, manifest, &control, &|_| {})
+                .inspect_manifest(&request, manifest, &control)
                 .map_err(|e| e.to_string())?;
             estimate.bytes_to_prepare = estimate
                 .bytes_to_prepare
@@ -575,6 +589,17 @@ fn delete_game_directory(library: &Path, root: &Path, game_id: &str) -> Result<(
         )
     })
 }
+fn enforce_maintenance(state: &Maintenance, action: &LaunchAction) -> Result<(), String> {
+    if !blocked(state, action) {
+        return Ok(());
+    }
+    Err(if state.message.trim().is_empty() {
+        "На сервере идут работы. Попробуйте позже".into()
+    } else {
+        state.message.clone()
+    })
+}
+
 pub fn blocked(state: &Maintenance, action: &LaunchAction) -> bool {
     state.enabled
         && match action {

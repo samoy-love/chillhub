@@ -188,12 +188,11 @@ pub fn from_live(records: &[GameRecord], seed: &[Game]) -> Vec<Game> {
         .collect()
 }
 
-pub fn filtered_indices(games: &[Game], query: &str, only_mods: bool) -> Vec<usize> {
+pub fn filtered_indices(games: &[Game], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     games
         .iter()
         .enumerate()
-        .filter(|(_, game)| !only_mods || game.has_mods)
         .filter(|(_, game)| {
             [
                 game.title.as_str(),
@@ -208,14 +207,18 @@ pub fn filtered_indices(games: &[Game], query: &str, only_mods: bool) -> Vec<usi
 }
 
 pub fn default_choice(game: &Game) -> (String, String) {
-    let source = if game.steam_supported {
-        "steam"
-    } else if game.local_supported {
+    let source = if game.local_supported {
         "local"
+    } else if game.steam_supported {
+        "steam"
     } else {
         return (String::new(), String::new());
     };
-    let mode = if game.has_mods { "mods" } else { "plain" };
+    let mode = if source == "local" && game.has_mods {
+        "mods"
+    } else {
+        "plain"
+    };
     (source.into(), mode.into())
 }
 
@@ -224,16 +227,28 @@ pub fn valid_choice(game: &Game, source: &str, mode: &str) -> (String, String) {
     if default_source.is_empty() {
         return (default_source, default_mode);
     }
-    let source = match source.trim().to_ascii_lowercase().as_str() {
+    let requested_source = source.trim().to_ascii_lowercase();
+    let source = match requested_source.as_str() {
         "steam" if game.steam_supported => "steam".into(),
         "local" if game.local_supported => "local".into(),
         _ => default_source,
     };
     let mode = match mode.trim().to_ascii_lowercase().as_str() {
         "plain" => "plain".into(),
-        "mods" if game.has_mods => "mods".into(),
+        "mods" if game.has_mods && requested_source == source => "mods".into(),
+        _ if source == "steam" => "plain".into(),
         _ => default_mode,
     };
+    (source, mode)
+}
+
+pub fn switching_source(game: &Game, choice: &(String, String), source: &str) -> (String, String) {
+    let (current_source, current_mode) = valid_choice(game, &choice.0, &choice.1);
+    let (source, mode) = valid_choice(game, source, &current_mode);
+    if source == "steam" && current_source != "steam" {
+        // Local mods are the default. Steam mods require an explicit Steam choice.
+        return (source, "plain".into());
+    }
     (source, mode)
 }
 

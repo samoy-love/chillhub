@@ -21,7 +21,7 @@ mod security_offers;
 mod settings_ui;
 mod video;
 mod window_geometry;
-use catalog::{Game, default_choice, filtered_indices, valid_choice};
+use catalog::{Game, default_choice, filtered_indices, switching_source, valid_choice};
 use chillhub_native::{
     config::{AppConfig, LaunchTarget},
     launch::{LaunchOption, ShortcutRequest},
@@ -59,7 +59,6 @@ struct AppState {
     icons: Vec<Image>,
     choices: HashMap<String, (String, String)>,
     query: String,
-    only_mods: bool,
     mod_query: String,
     mod_category: String,
     generation: u64,
@@ -97,7 +96,9 @@ struct AppState {
     library_status: HashMap<String, (String, String)>,
     pending: Option<controller::Confirmation>,
     shortcut: Option<ShortcutRequest>,
+    defer_startup_changelog: bool,
     pending_shortcuts: std::collections::VecDeque<ShortcutRequest>,
+    shortcut_installs: controller::shortcut_install::Pending,
     update: Option<chillhub_native::update::UpdateRelease>,
     offline: bool,
 }
@@ -123,7 +124,6 @@ impl AppState {
             choices: HashMap::new(),
             launching: Default::default(),
             query: String::new(),
-            only_mods: false,
             mod_query: String::new(),
             mod_category: "Все".into(),
             generation: 0,
@@ -158,7 +158,9 @@ impl AppState {
             library_status: Default::default(),
             pending: None,
             shortcut,
+            defer_startup_changelog: false,
             pending_shortcuts: Default::default(),
+            shortcut_installs: Default::default(),
             update: None,
             offline: false,
         }
@@ -194,7 +196,7 @@ fn roots(exe: &Path) -> Result<(PathBuf, PathBuf), String> {
 }
 fn refresh_library(ui: &AppWindow, state: &State) {
     let mut s = state.borrow_mut();
-    let visible = filtered_indices(&s.catalog, &s.query, s.only_mods);
+    let visible = filtered_indices(&s.catalog, &s.query);
     if visible != s.visible {
         s.visible = visible;
         let rows = s
@@ -205,6 +207,7 @@ fn refresh_library(ui: &AppWindow, state: &State) {
                 title: s.catalog[i].title.clone().into(),
                 icon: s.icons[i].clone(),
                 has_mods: s.catalog[i].has_mods,
+                status_progress: 0.,
                 status: s
                     .library_status
                     .get(&s.catalog[i].id)
@@ -229,7 +232,6 @@ fn refresh_library(ui: &AppWindow, state: &State) {
             .unwrap_or(-1),
     );
     ui.set_search(s.query.clone().into());
-    ui.set_only_mods(s.only_mods);
     drop(s);
     controller::sync_library_rows(ui, state);
 }
@@ -695,6 +697,9 @@ fn open_panel(ui: &AppWindow, state: &State, kind: &str) {
     ui.set_panel_body(body.into());
     ui.set_panel_kind(kind.into());
     controller::prepare_panel(ui, state, kind);
+    if kind == "downloads" {
+        controller::refresh_queue_rows(ui, state);
+    }
     if kind == "mods" {
         {
             let mut s = state.borrow_mut();
@@ -1046,7 +1051,7 @@ fn start_benchmark(ui: &AppWindow, state: &State, hwnd: isize) -> Result<Option<
                 ui.window().with_winit_window(|window| window.focus_window());
                 match command.phase {
                     Phase::Idle | Phase::Switch | Phase::Warmup => {
-                        state.borrow_mut().query.clear(); state.borrow_mut().only_mods = false;
+                        state.borrow_mut().query.clear();
                         let peak = state.borrow().catalog.iter().position(|g| g.id == "peak").unwrap_or(0); select_game(&ui, &state, peak);
                     },
                     Phase::Trailer => {
@@ -1107,21 +1112,6 @@ fn bind(ui: &AppWindow, state: &State) {
         state.borrow_mut().query = text.to_string();
         refresh_library(&ui, &state);
     });
-    handler!(on_mods_filter_toggled, |ui, state, enabled| {
-        state.borrow_mut().only_mods = enabled;
-        refresh_library(&ui, &state);
-        let next = {
-            let s = state.borrow();
-            if enabled && !s.visible.contains(&s.selected) {
-                s.visible.first().copied()
-            } else {
-                None
-            }
-        };
-        if let Some(index) = next {
-            select_game(&ui, &state, index);
-        }
-    });
     handler!(on_source_selected, |ui, state, source| {
         {
             let mut s = state.borrow_mut();
@@ -1132,7 +1122,7 @@ fn bind(ui: &AppWindow, state: &State) {
                 .choices
                 .entry(game.id.clone())
                 .or_insert_with(|| default_choice(&game));
-            choice.0 = source.to_string();
+            *choice = switching_source(&game, choice, source.as_str());
         }
         refresh_choice(&ui, &state);
     });

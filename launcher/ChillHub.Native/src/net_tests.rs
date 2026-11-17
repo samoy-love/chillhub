@@ -26,11 +26,11 @@ fn maintenance_defaults_and_server_clock_are_safe() {
 #[test]
 fn game_build_order_matches_legacy_numeric_segments() {
     use std::cmp::Ordering::*;
-    assert_eq!(compare_build_versions("1.10.0", "1.9.9"), Greater);
-    assert_eq!(compare_build_versions("1.2", "1.2.0"), Equal);
-    assert_eq!(compare_build_versions("1.2", "1.2-rc"), Greater);
-    assert_eq!(compare_build_versions("v1-RC", "v1-rc"), Equal);
-    assert_eq!(compare_build_versions("2.0", "release"), Greater);
+    assert_eq!(compare_version_segments("1.10.0", "1.9.9"), Greater);
+    assert_eq!(compare_version_segments("1.2", "1.2.0"), Equal);
+    assert_eq!(compare_version_segments("1.2", "1.2-rc"), Greater);
+    assert_eq!(compare_version_segments("v1-RC", "v1-rc"), Equal);
+    assert_eq!(compare_version_segments("2.0", "release"), Greater);
 }
 #[test]
 fn payload_urls_cannot_change_origin_or_include_credentials() {
@@ -62,4 +62,21 @@ fn invalid_catalog_ids_never_become_paths() {
         assert!(!safe_id(bad));
     }
     assert!(safe_id("lethal-company"));
+}
+
+#[test]
+fn partial_catalog_preserves_visible_games_without_marking_entries_complete() {
+    let valid = serde_json::json!({"gameId":"known", "title":"Known Game"});
+    let (catalog, all_entries_valid) = validate_catalog(
+        serde_json::json!({"items":[valid.clone(), {"title":"Unidentified Game"}]}),
+    )
+    .unwrap();
+    assert_eq!(catalog.items.len(), 1);
+    assert_eq!(catalog.items[0].game_id, "known");
+    assert!(!all_entries_valid);
+    assert!(
+        validate_catalog(serde_json::json!({"items":[valid]}))
+            .unwrap()
+            .1
+    );
 }

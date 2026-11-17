@@ -39,28 +39,28 @@ fn every_action_has_its_primary_button_and_library_badge() {
         (
             LaunchAction::UpdateGame,
             "Обновить",
-            "Доступно обновление",
+            "Есть обновление",
             "update",
             true,
         ),
         (
             LaunchAction::InstallMods,
             "Установить моды",
-            "Моды не установлены",
+            "Нужны моды",
             "idle",
             true,
         ),
         (
             LaunchAction::UpdateMods,
             "Обновить моды",
-            "Доступно обновление",
+            "Есть обновление",
             "update",
             true,
         ),
         (
             LaunchAction::RepairMods,
             "Восстановить моды",
-            "Нужно восстановление",
+            "Восстановить моды",
             "update",
             true,
         ),
@@ -189,4 +189,93 @@ fn version_and_playtime_match_the_selected_source_and_boundaries() {
     let steam = present(&option, &copy, &maintenance, false);
     assert_eq!(steam.installed_version, "Версией управляет Steam");
     assert_eq!(steam.playtime_label, "Сыграно 1 ч 1 мин");
+}
+
+#[test]
+fn library_falls_back_to_the_most_ready_available_copy() {
+    let preferred = LaunchTarget::SteamModded;
+    for (copies, expected) in [
+        (
+            [LaunchAction::InstallMods, LaunchAction::RepairMods],
+            "Восстановить моды",
+        ),
+        (
+            [LaunchAction::RepairMods, LaunchAction::UpdateMods],
+            "Есть обновление",
+        ),
+        (
+            [LaunchAction::UpdateGame, LaunchAction::Play],
+            "Установлена",
+        ),
+        (
+            [LaunchAction::InstallGame, LaunchAction::InstallMods],
+            "Нужны моды",
+        ),
+    ] {
+        let [first, second] = copies;
+        let options = [
+            LaunchOption {
+                target: preferred,
+                ..fixture_option(LaunchAction::Unavailable)
+            },
+            LaunchOption {
+                target: LaunchTarget::LocalModded,
+                ..fixture_option(first)
+            },
+            LaunchOption {
+                target: LaunchTarget::LocalVanilla,
+                ..fixture_option(second)
+            },
+        ];
+        assert_eq!(library_copies_label(&options, preferred, false).0, expected);
+    }
+}
+
+#[test]
+fn library_describes_installed_copies_without_changing_the_launch_choice() {
+    let make = |target, action| LaunchOption {
+        target,
+        ..fixture_option(action)
+    };
+    let options = [
+        make(LaunchTarget::SteamModded, LaunchAction::Unavailable),
+        make(LaunchTarget::SteamVanilla, LaunchAction::Unavailable),
+        make(LaunchTarget::LocalModded, LaunchAction::Play),
+        make(LaunchTarget::LocalVanilla, LaunchAction::Play),
+    ];
+    assert_eq!(
+        library_copies_label(&options, LaunchTarget::SteamModded, false),
+        ("Установлена".into(), "ready".into())
+    );
+    assert_eq!(options[0].action, LaunchAction::Unavailable);
+
+    let not_installed = [
+        make(LaunchTarget::SteamModded, LaunchAction::Unavailable),
+        make(LaunchTarget::LocalModded, LaunchAction::InstallGame),
+    ];
+    assert_eq!(
+        library_copies_label(&not_installed, LaunchTarget::SteamModded, false),
+        ("Не установлена".into(), "idle".into())
+    );
+    let steam_only = [make(LaunchTarget::SteamVanilla, LaunchAction::Play)];
+    assert_eq!(
+        library_copies_label(&steam_only, LaunchTarget::LocalVanilla, false),
+        ("Установлена".into(), "ready".into())
+    );
+    let selected_needs_repair = [
+        make(LaunchTarget::LocalModded, LaunchAction::UpdateGame),
+        make(LaunchTarget::SteamVanilla, LaunchAction::Play),
+    ];
+    assert_eq!(
+        library_copies_label(&selected_needs_repair, LaunchTarget::LocalModded, false),
+        ("Есть обновление".into(), "update".into())
+    );
+    assert_eq!(
+        library_copies_label(&selected_needs_repair, LaunchTarget::LocalModded, true),
+        ("Игра запущена".into(), "active".into())
+    );
+    assert_eq!(
+        library_copies_label(&[], LaunchTarget::LocalVanilla, false),
+        ("Копия недоступна".into(), "idle".into())
+    );
 }

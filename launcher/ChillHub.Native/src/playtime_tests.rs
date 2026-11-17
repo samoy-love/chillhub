@@ -1,4 +1,11 @@
 use super::*;
+
+fn completion_events(store: &PlaytimeStore) -> std::sync::mpsc::Receiver<CompletedSession> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    store.set_completion_handler(move |session| sender.send(session).unwrap());
+    receiver
+}
+
 #[test]
 fn preserves_legacy_and_variant_buckets() {
     let temp = tempfile::tempdir().unwrap();
@@ -40,6 +47,7 @@ fn finish_is_idempotent_and_disables_mods() {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temp.path());
     let store = PlaytimeStore::new(&paths);
+    let completion = completion_events(&store);
     fs::create_dir_all(&paths.data_dir).unwrap();
     let game = paths.game_root("peak").unwrap();
     fs::create_dir_all(&game).unwrap();
@@ -69,6 +77,14 @@ fn finish_is_idempotent_and_disables_mods() {
         .unwrap();
     store.finish(999, Some(1), Utc::now()).unwrap();
     assert_eq!(store.totals("peak").unwrap().total_seconds, 40);
+    assert_eq!(
+        completion.try_recv().unwrap(),
+        CompletedSession {
+            game_id: "peak".into(),
+            duration_ms: 40_000
+        }
+    );
+    assert!(completion.try_recv().is_err());
     assert!(
         fs::read_to_string(game.join("doorstop_config.ini"))
             .unwrap()
@@ -81,6 +97,7 @@ fn interrupted_commit_restores_loader_before_forgetting_the_session() {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temp.path());
     let store = PlaytimeStore::new(&paths);
+    let completion = completion_events(&store);
     let game = paths.game_root("peak").unwrap();
     fs::create_dir_all(&game).unwrap();
     fs::write(
@@ -90,18 +107,62 @@ fn interrupted_commit_restores_loader_before_forgetting_the_session() {
     .unwrap();
     let journal = serde_json::json!({
         "Playtime":{"peak#SteamModded":{"TotalSeconds":40,"LastSessionSeconds":40}},
-        "Pending":{},"RestoreModdedDirs":[game.to_string_lossy()]
+        "Pending":{},"RestoreModdedDirs":[game.to_string_lossy()],
+        "CompletedSession":{"game_id":"peak","duration_ms":40000},
     });
     write_json(&paths.data_dir.join("playtime.commit.json"), &journal).unwrap();
     store.recover_commit().unwrap();
     store.recover_commit().unwrap();
     assert_eq!(store.totals("peak").unwrap().total_seconds, 40);
+    assert_eq!(
+        completion.try_recv().unwrap(),
+        CompletedSession {
+            game_id: "peak".into(),
+            duration_ms: 40_000
+        }
+    );
+    assert!(completion.try_recv().is_err());
     assert!(!paths.data_dir.join("playtime.commit.json").exists());
     assert!(
         fs::read_to_string(game.join("doorstop_config.ini"))
             .unwrap()
             .contains("false")
     );
+}
+
+#[test]
+fn ended_session_recovered_after_restart_reports_persisted_playtime_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let store = PlaytimeStore::new(&paths);
+    let completion = completion_events(&store);
+    let start = Utc::now() - chrono::Duration::minutes(10);
+    let session = PendingSession {
+        game_id: "peak".into(),
+        target: Some("LocalVanilla".into()),
+        process_id: u32::MAX,
+        process_start_time_ticks: 1,
+        session_start_utc: start,
+        modded_dir: None,
+        process_creation_file_time: Some(1),
+        last_observed_utc: Some(start + chrono::Duration::seconds(183)),
+    };
+    write_json(
+        &paths.data_dir.join("playtime.sessions.json"),
+        &BTreeMap::from([(session.process_id.to_string(), session)]),
+    )
+    .unwrap();
+    assert!(store.reconcile().unwrap().is_empty());
+    assert!(store.reconcile().unwrap().is_empty());
+    assert_eq!(store.totals("peak").unwrap().total_seconds, 183);
+    assert_eq!(
+        completion.try_recv().unwrap(),
+        CompletedSession {
+            game_id: "peak".into(),
+            duration_ms: 183_000
+        }
+    );
+    assert!(completion.try_recv().is_err());
 }
 
 #[test]

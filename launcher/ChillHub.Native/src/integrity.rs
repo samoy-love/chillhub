@@ -179,8 +179,8 @@ pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<boo
             .collect(),
         ..Default::default()
     };
-    let plan = engine
-        .plan_manifest(&request, manifest, &control, &|_| {})
+    let inspection = engine
+        .inspect_manifest(&request, manifest, &control)
         .map_err(|e| e.to_string())?;
     if root.join(".updating").exists()
         || launch::read_marker(&root, ".version") != version
@@ -193,7 +193,7 @@ pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<boo
         version,
         api_base: api.base.to_string(),
         fingerprint,
-        needs_repair: !plan.downloads.is_empty(),
+        needs_repair: inspection.needs_repair,
     };
     let answer = status.needs_repair;
     remember(&root_key, status.clone());
@@ -201,7 +201,7 @@ pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<boo
         schema: 1,
         root: root_key,
         status,
-        manifest: plan.manifest,
+        manifest: inspection.manifest,
     };
     // The manifest was already limited on input; enforce the state limit while serializing too.
     let mut bytes = Bounded(Vec::new());

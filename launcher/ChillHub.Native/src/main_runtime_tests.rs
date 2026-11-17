@@ -151,10 +151,8 @@ pub(super) fn run(base: &str) {
         },
     ];
     app.icons = vec![Image::default(); app.catalog.len()];
-    app.library_status.insert(
-        "modded".into(),
-        ("Доступно обновление".into(), "active".into()),
-    );
+    app.library_status
+        .insert("modded".into(), ("Есть обновление".into(), "active".into()));
     let state = Rc::new(RefCell::new(app));
     ACTIVE_STATE.with(|slot| assert!(slot.borrow_mut().replace(state.clone()).is_none()));
     let ui = AppWindow::new().unwrap();
@@ -182,19 +180,25 @@ fn library_and_panels(ui: &AppWindow, state: &State) {
     ui.invoke_game_selected(99);
     assert_eq!(state.borrow().selected, 0);
     ui.invoke_search_edited("".into());
-    ui.invoke_mods_filter_toggled(true);
+    ui.invoke_search_edited("Игра с модами".into());
+    ui.invoke_game_selected(0);
     assert_eq!(state.borrow().selected, 1);
     assert_eq!(ui.get_selected_game(), 0);
     let game = ui.get_games().row_data(0).unwrap();
     assert_eq!(game.id, "modded");
-    assert_eq!(game.status, "Доступно обновление");
+    assert_eq!(game.status, "Есть обновление");
     assert_eq!(ui.get_game_title(), "Игра с модами");
     assert!(ui.get_has_gallery());
     assert_eq!(ui.get_media().row_count(), 4);
     assert_eq!(ui.get_media().row_data(2).unwrap().caption, "Трейлер");
 
     ui.invoke_source_selected("steam".into());
+    assert_eq!(
+        state.borrow().choices["modded"],
+        ("steam".into(), "plain".into())
+    );
     ui.invoke_mode_selected("mods".into());
+    ui.invoke_source_selected("steam".into());
     assert_eq!(
         state.borrow().choices["modded"],
         ("steam".into(), "mods".into())
@@ -295,7 +299,7 @@ fn gallery(ui: &AppWindow, state: &State) {
 
 fn hero_switch(ui: &AppWindow, state: &State) {
     assert_eq!(ui.get_hero().size().width, 6);
-    ui.invoke_mods_filter_toggled(false);
+    ui.invoke_search_edited("".into());
 
     // A catalog refresh rebinds the selection to a fresh index for the same game.
     state.borrow_mut().selected = usize::MAX;

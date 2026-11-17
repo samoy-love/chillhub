@@ -1,4 +1,27 @@
 use super::*;
+
+#[test]
+fn simultaneous_first_metrics_share_one_install_id() {
+    let temp = tempfile::tempdir().unwrap();
+    let barrier = std::sync::Barrier::new(8);
+    let ids = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    metric_install_id(temp.path())
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let id = metric_install_id(temp.path());
+    assert!(!id.is_empty());
+    assert!(ids.iter().all(|reported| reported == &id));
+}
 #[test]
 fn empty_primary_directory_does_not_hide_existing_fallback_logs() {
     let temp = tempfile::tempdir().unwrap();

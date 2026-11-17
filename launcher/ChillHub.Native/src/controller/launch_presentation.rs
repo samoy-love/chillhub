@@ -2,6 +2,7 @@
 //! The controller collects those inputs and applies the resulting presentation to Slint.
 
 use chillhub_native::{
+    config::LaunchTarget,
     launch::{LaunchAction, LaunchOption},
     net::Maintenance,
     service,
@@ -112,13 +113,51 @@ pub(super) fn library_label(action: &LaunchAction, running: bool) -> (String, St
     }
     let (text, kind) = match action {
         LaunchAction::Play => ("Установлена", "ready"),
-        LaunchAction::UpdateGame | LaunchAction::UpdateMods => ("Доступно обновление", "update"),
-        LaunchAction::RepairMods => ("Нужно восстановление", "update"),
+        LaunchAction::UpdateGame | LaunchAction::UpdateMods => ("Есть обновление", "update"),
+        LaunchAction::RepairMods => ("Восстановить моды", "update"),
         LaunchAction::InstallGame => ("Не установлена", "idle"),
-        LaunchAction::InstallMods => ("Моды не установлены", "idle"),
+        LaunchAction::InstallMods => ("Нужны моды", "idle"),
         LaunchAction::Unavailable => ("Копия недоступна", "idle"),
     };
     (text.into(), kind.into())
+}
+
+/// The library describes the game across its copies; selecting an unavailable
+/// Steam copy must not hide an installed local copy or an available download.
+pub(super) fn library_copies_label(
+    options: &[LaunchOption],
+    preferred: LaunchTarget,
+    running: bool,
+) -> (String, String) {
+    let installed = |option: &&LaunchOption| {
+        !matches!(
+            option.action,
+            LaunchAction::InstallGame | LaunchAction::Unavailable
+        )
+    };
+    let choice = options
+        .iter()
+        .find(|option| option.target == preferred && installed(option))
+        .or_else(|| {
+            options
+                .iter()
+                .filter(installed)
+                .min_by_key(|option| match option.action {
+                    LaunchAction::Play => 0,
+                    LaunchAction::UpdateGame | LaunchAction::UpdateMods => 1,
+                    LaunchAction::RepairMods => 2,
+                    _ => 3,
+                })
+        })
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| option.action == LaunchAction::InstallGame)
+        });
+    library_label(
+        &choice.map_or(LaunchAction::Unavailable, |option| option.action.clone()),
+        running,
+    )
 }
 
 #[cfg(test)]

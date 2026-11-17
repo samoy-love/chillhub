@@ -13,6 +13,7 @@ use crate::{
 use loader_session::LaunchLocks;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -73,6 +74,7 @@ fn steam_install_dir() -> Option<PathBuf> {
         RegKey,
         enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
     };
+    let mut library_root = None;
     for (hive, key, value) in [
         (
             HKEY_LOCAL_MACHINE,
@@ -89,9 +91,12 @@ fn steam_install_dir() -> Option<PathBuf> {
             if p.join("steam.exe").is_file() {
                 return Some(p);
             }
+            if p.join("steamapps").is_dir() {
+                library_root.get_or_insert(p);
+            }
         }
     }
-    None
+    library_root
 }
 #[cfg(not(windows))]
 fn steam_install_dir() -> Option<PathBuf> {
@@ -248,10 +253,23 @@ pub fn options_with_steam(
             let (action, note) = if !steam.available() {
                 (LaunchAction::Unavailable, steam.reason())
             } else if steam.game_dir.join(".updating").exists() {
-                (
-                    LaunchAction::Unavailable,
-                    "Обновление не завершено. Восстановите файлы",
-                )
+                if target.modded() && mods.has_latest {
+                    (
+                        if read_marker(&steam.game_dir, ".mods.version").is_empty()
+                            && !steam.game_dir.join(".mods.manifest.json").is_file()
+                        {
+                            LaunchAction::InstallMods
+                        } else {
+                            LaunchAction::RepairMods
+                        },
+                        "Установка модов не завершена. Восстановить моды",
+                    )
+                } else {
+                    (
+                        LaunchAction::Unavailable,
+                        "Установка не завершена. Восстановите моды в режиме «С модами»",
+                    )
+                }
             } else if resolve_game_exe(&steam.game_dir, &game.exe_relative_path, &mods.exe_names)
                 .is_err()
             {
@@ -370,15 +388,65 @@ fn manifest_paths(manifest: &serde_json::Value) -> Result<Vec<PathBuf>, String> 
 }
 
 fn modpack_broken(root: &Path) -> bool {
-    match installed_modpack_paths(root) {
-        Ok(paths) => paths
-            .into_iter()
-            .filter(|p| {
-                p.to_string_lossy().replace('\\', "/").to_lowercase() != "doorstop_config.ini"
-            })
-            .any(|p| contained_path(root, &p).map_or(true, |p| !p.is_file())),
-        Err(_) => true,
+    let Ok(paths) = installed_modpack_paths(root) else {
+        return true;
+    };
+    let mut paths = paths
+        .into_iter()
+        .filter(|path| {
+            !path
+                .as_os_str()
+                .eq_ignore_ascii_case(std::ffi::OsStr::new("doorstop_config.ini"))
+        })
+        .peekable();
+    if paths.peek().is_none() {
+        return false;
     }
+    let Ok(canonical_root) = fs::canonicalize(root) else {
+        return true;
+    };
+    let mut checked_dirs = HashSet::new();
+    for relative in paths {
+        let mut current = root.to_path_buf();
+        if let Some(parent) = relative.parent() {
+            for component in parent.components() {
+                current.push(component.as_os_str());
+                if !modpack_parent_is_contained(&current, &canonical_root, &mut checked_dirs) {
+                    return true;
+                }
+            }
+        }
+        // Check the leaf on every probe, including links and files removed after install.
+        current.push(relative.file_name().expect("validated relative path"));
+        if !fs::canonicalize(current)
+            .is_ok_and(|file| file.starts_with(&canonical_root) && file.is_file())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn modpack_parent_is_contained(
+    path: &Path,
+    canonical_root: &Path,
+    checked: &mut HashSet<PathBuf>,
+) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    let ordinary = metadata.is_dir() && !crate::manifest::is_reparse(&metadata);
+    if ordinary && checked.contains(path) {
+        return true;
+    }
+    let contained = fs::canonicalize(path)
+        .is_ok_and(|parent| parent.starts_with(canonical_root) && parent.is_dir());
+    // Recheck metadata before reusing a directory. Reparse points always need
+    // to be resolved, and this set never survives the current readiness probe.
+    if contained && ordinary {
+        checked.insert(path.to_path_buf());
+    }
+    contained
 }
 
 /// Call only after the entire modpack has passed verification and been committed by transfer.

@@ -133,6 +133,38 @@ fn setup_rejects_root_relative_and_command_injection_paths() {
 }
 
 #[test]
+fn gui_setup_reads_root_and_trailing_separator_from_engine_environment() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = root.path().join("Chill Hub Setup.exe");
+    std::fs::write(&engine, b"test executable").unwrap();
+    let install = PathBuf::from(r"C:\Launcher with spaces\");
+    let games = PathBuf::from(r"D:\");
+    for mode in ["install", "uninstall"] {
+        let args = [mode, engine.to_str().unwrap(), "", "", "1.8.10"].map(str::to_owned);
+        let request =
+            Request::parse_with_engine_paths(&args, || Ok((install.clone(), games.clone())))
+                .unwrap();
+        assert_eq!(request.engine, engine);
+        assert_eq!(request.install.as_os_str(), install.as_os_str());
+        assert_eq!(request.games.as_os_str(), games.as_os_str());
+        assert_eq!(request.removing, mode == "uninstall");
+    }
+}
+
+#[test]
+fn keeping_games_does_not_validate_the_previous_library() {
+    let root = tempfile::tempdir().unwrap();
+    let install = root.path().join("chillhub");
+    for path in ["", "drive-relative", "C:\\", "\\\\unavailable\\library"] {
+        let (checked_install, untouched_games) =
+            submit_paths(true, false, install.to_str().unwrap(), path).unwrap();
+        assert_eq!(checked_install, install);
+        assert_eq!(untouched_games, Path::new(path));
+    }
+    assert!(submit_paths(true, true, install.to_str().unwrap(), "C:\\").is_err());
+}
+
+#[test]
 fn setup_rejects_existing_files_and_the_windows_directory() {
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join("not a folder.txt");
@@ -211,6 +243,9 @@ fn real_setup_requires_an_existing_absolute_engine_and_passes_removal_options() 
             format!("_?={}", install.display())
         ]
     );
+    assert!(command.get_envs().any(|(name, value)| {
+        name == cleanup::EXPECTED_GAMES_ENV && value == Some(request.games.as_os_str())
+    }));
     let keep = engine_command(&request, true, false);
     assert!(!keep.get_args().any(|arg| arg == "/DELETEGAMES"));
     assert!(

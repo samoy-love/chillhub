@@ -17,4 +17,4 @@ $package = & (Join-Path $repo 'launcher/ChillHub.Native/package.ps1') -SkipBuild
 $manifest = Get-Content -LiteralPath $package.manifest -Raw | ConvertFrom-Json
 & (Join-Path $repo 'scripts/native-installer.ps1') -PackageManifest $package.manifest -FastCompress
 $info = Get-Content -LiteralPath (Join-Path (Split-Path $package.manifest) 'installer-info.json') -Raw | ConvertFrom-Json
-& (Join-Path $repo 'scripts/ci/smoke-installer.ps1') -Setup $info.installer -ExpectedVersion $manifest.version
+& (Join-Path $repo 'scripts/ci/smoke-installer.ps1') -Setup $info.installer -ExpectedVersion $manifest.version -NativeCleanup

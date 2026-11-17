@@ -741,6 +741,7 @@ SectionEnd
 ;
 ; Проверка «родитель» требует, чтобы следующим символом был разделитель:
 ; иначе путь D:\Games ложно совпал бы с защищённым D:\GamesData.
+!ifndef NATIVE_CLIENT
 !macro _UN_REJECT_IF Protected Reason
   ${If} $R1 == "ok"
   ${AndIf} "${Protected}" != ""
@@ -852,6 +853,45 @@ FunctionEnd
     MessageBox MB_ICONINFORMATION "Папка с играми не была удалена. Вы можете удалить её вручную: $Un_GamesDir" /SD IDOK
   ${EndIf}
 !macroend
+!endif
+
+!ifdef NATIVE_CLIENT
+!macro _NATIVE_SETUP_PATHS GamesPath ErrorLabel
+  ; Keep trailing backslashes and spaces out of Windows argument parsing.
+  StrCpy $2 "$INSTDIR"
+  System::Call 'kernel32::SetEnvironmentVariableW(w "CHILLHUB_NATIVE_SETUP_INSTALL", w r2) i.r3'
+  StrCmp $3 0 ${ErrorLabel}
+  StrCpy $2 "${GamesPath}"
+  System::Call 'kernel32::SetEnvironmentVariableW(w "CHILLHUB_NATIVE_SETUP_GAMES", w r2) i.r3'
+  StrCmp $3 0 ${ErrorLabel}
+!macroend
+
+Function un.PrepareNativeHelper
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  ClearErrors
+  File /oname=ChillHub.Setup.exe "${PAYLOAD_DIR}\ChillHub.Updater.exe"
+  IfErrors native_helper_error
+  !insertmacro _NATIVE_SETUP_PATHS "$Un_GamesDir" native_helper_error
+  Return
+native_helper_error:
+  SetErrors
+FunctionEnd
+
+Function un.NativeCleanup
+  Call un.PrepareNativeHelper
+  IfErrors native_cleanup_error
+  ClearErrors
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-cleanup $DeleteGames_State' $3
+  IfErrors native_cleanup_error
+  StrCmp $3 0 native_cleanup_done
+native_cleanup_error:
+  SetErrorLevel 2
+  MessageBox MB_ICONSTOP "Не удалось безопасно завершить удаление. Проверьте папки и закройте запущенные игры." /SD IDOK
+  Abort
+native_cleanup_done:
+FunctionEnd
+!endif
 
 Section "Uninstall"
   ; Работающий лаунчер не даст удалить свой .exe: без этой проверки удаление
@@ -864,6 +904,9 @@ Section "Uninstall"
   ExecWait '"$INSTDIR\ChillHub.SecurityHelper.exe" --remove'
 security_cleanup_done:
   Call un.EnsureSecurityClosed
+!ifdef NATIVE_CLIENT
+  Call un.NativeCleanup
+!endif
 
   ; Remove Start Menu shortcuts (per-user)
   Delete "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk"
@@ -895,7 +938,11 @@ security_cleanup_done:
   ; переустановку, это ожидаемое поведение. Полная очистка — ручная, и это
   ; сознательный выбор: молча стирать настройки при удалении приложения хуже,
   ; чем оставить небольшой JSON.
+!ifdef NATIVE_CLIENT
+  RMDir "$INSTDIR"
+!else
   RMDir /r "$INSTDIR"
+!endif
 
   ; Remove registry uninstall entry
   DeleteRegKey HKCU "${UNINST_KEY}"
@@ -919,6 +966,7 @@ security_cleanup_done:
   ; %APPDATA%\ChillHub — конфиг, очередь отчётов, каталог данных WebView2
   ; (Core/News/NewsWebViewStorage.cs кладёт его именно сюда, чтобы его не
   ; сносило самообновление).
+!ifndef NATIVE_CLIENT
   RMDir /r "$APPDATA\${APP_NAME}"
 
   ; %LOCALAPPDATA%\ChillHub — каталог установки ПО УМОЛЧАНИЮ, и при обычной
@@ -932,6 +980,7 @@ security_cleanup_done:
 
   ; Ask-delete games folder per user's choice (from custom page)
   !insertmacro _DELETE_GAMES_IF_CHECKED
+!endif
 
 SectionEnd
 
@@ -988,15 +1037,17 @@ Function .onInit
   IfSilent native_setup_worker
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File /oname=ChillHub.Setup.exe "${PAYLOAD_DIR}\ChillHub.Updater.exe"
   ClearErrors
-  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui install "$EXEPATH" "$INSTDIR" "$GAMES_DIR" "${APP_VERSION}"' $R3
-  ${If} ${Errors}
-    MessageBox MB_ICONSTOP "Не удалось открыть установщик. Скачайте Chill Hub заново."
-    SetErrorLevel 1
-  ${Else}
-    SetErrorLevel $R3
-  ${EndIf}
+  File /oname=ChillHub.Setup.exe "${PAYLOAD_DIR}\ChillHub.Updater.exe"
+  IfErrors native_setup_start_failed
+  !insertmacro _NATIVE_SETUP_PATHS "$GAMES_DIR" native_setup_start_failed
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui install "$EXEPATH" "" "" "${APP_VERSION}"' $R3
+  IfErrors native_setup_start_failed
+  SetErrorLevel $R3
+  Quit
+native_setup_start_failed:
+  MessageBox MB_ICONSTOP "Не удалось открыть установщик. Скачайте Chill Hub заново."
+  SetErrorLevel 1
   Quit
 native_setup_worker:
 !endif
@@ -1012,8 +1063,19 @@ native_setup_worker:
   ; ошибка, и совершать её молча — худший из вариантов.
   ReadRegStr $0 HKCU "${UNINST_KEY}" "DisplayVersion"
   ${If} $0 != ""
+!ifdef NATIVE_CLIENT
+    InitPluginsDir
+    SetOutPath "$PLUGINSDIR"
+    ClearErrors
+    File /oname=ChillHub.Setup.exe "${PAYLOAD_DIR}\ChillHub.Updater.exe"
+    IfErrors native_setup_compare_failed
+    ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-compare-installed "${APP_VERSION}"' $1
+    IfErrors native_setup_compare_failed
+    IntCmp $1 2 native_setup_compare_failed 0 native_setup_compare_failed
+!else
     ; 0 — равны, 1 — установленная новее, 2 — устанавливаемая новее.
     ${VersionCompare} "$0" "${APP_VERSION}" $1
+!endif
     ${If} $1 == 1
 !ifdef NATIVE_CLIENT
       ${GetParameters} $R0
@@ -1025,6 +1087,9 @@ native_setup_worker:
       MessageBox MB_YESNO|MB_ICONEXCLAMATION \
         "Установлена версия $0, а этот установщик ставит ${APP_VERSION} — более старую.$\r$\n$\r$\nПродолжить и откатить ${APP_TITLE} до ${APP_VERSION}?" \
         /SD IDNO IDYES continue
+!ifdef NATIVE_CLIENT
+      SetErrorLevel 1
+!endif
       Abort
     ${EndIf}
   ${EndIf}
@@ -1035,7 +1100,13 @@ continue:
   ; уже ПОСЛЕ клика. Пользователю Windows 11, где рантайм предустановлен,
   ; предлагали доустановить то, что у него есть, — и он либо тратил время, либо
   ; снимал галочку, гадая, не сломает ли этим новости.
-!ifndef NATIVE_CLIENT
+!ifdef NATIVE_CLIENT
+  Return
+native_setup_compare_failed:
+  SetErrorLevel 2
+  MessageBox MB_ICONSTOP "Не удалось проверить установленную версию Chill Hub." /SD IDOK
+  Abort
+!else
   Call DetectWebView2
 !endif
 FunctionEnd
@@ -1393,19 +1464,20 @@ Function un.onInit
   ; Both UI and engine run outside the installation, so no executable holds
   ; the directory being removed. _?= prevents a second asynchronous copy.
   ClearErrors
-  CopyFiles /SILENT "$INSTDIR\ChillHub.Updater.exe" "$PLUGINSDIR\ChillHub.Setup.exe"
+  Call un.PrepareNativeHelper
+  IfErrors native_uninstall_failed
   CopyFiles /SILENT "$EXEPATH" "$PLUGINSDIR\UninstallWorker.exe"
-  ${If} ${Errors}
-    MessageBox MB_ICONSTOP "Не удалось открыть удаление. Переустановите Chill Hub и попробуйте снова."
-    SetErrorLevel 1
-    Quit
-  ${EndIf}
-  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui uninstall "$PLUGINSDIR\UninstallWorker.exe" "$INSTDIR" "$Un_GamesDir" "${APP_VERSION}"' $R3
+  IfErrors native_uninstall_failed
+  ExecWait '"$PLUGINSDIR\ChillHub.Setup.exe" --setup-ui uninstall "$PLUGINSDIR\UninstallWorker.exe" "" "" "${APP_VERSION}"' $R3
   ${If} ${Errors}
     SetErrorLevel 1
   ${Else}
     SetErrorLevel $R3
   ${EndIf}
+  Quit
+native_uninstall_failed:
+  MessageBox MB_ICONSTOP "Не удалось открыть удаление. Переустановите Chill Hub и попробуйте снова."
+  SetErrorLevel 1
   Quit
 native_uninstall_worker:
 !endif

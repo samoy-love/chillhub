@@ -9,6 +9,18 @@ pub struct Orphan {
     pub id: String,
     pub path: PathBuf,
 }
+/// Only a successful, nonempty live catalogue can authorize orphan classification.
+/// A cached/empty response must never turn installed games into deletion candidates.
+pub fn confirmed_orphans(
+    paths: &AppPaths,
+    snapshot: &crate::net::CatalogSnapshot,
+) -> Result<Vec<Orphan>, String> {
+    if snapshot.offline || !snapshot.all_entries_valid || snapshot.library.items.is_empty() {
+        return Err("Не удалось подтвердить актуальный каталог. Удаление недоступно; попробуйте снова после подключения к серверу.".into());
+    }
+    orphaned(paths, &snapshot.library.items)
+}
+
 pub fn orphaned(paths: &AppPaths, published: &[GameRecord]) -> Result<Vec<Orphan>, String> {
     if !paths.games_dir.exists() {
         return Ok(vec![]);

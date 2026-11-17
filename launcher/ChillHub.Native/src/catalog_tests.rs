@@ -74,18 +74,18 @@ fn live_video_qualities_reach_player_without_losing_attribution() {
 #[test]
 fn library_search_matches_title_genre_and_modpack() {
     let games = actual_catalog();
-    assert_eq!(filtered_indices(&games, "  lEtHaL  ", false), [1]);
-    assert_eq!(filtered_indices(&games, "PEAKFRIENDS", true), [0]);
-    assert!(filtered_indices(&games, "ВОСХОЖДЕНИЕ", false).contains(&0));
-    assert_eq!(filtered_indices(&games, "", true), [0, 1, 5, 6]);
-    assert!(filtered_indices(&games, "bombanana", true).is_empty());
-    assert!(filtered_indices(&games, "missing game", false).is_empty());
+    assert_eq!(filtered_indices(&games, "  lEtHaL  "), [1]);
+    assert_eq!(filtered_indices(&games, "PEAKFRIENDS"), [0]);
+    assert!(filtered_indices(&games, "ВОСХОЖДЕНИЕ").contains(&0));
+    assert_eq!(filtered_indices(&games, "").len(), games.len());
+    assert_eq!(filtered_indices(&games, "bombanana").len(), 1);
+    assert!(filtered_indices(&games, "missing game").is_empty());
 }
 
 #[test]
 fn all_four_launch_choices_survive_when_available() {
     let game = &actual_catalog()[0];
-    assert_eq!(default_choice(game), ("steam".into(), "mods".into()));
+    assert_eq!(default_choice(game), ("local".into(), "mods".into()));
     for source in ["steam", "local"] {
         for mode in ["mods", "plain"] {
             assert_eq!(
@@ -98,6 +98,23 @@ fn all_four_launch_choices_survive_when_available() {
         valid_choice(game, "unknown", "unknown"),
         default_choice(game)
     );
+}
+
+#[test]
+fn steam_defaults_to_vanilla_preserving_an_existing_explicit_modded_choice() {
+    let mut game = actual_catalog().remove(0);
+    assert_eq!(
+        switching_source(&game, &default_choice(&game), "steam"),
+        ("steam".into(), "plain".into())
+    );
+    let steam_mods = valid_choice(&game, "steam", "mods");
+    assert_eq!(switching_source(&game, &steam_mods, "steam"), steam_mods);
+    assert_eq!(
+        valid_choice(&game, "steam", ""),
+        ("steam".into(), "plain".into())
+    );
+    game.local_supported = false;
+    assert_eq!(default_choice(&game), ("steam".into(), "plain".into()));
 }
 
 #[test]
@@ -120,7 +137,7 @@ fn unavailable_source_and_modpack_are_normalized() {
     game.steam_supported = true;
     assert_eq!(
         valid_choice(&game, "local", "mods"),
-        ("steam".into(), "mods".into())
+        ("steam".into(), "plain".into())
     );
     assert_eq!(
         valid_choice(&game, " STEAM ", "PLAIN"),

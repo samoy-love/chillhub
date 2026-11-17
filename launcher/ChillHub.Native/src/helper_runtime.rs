@@ -30,7 +30,6 @@ pub fn style_window(window: &slint::Window) -> isize {
 fn style_handle(handle: &slint::WindowHandle) -> isize {
     #[cfg(windows)]
     {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         #[link(name = "dwmapi", kind = "raw-dylib")]
         unsafe extern "system" {
             fn DwmSetWindowAttribute(
@@ -40,10 +39,8 @@ fn style_handle(handle: &slint::WindowHandle) -> isize {
                 size: u32,
             ) -> i32;
         }
-        if let Ok(handle) = handle.window_handle()
-            && let RawWindowHandle::Win32(handle) = handle.as_raw()
-        {
-            let hwnd = handle.hwnd.get();
+        let hwnd = native_hwnd(handle);
+        if hwnd != 0 {
             unsafe {
                 DwmSetWindowAttribute(hwnd, 20, &1, 4);
             }
@@ -51,6 +48,33 @@ fn style_handle(handle: &slint::WindowHandle) -> isize {
         }
     }
     0
+}
+
+#[cfg(windows)]
+fn native_hwnd(handle: &slint::WindowHandle) -> isize {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    if let Ok(handle) = handle.window_handle()
+        && let RawWindowHandle::Win32(handle) = handle.as_raw()
+    {
+        handle.hwnd.get()
+    } else {
+        0
+    }
+}
+
+pub fn mark_security_window(window: &slint::Window) {
+    #[cfg(windows)]
+    {
+        let handle = window.window_handle();
+        let mark = move || crate::update::mark_security_update_window(native_hwnd(&handle));
+        if !mark() {
+            slint::Timer::single_shot(std::time::Duration::from_millis(80), move || {
+                mark();
+            });
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = window;
 }
 
 #[derive(Clone, Copy)]

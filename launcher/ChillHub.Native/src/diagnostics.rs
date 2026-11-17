@@ -658,18 +658,7 @@ pub fn metric(api: &ApiClient, data: &Path, event: Metric) {
     let api = api.clone();
     let data = data.to_owned();
     std::thread::spawn(move || {
-        let path = data.join("install-id");
-        let id = fs::read_to_string(&path)
-            .ok()
-            .and_then(|v| uuid::Uuid::parse_str(v.trim()).ok())
-            .or_else(|| {
-                let id = uuid::Uuid::new_v4();
-                atomic_write(&path, id.to_string().as_bytes())
-                    .ok()
-                    .map(|_| id)
-            })
-            .map(|id| id.simple().to_string())
-            .unwrap_or_default();
+        let id = metric_install_id(&data);
         let id = if setting == "test" {
             format!("test-{id}")
         } else {
@@ -680,7 +669,7 @@ pub fn metric(api: &ApiClient, data: &Path, event: Metric) {
         };
         body["installId"] = id.into();
         body["appVersion"] = env!("CARGO_PKG_VERSION").into();
-        body["os"] = std::env::consts::OS.into();
+        body["os"] = os_version().into();
         if let Ok(endpoint) = api.resolve("metrics/report") {
             let _ = api
                 .client
@@ -690,6 +679,24 @@ pub fn metric(api: &ApiClient, data: &Path, event: Metric) {
                 .send();
         }
     });
+}
+
+fn metric_install_id(data: &Path) -> String {
+    // Startup can send several events before the installation ID exists.
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = data.join("install-id");
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|value| uuid::Uuid::parse_str(value.trim()).ok())
+        .or_else(|| {
+            let id = uuid::Uuid::new_v4();
+            atomic_write(&path, id.to_string().as_bytes())
+                .ok()
+                .map(|_| id)
+        })
+        .map(|id| id.simple().to_string())
+        .unwrap_or_default()
 }
 #[cfg(test)]
 #[path = "diagnostics_tests.rs"]

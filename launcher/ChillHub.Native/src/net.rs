@@ -5,6 +5,7 @@ use std::{
     fmt, fs,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use url::Url;
@@ -16,6 +17,7 @@ pub struct ApiClient {
     pub client: Client,
     pub base: Url,
     diagnostic_dir: Option<PathBuf>,
+    confirmed_maintenance: Arc<Mutex<Option<Maintenance>>>,
 }
 
 #[derive(Debug)]
@@ -113,6 +115,8 @@ struct CatalogCache {
 pub struct CatalogSnapshot {
     pub library: LibraryResponse,
     pub offline: bool,
+    /// Whether every row in the live response could identify a published game.
+    pub all_entries_valid: bool,
     pub fetched_at: String,
     pub warning: Option<String>,
 }
@@ -149,6 +153,7 @@ impl ApiClient {
             client,
             base,
             diagnostic_dir: None,
+            confirmed_maintenance: Default::default(),
         })
     }
 
@@ -244,7 +249,7 @@ impl ApiClient {
             .json_with_timeout::<serde_json::Value>("api/games", Duration::from_secs(8))
             .and_then(validate_catalog)
         {
-            Ok(mut response) => {
+            Ok((mut response, all_entries_valid)) => {
                 // A local build can remain published while latest.json is absent.
                 // Match the original GamePage's fallback without treating mods-only
                 // entries as locally downloadable games. Keep the worker bounded.
@@ -279,7 +284,9 @@ impl ApiClient {
                     response: response.clone(),
                 };
                 // Never replace a known offline catalog with unresolved build metadata.
-                let warning = if incomplete {
+                let warning = if !all_entries_valid {
+                    Some("Сервер вернул неполный каталог. Показаны доступные игры.".into())
+                } else if incomplete {
                     Some("Для части игр не удалось получить список версий. Обновите каталог чуть позже.".into())
                 } else {
                     serde_json::to_vec(&cache)
@@ -293,6 +300,7 @@ impl ApiClient {
                 Ok(CatalogSnapshot {
                     library: response,
                     offline: false,
+                    all_entries_valid,
                     fetched_at,
                     warning,
                 })
@@ -315,10 +323,11 @@ impl ApiClient {
         let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
         let fetched_at = value.get("fetched_at")?.as_str()?.to_owned();
         chrono::DateTime::parse_from_rfc3339(&fetched_at).ok()?;
-        let library = validate_catalog(value.get("response")?.clone()).ok()?;
+        let (library, _) = validate_catalog(value.get("response")?.clone()).ok()?;
         Some(CatalogSnapshot {
             library,
             offline: true,
+            all_entries_valid: false,
             fetched_at,
             warning: Some(
                 "Показана сохранённая библиотека. Установленные игры доступны без сети.".into(),
@@ -326,7 +335,30 @@ impl ApiClient {
         })
     }
     pub fn maintenance(&self) -> Result<Maintenance, ApiError> {
-        self.json_with_timeout("api/maintenance", Duration::from_secs(5))
+        let value: serde_json::Value =
+            self.json_with_timeout("api/maintenance", Duration::from_secs(5))?;
+        if !value
+            .get("enabled")
+            .is_some_and(|enabled| enabled.is_boolean())
+        {
+            return Err(ApiError::Invalid(
+                "Сервер вернул неполный статус технических работ.".into(),
+            ));
+        }
+        let state: Maintenance = serde_json::from_value(value).map_err(|_| {
+            ApiError::Invalid("Сервер вернул повреждённый статус технических работ.".into())
+        })?;
+        *self
+            .confirmed_maintenance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(state.clone());
+        Ok(state)
+    }
+    pub(crate) fn confirmed_maintenance(&self) -> Option<Maintenance> {
+        self.confirmed_maintenance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub fn builds(&self, game_id: &str) -> Result<Vec<String>, ApiError> {
         self.builds_with_timeout(game_id, Duration::from_secs(25))
@@ -351,7 +383,7 @@ impl ApiClient {
             .map(|v| v.trim().to_owned())
             .filter(|v| crate::config::valid_version(v))
             .collect::<Vec<_>>();
-        items.sort_by(|a, b| compare_build_versions(b, a));
+        items.sort_by(|a, b| compare_version_segments(b, a));
         items.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         Ok(items)
     }
@@ -387,9 +419,8 @@ impl ApiClient {
 }
 
 // Same segment ordering as C# VersionOrder: numeric segments sort above text,
-// absent segments are zero, separators are '.', '-', '_' and '+'. This is game
-// build ordering, deliberately separate from strict launcher update versions.
-fn compare_build_versions(a: &str, b: &str) -> std::cmp::Ordering {
+// absent segments are zero, separators are '.', '-', '_' and '+'.
+pub(crate) fn compare_version_segments(a: &str, b: &str) -> std::cmp::Ordering {
     let left = a.split(['.', '-', '_', '+']).collect::<Vec<_>>();
     let right = b.split(['.', '-', '_', '+']).collect::<Vec<_>>();
     fn number(value: &str) -> Option<i64> {
@@ -415,7 +446,7 @@ fn compare_build_versions(a: &str, b: &str) -> std::cmp::Ordering {
     std::cmp::Ordering::Equal
 }
 
-fn validate_catalog(value: serde_json::Value) -> Result<LibraryResponse, ApiError> {
+fn validate_catalog(value: serde_json::Value) -> Result<(LibraryResponse, bool), ApiError> {
     if !value.get("items").is_some_and(|items| items.is_array()) {
         return Err(ApiError::Invalid(
             "Сервер вернул неполный каталог игр.".into(),
@@ -436,7 +467,8 @@ fn validate_catalog(value: serde_json::Value) -> Result<LibraryResponse, ApiErro
             "В каталоге сервера нет корректных записей игр.".into(),
         ));
     }
-    Ok(response)
+    let all_entries_valid = original_count == response.items.len();
+    Ok((response, all_entries_valid))
 }
 
 pub fn safe_id(value: &str) -> bool {

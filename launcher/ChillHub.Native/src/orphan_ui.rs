@@ -82,16 +82,22 @@ pub(super) fn after_panel_closed(ui: &AppWindow, state: &State) {
 
 pub(super) fn prepare(ui: &AppWindow, state: &State) {
     state.borrow_mut().orphan_notice.pending = false;
-    let (services, records, generation) = {
+    let (services, generation) = {
         let s = state.borrow();
-        (s.services.clone(), s.records.clone(), s.catalog_generation)
+        (s.services.clone(), s.catalog_generation)
     };
     ui.set_orphans(ModelRc::default());
     ui.set_orphan_selection_count(0);
     ui.set_panel_body("Ищем установленные игры, которых больше нет в каталоге…".into());
     controller::background(
         ui,
-        move || chillhub_native::library::orphaned(&services.paths, &records),
+        move || {
+            let snapshot = services
+                .api
+                .catalog(&services.paths.data_dir.join("cache"))
+                .map_err(|e| e.to_string())?;
+            chillhub_native::library::confirmed_orphans(&services.paths, &snapshot)
+        },
         move |ui, state, result| {
             if ui.get_panel_kind() != "orphans" || state.borrow().catalog_generation != generation {
                 return;
@@ -166,7 +172,6 @@ pub(super) fn confirm_selected(ui: &AppWindow, state: &State) {
 
 pub(super) fn delete_selected(ui: &AppWindow, state: &State, rows: Vec<OrphanRow>) {
     let services = state.borrow().services.clone();
-    let records = state.borrow().records.clone();
     ui.set_panel_kind("orphans".into());
     ui.set_panel_title("Удаление выбранных игр".into());
     ui.set_panel_body("Удаляем только подтверждённые папки. Дождитесь результата.".into());
@@ -184,7 +189,12 @@ pub(super) fn delete_selected(ui: &AppWindow, state: &State, rows: Vec<OrphanRow
         move || {
             let mut results = Vec::new();
             for (i, (id, path)) in requested.into_iter().enumerate() {
-                let result=chillhub_native::library::orphaned(&services.paths,&records).and_then(|current|{
+                // Re-fetch immediately before every deletion: the game may have
+                // been republished while the confirmation was open.
+                let result=services.api.catalog(&services.paths.data_dir.join("cache"))
+                    .map_err(|e| e.to_string())
+                    .and_then(|snapshot| chillhub_native::library::confirmed_orphans(&services.paths, &snapshot))
+                    .and_then(|current|{
                 if !current.iter().any(|r|r.id==id&&r.path==path){return Err("Папка изменилась или игра снова есть в каталоге. Удаление пропущено.".into());}
                 services.delete_local(&GameRecord{game_id:id.clone(),title:id.clone(),..Default::default()})
             }).map(|_|"Удалено".to_string()).unwrap_or_else(|e|format!("Не удалено: {e}"));

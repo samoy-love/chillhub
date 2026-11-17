@@ -1,4 +1,5 @@
 use super::*;
+
 #[cfg(windows)]
 #[test]
 fn aliases_share_update_identity_and_cannot_bypass_separate_directories() {
@@ -94,8 +95,8 @@ fn only_trusted_https_updates() {
 fn latest_release_cannot_downgrade_or_use_version_as_a_path() {
     let base = "https://launcher.samoy.love";
     let current = "1.8.9";
-    let parse = |json: &str| interpret_release(json.as_bytes(), base, current, [1, 8, 9, 0]);
-    for remote in ["1.8.8", "1.8.9.0"] {
+    let parse = |json: &str| interpret_release(json.as_bytes(), base, current);
+    for remote in ["1.8.8", "1.8.9.0", "1.8.9-rc.1"] {
         let json = format!(r#"{{"version":"{remote}"}}"#);
         assert!(
             matches!(parse(&json).unwrap(), UpdateCheck::Current {current: installed, remote: advertised} if installed == current && advertised == remote)
@@ -121,6 +122,57 @@ fn latest_release_cannot_downgrade_or_use_version_as_a_path() {
     ] {
         assert!(parse(bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn prerelease_updates_advance_numerically_and_final_releases_win() {
+    let base = "https://launcher.samoy.love";
+    for (current, remote, available) in [
+        ("1.8.9-beta.9", "1.8.9-beta.10", true),
+        ("1.8.9-beta.10", "1.8.9-beta.9", false),
+        ("1.8.9-BETA.10", "1.8.9-beta.10", false),
+        ("1.8.9-beta.10", "1.8.9-rc.1", true),
+        ("1.8.9-rc.1", "1.8.9", true),
+        ("1.8.9", "1.8.9-rc.1", false),
+    ] {
+        let json = format!(r#"{{"version":"{remote}"}}"#);
+        let check = interpret_release(json.as_bytes(), base, current).unwrap();
+        assert_eq!(
+            matches!(check, UpdateCheck::Available(_)),
+            available,
+            "{current} -> {remote}"
+        );
+    }
+}
+
+#[test]
+fn invalid_manifest_is_rejected_before_offering_an_update() {
+    let base = "https://launcher.samoy.love";
+    let parse = |version| {
+        let json = format!(r#"{{"version":"{version}"}}"#);
+        interpret_release(json.as_bytes(), base, "1.8.9").unwrap()
+    };
+    assert!(
+        validate_offer(parse("1.8.9"), |_| panic!(
+            "current version needs no manifest"
+        ))
+        .is_ok()
+    );
+    assert!(validate_offer(parse("1.9.0"), |_| Ok(Manifest::default())).is_err());
+    assert!(
+        validate_offer(parse("1.9.0"), |_| {
+            Ok(Manifest {
+                game_id: "launcher".into(),
+                version: "1.9.0".into(),
+                files: vec![ManifestFile {
+                    path: "../ChillHub.exe".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        })
+        .is_err()
+    );
 }
 
 #[test]

@@ -2,6 +2,82 @@ use super::*;
 use std::time::{Duration, Instant};
 
 #[test]
+fn installer_commands_dispatch_only_the_selected_operation() {
+    let no_operation = |_: Vec<String>| panic!("unexpected installer operation");
+    let no_comparison = |_: &str| panic!("unexpected installed version comparison");
+    for (command, parameters) in [
+        (
+            "--setup-ui",
+            &["uninstall", "Chill Hub Setup.exe", "", "", "1.8.11"][..],
+        ),
+        ("--setup-cleanup", &["1"][..]),
+    ] {
+        let args = std::iter::once(command)
+            .chain(parameters.iter().copied())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let succeeds = |actual: Vec<String>| {
+            assert_eq!(actual, parameters);
+            Ok(())
+        };
+        let fails = |actual: Vec<String>| {
+            assert_eq!(actual, parameters);
+            Err("installer operation failed".into())
+        };
+        let failure = Some(Err("installer operation failed".into()));
+        if command == "--setup-ui" {
+            assert_eq!(
+                setup_exit_code(&args, succeeds, no_operation, no_comparison),
+                Some(Ok(0))
+            );
+            assert_eq!(
+                setup_exit_code(&args, fails, no_operation, no_comparison),
+                failure
+            );
+        } else {
+            assert_eq!(
+                setup_exit_code(&args, no_operation, succeeds, no_comparison),
+                Some(Ok(0))
+            );
+            assert_eq!(
+                setup_exit_code(&args, no_operation, fails, no_comparison),
+                failure
+            );
+        }
+    }
+    for args in [vec![], vec!["--job".into(), "job.json".into()]] {
+        assert_eq!(
+            setup_exit_code(&args, no_operation, no_operation, no_comparison),
+            None
+        );
+    }
+}
+
+#[test]
+fn installer_version_comparison_preserves_the_nsis_exit_codes() {
+    let no_operation = |_: Vec<String>| panic!("unexpected installer operation");
+    let args = ["--setup-compare-installed", "1.8.11"].map(str::to_owned);
+    for (comparison, expected) in [
+        (Ok(true), 1),
+        (Ok(false), 0),
+        (Err("invalid version".into()), 2),
+    ] {
+        let result = setup_exit_code(&args, no_operation, no_operation, |version| {
+            assert_eq!(version, "1.8.11");
+            comparison
+        });
+        assert_eq!(result, Some(Ok(expected)));
+    }
+    let malformed = ["--setup-compare-installed", "1.8.11", "1.9.0"].map(str::to_owned);
+    for args in [&args[..1], &malformed[..]] {
+        let result = setup_exit_code(args, no_operation, no_operation, |_| {
+            panic!("malformed invocation must not query the installed version")
+        });
+        assert_eq!(result, Some(Ok(2)));
+    }
+}
+
+#[test]
 fn update_failure_unlocks_window_and_points_to_actual_log() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     invalid_invocation_completes_with_visible_error();

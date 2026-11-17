@@ -30,6 +30,40 @@ fn noncanonical_local_names_are_never_cleanup_candidates() {
     assert!(manifest::validate_relative("user-file.").is_err());
 }
 
+#[cfg(windows)]
+#[test]
+fn read_only_inspection_does_not_open_user_saves_for_cleanup() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("user-save.bin");
+    fs::write(&save, b"user-owned bytes").unwrap();
+    let held = fs::OpenOptions::new()
+        .write(true)
+        .share_mode(0)
+        .open(&save)
+        .unwrap();
+    let engine = TransferEngine::new().unwrap();
+    let request = TransferRequest {
+        root: temp.path().into(),
+        manifest_url: "http://127.0.0.1/manifest".into(),
+        content_base_url: "http://127.0.0.1/content/".into(),
+        ..Default::default()
+    };
+    let control = TransferControl::default();
+    let inspection = engine
+        .inspect_manifest(&request, Manifest::default(), &control)
+        .unwrap();
+    assert!(!inspection.needs_repair);
+    assert_eq!(inspection.required_free_bytes, 0);
+    assert!(
+        engine
+            .plan_manifest(&request, Manifest::default(), &control, &|_| {})
+            .is_err()
+    );
+    drop(held);
+    assert_eq!(fs::read(save).unwrap(), b"user-owned bytes");
+}
+
 #[test]
 fn disk_full_is_classified_without_mislabeling_access_denied() {
     let temp = tempfile::tempdir().unwrap();
@@ -55,6 +89,61 @@ fn disk_full_is_classified_without_mislabeling_access_denied() {
             matches!(disk_error(io::Error::from_raw_os_error(code).into(), temp.path(), 0), TransferError::NoSpace { required, available, .. } if required > available)
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn sparse_or_shared_old_files_do_not_promise_disk_space() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("game");
+    fs::create_dir(&root).unwrap();
+    let sparse_path = root.join("sparse.bin");
+    let sparse = open_regular(&sparse_path, true, true, false).unwrap();
+    let mut bytes_returned = 0;
+    let ok = unsafe {
+        DeviceIoControl(
+            sparse.as_raw_handle().cast(),
+            0x0009_00c4,
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(ok, 0, "FSCTL_SET_SPARSE: {}", io::Error::last_os_error());
+    sparse.set_len(1024 * 1024).unwrap();
+    drop(sparse);
+    let source = temp.path().join("source.bin");
+    fs::write(&source, vec![1; 1024 * 1024]).unwrap();
+    fs::hard_link(&source, root.join("shared.bin")).unwrap();
+    let manifest = Manifest {
+        files: ["sparse.bin", "shared.bin"]
+            .map(|path| ManifestFile {
+                path: path.into(),
+                size: 64 * 1024,
+                blake3: "00".repeat(32),
+                ..Default::default()
+            })
+            .into(),
+        ..Default::default()
+    };
+    let request = TransferRequest {
+        root,
+        manifest_url: "http://127.0.0.1/manifest".into(),
+        content_base_url: "http://127.0.0.1/content/".into(),
+        max_parallel: 1,
+        ..Default::default()
+    };
+    let engine = TransferEngine::new().unwrap();
+    let plan = engine
+        .plan_manifest(&request, manifest, &TransferControl::default(), &|_| {})
+        .unwrap();
+    assert_eq!(plan.required_free_bytes, 128 * 1024);
+    assert_eq!(fs::metadata(&source).unwrap().len(), 1024 * 1024);
 }
 
 #[cfg(windows)]
@@ -85,6 +174,41 @@ fn readonly_replacement_is_atomic_and_failed_replacement_preserves_permissions()
     assert!(!source.exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn atomic_replace_accepts_long_unicode_and_verbatim_windows_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut directory = temp.path().to_owned();
+    for _ in 0..8 {
+        directory.push("Сборка-тест-длинного-пути-до-файла");
+    }
+    fs::create_dir_all(&directory).unwrap();
+    let part = directory.join("Данные.bin.part");
+    let target = directory.join("Данные.bin");
+    fs::write(&part, b"updated bytes").unwrap();
+    fs::write(&target, b"old bytes").unwrap();
+    atomic_replace(&part, &target).unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"updated bytes");
+    let verbatim = fs::canonicalize(&directory).unwrap();
+    let part = verbatim.join("Данные.bin.part");
+    let target = verbatim.join("Данные.bin");
+    fs::write(&part, b"new bytes on the verbatim path").unwrap();
+    atomic_replace(&part, &target).unwrap();
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"new bytes on the verbatim path"
+    );
+    let tail = "longer-directory/".repeat(21);
+    let mixed = format!(r"C:\Root/{tail}Игра.exe.part");
+    let normalized = String::from_utf16(&windows_move_path(Path::new(&mixed))).unwrap();
+    assert!(normalized.starts_with(r"\\?\C:\Root\"));
+    assert!(!normalized.contains('/'));
+    let unc = format!(r"\\server\share\{tail}Игра.exe.part");
+    let normalized = String::from_utf16(&windows_move_path(Path::new(&unc))).unwrap();
+    assert!(normalized.starts_with(r"\\?\UNC\server\share\"));
+    assert!(normalized.ends_with("Игра.exe.part\0"));
+}
+
 fn blocks(bytes: &[u8]) -> Blocks {
     let mut digests = Vec::new();
     for chunk in bytes.chunks(BLOCK) {
@@ -98,6 +222,13 @@ fn blocks(bytes: &[u8]) -> Blocks {
     }
 }
 
+fn verify_prefix(blocks: &Blocks, part: &Path, control: &TransferControl) -> Result<usize> {
+    let mut buffer = vec![0; blocks.block_size];
+    let mut digests = FileHashes::new(&ManifestFile::default());
+    blocks
+        .verify_prefix(part, &mut buffer, &mut digests, control)
+        .map(|(count, _)| count)
+}
 #[test]
 fn resumed_partial_retains_only_complete_verified_prefix_including_short_tail() {
     let temp = tempfile::tempdir().unwrap();
@@ -117,9 +248,7 @@ fn resumed_partial_retains_only_complete_verified_prefix_including_short_tail() 
     ] {
         fs::write(&part, &wanted[..length]).unwrap();
         assert_eq!(
-            block_map
-                .verify_prefix(&part, &TransferControl::default())
-                .unwrap(),
+            verify_prefix(&block_map, &part, &TransferControl::default()).unwrap(),
             good,
             "partial length {length}"
         );
@@ -132,9 +261,7 @@ fn resumed_partial_retains_only_complete_verified_prefix_including_short_tail() 
     overlong.extend_from_slice(b"unverified suffix");
     fs::write(&part, overlong).unwrap();
     assert_eq!(
-        block_map
-            .verify_prefix(&part, &TransferControl::default())
-            .unwrap(),
+        verify_prefix(&block_map, &part, &TransferControl::default()).unwrap(),
         3
     );
     assert_eq!(fs::read(&part).unwrap(), wanted);
@@ -144,9 +271,7 @@ fn resumed_partial_retains_only_complete_verified_prefix_including_short_tail() 
         corrupt[corrupt_at] ^= 0xff;
         fs::write(&part, corrupt).unwrap();
         assert_eq!(
-            block_map
-                .verify_prefix(&part, &TransferControl::default())
-                .unwrap(),
+            verify_prefix(&block_map, &part, &TransferControl::default()).unwrap(),
             good
         );
         assert_eq!(
@@ -163,9 +288,7 @@ fn prefix_verification_never_creates_missing_file_or_truncates_on_cancel() {
     let bytes = vec![0x52; BLOCK * 2 + 17];
     let block_map = blocks(&bytes);
     assert_eq!(
-        block_map
-            .verify_prefix(&part, &TransferControl::default())
-            .unwrap(),
+        verify_prefix(&block_map, &part, &TransferControl::default()).unwrap(),
         0
     );
     assert!(!part.exists());
@@ -175,7 +298,7 @@ fn prefix_verification_never_creates_missing_file_or_truncates_on_cancel() {
     let cancelled = TransferControl::default();
     cancelled.cancel();
     assert!(matches!(
-        block_map.verify_prefix(&part, &cancelled),
+        verify_prefix(&block_map, &part, &cancelled),
         Err(TransferError::Cancelled)
     ));
     assert_eq!(fs::read(&part).unwrap(), corrupt);
@@ -191,11 +314,7 @@ fn prefix_repair_rejects_hard_link_before_truncating_external_file() {
     fs::write(&user_file, saved).unwrap();
     fs::hard_link(&user_file, &part).unwrap();
     let block_map = blocks(&vec![0x33; BLOCK * 2]);
-    assert!(
-        block_map
-            .verify_prefix(&part, &TransferControl::default())
-            .is_err()
-    );
+    assert!(verify_prefix(&block_map, &part, &TransferControl::default()).is_err());
     assert_eq!(fs::read(&user_file).unwrap(), saved);
     assert_eq!(fs::read(&part).unwrap(), saved);
 }
@@ -231,6 +350,27 @@ fn resolved_repeated_blocks_keep_block_steps_when_another_block_is_missing() {
     assert_eq!(
         windows, 128,
         "each repeated block costs one lookup, regardless of group size"
+    );
+}
+
+#[test]
+fn rolling_window_survives_refill_before_reusing_a_shifted_block() {
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old.bin");
+    let first = vec![1; BLOCK];
+    let second = vec![2; BLOCK];
+    let block_map = blocks(&[first.as_slice(), second.as_slice()].concat());
+    let shifted = 5 * BLOCK + 19;
+    let mut contents = vec![0; shifted];
+    contents.extend_from_slice(&first);
+    contents.extend_from_slice(&second);
+    fs::write(&old, contents).unwrap();
+    let offsets = block_map
+        .find_in_old(&old, &TransferControl::default())
+        .unwrap();
+    assert_eq!(
+        offsets,
+        [Some(shifted as u64), Some((shifted + BLOCK) as u64)]
     );
 }
 

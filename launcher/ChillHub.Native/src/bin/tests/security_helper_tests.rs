@@ -1,4 +1,5 @@
 use super::*;
+use slint::Model;
 use std::{
     sync::{
         Arc,
@@ -12,11 +13,31 @@ fn security_window_handles_confirmation_and_results() {
     // Slint's integration platform is process-wide. Keep both UI scenarios
     // on the same initialized event-loop thread.
     i_slint_backend_testing::init_integration_test_with_system_time();
+    missing_native_handle_allows_late_close_callback();
     request_explains_the_selected_provider_and_elevation();
     only_authenticated_handoff_resumes_the_confirmed_action();
     guide_and_confirmed_actions_use_distinct_effects();
+    manual_folders_and_owned_removal_stay_separate();
     cancelled_elevation_keeps_the_request_available_for_retry();
     security_results_keep_errors_visible_and_allow_close_without_changes();
+}
+
+fn missing_native_handle_allows_late_close_callback() {
+    let ui = AuxiliaryWindow::new().unwrap();
+    let closed = Rc::new(Cell::new(false));
+    let result = closed.clone();
+    ui.on_close_requested(move || result.set(true));
+    helper_runtime::mark_security_window(ui.window());
+    ui.show().unwrap();
+    let window = ui.as_weak();
+    // The test window has no Win32 handle, even when the queued retry runs.
+    slint::Timer::single_shot(Duration::from_millis(120), move || {
+        window.upgrade().unwrap().invoke_close_requested();
+        let _ = slint::quit_event_loop();
+    });
+    slint::run_event_loop_until_quit().unwrap();
+    assert!(closed.get());
+    ui.hide().unwrap();
 }
 
 fn request_explains_the_selected_provider_and_elevation() {
@@ -33,14 +54,89 @@ fn request_explains_the_selected_provider_and_elevation() {
 
     request.operation = SecurityOperation::Remove;
     present_request(&ui, &request, true, 0);
-    assert!(ui.get_status().contains("Нажмите кнопку"));
+    assert!(ui.get_status().is_empty());
     assert_eq!(ui.get_primary_text(), "Удалить исключения");
     assert!(ui.get_details().contains("только исключения Chill Hub"));
 
-    present_request(&ui, &request, true, 1);
-    assert!(ui.get_status().contains("по инструкции"));
+    request.operation = SecurityOperation::Add;
+    present_request(&ui, &request, false, 1);
+    assert_eq!(ui.get_folders().row_count(), 1);
     assert_eq!(ui.get_primary_text(), "Открыть инструкцию");
-    assert!(ui.get_secondary_text().is_empty());
+    assert_eq!(ui.get_secondary_text(), "Закрыть");
+}
+
+fn manual_folders_and_owned_removal_stay_separate() {
+    let ui = AuxiliaryWindow::new().unwrap();
+    let add = security::SecurityRequest {
+        paths: vec![
+            PathBuf::from(r"D:\Games\One"),
+            PathBuf::from(r"D:\Games\Two"),
+        ],
+        operation: SecurityOperation::Add,
+    };
+    let owned = security::SecurityRequest {
+        paths: vec![PathBuf::from(r"D:\Games\PreviouslyOwned")],
+        operation: SecurityOperation::Remove,
+    };
+    let form = Rc::new(Form::new(add.clone(), Some(owned.clone())));
+    let (sender, received) = std::sync::mpsc::channel();
+    bind_form(
+        &ui,
+        form.clone(),
+        false,
+        Err("test disables logs".into()),
+        move |paths| sender.send(paths.to_vec()).map_err(|e| e.to_string()),
+    );
+    let unknown = security::guides().len() - 1;
+    present_form(&ui, &form, false, unknown);
+    assert_eq!(ui.get_folders().row_count(), 2);
+    assert!(ui.get_primary_text().is_empty());
+    assert!(!ui.get_primary_enabled());
+    assert!(ui.get_owned_removal_available());
+    let request = form.clone();
+    bind_primary(
+        &ui,
+        move || request.request().clone(),
+        false,
+        Err("test disables logs".into()),
+        |_| panic!("an explicit confirmation is required"),
+        |_| panic!("there is no guide for Other"),
+    );
+    ui.invoke_primary();
+    ui.invoke_copy_folder(-1);
+    ui.invoke_copy_folder(2);
+    assert!(received.try_recv().is_err());
+    ui.set_selected_folder(1);
+    ui.invoke_copy_folder(1);
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(5)).unwrap(),
+        [add.paths[1].clone()]
+    );
+    assert!(form.provider_chosen.load(Ordering::Relaxed));
+    apply_recommendation(&ui, &add, 0, form.provider_chosen.load(Ordering::Relaxed));
+    assert_eq!(ui.get_selected_provider(), unknown as i32);
+
+    ui.invoke_remove_owned();
+    assert_eq!(form.request().operation, SecurityOperation::Remove);
+    assert_eq!(form.request().paths, owned.paths);
+    assert_eq!(ui.get_primary_text(), "Удалить исключения");
+    assert_eq!(ui.get_paths(), r"D:\Games\PreviouslyOwned");
+    assert_eq!(ui.get_secondary_text(), "Назад");
+    assert!(!ui.get_provider_visible());
+    assert!(!ui.get_owned_removal_available());
+    assert_eq!(ui.get_folders().row_count(), 0);
+    ui.invoke_copy_folder(0);
+    assert!(received.try_recv().is_err());
+    ui.invoke_secondary();
+    assert_eq!(form.request().paths, add.paths);
+    assert_eq!(ui.get_selected_provider(), unknown as i32);
+    let mcafee = security::guides()
+        .iter()
+        .position(|g| g.id == "mcafee")
+        .unwrap();
+    ui.invoke_provider_changed(mcafee as i32);
+    assert_eq!(ui.get_folders().row_count(), 0);
+    assert_eq!(ui.get_primary_text(), "Открыть инструкцию");
 }
 fn only_authenticated_handoff_resumes_the_confirmed_action() {
     use std::{cell::Cell, rc::Rc};
@@ -109,7 +205,7 @@ fn guide_and_confirmed_actions_use_distinct_effects() {
     present_request(&ui, &request, true, 0);
     bind_primary(
         &ui,
-        request,
+        move || request.clone(),
         true,
         Ok(log.clone()),
         move |request| {
@@ -177,7 +273,7 @@ fn cancelled_elevation_keeps_the_request_available_for_retry() {
     present_request(&ui, &request, false, 0);
     bind_primary(
         &ui,
-        request,
+        move || request.clone(),
         false,
         Ok(log.clone()),
         move |_| {

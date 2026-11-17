@@ -267,6 +267,329 @@ fn prepare(root: &TempDir) {
 }
 
 #[test]
+fn parallel_files_keep_one_download_stage_and_publish_final_network_totals() {
+    let bytes = data(4096);
+    let mut manifest = manifest(&bytes);
+    let sample = manifest.files.pop().unwrap();
+    for index in 0..96 {
+        manifest.files.push(ManifestFile {
+            path: format!("data/{index:03}.bin"),
+            ..sample.clone()
+        });
+    }
+    let temp = TempDir::new().unwrap();
+    let server = Server::start(manifest, bytes, Behavior::Normal);
+    let mut request = server.request(&temp);
+    request.max_parallel = 8;
+    let events = Mutex::new(Vec::new());
+    let result = TransferEngine::new()
+        .unwrap()
+        .run(&request, &TransferControl::default(), &|event| {
+            events.lock().unwrap().push(event);
+        })
+        .unwrap();
+    let events = events.into_inner().unwrap();
+    let mut stages: Vec<_> = events.iter().map(|event| event.stage).collect();
+    stages.dedup();
+    assert_eq!(
+        stages,
+        [
+            TransferStage::Checking,
+            TransferStage::Downloading,
+            TransferStage::Activating,
+            TransferStage::Completed
+        ]
+    );
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0].network_bytes <= pair[1].network_bytes)
+    );
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event.completed_files, 96);
+    assert_eq!(final_event.completed_bytes, 96 * 4096);
+    assert_eq!(final_event.network_bytes, result.network_bytes);
+}
+
+#[test]
+fn largest_file_starts_in_the_first_worker_wave_and_resumes_after_pause() {
+    let payloads = [
+        ("small-a.bin", data(512)),
+        ("small-b.bin", data(256)),
+        ("small-c.bin", data(128)),
+        ("archive.bin", data(16 * 1024)),
+    ];
+    let files = payloads
+        .iter()
+        .map(|(path, bytes)| ManifestFile {
+            path: (*path).into(),
+            size: bytes.len() as u64,
+            sha256: Some(format!("{:x}", Sha256::digest(bytes))),
+            blake3: blake3::hash(bytes).to_hex().to_string(),
+            ..Default::default()
+        })
+        .collect();
+    let manifest = Manifest {
+        files,
+        ..Default::default()
+    };
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let temp = TempDir::new().unwrap();
+    let request = TransferRequest {
+        root: temp.path().join("game"),
+        manifest_url: format!("{base}/manifest"),
+        content_base_url: format!("{base}/content/"),
+        max_parallel: 2,
+        ..Default::default()
+    };
+    let control = TransferControl::default();
+    let engine = TransferEngine::new().unwrap();
+    let plan = engine
+        .plan_manifest(&request, manifest, &control, &|_| {})
+        .unwrap();
+    let manifest_order = payloads.each_ref().map(|(path, _)| *path);
+    let planned_paths = || {
+        plan.downloads
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(planned_paths(), manifest_order);
+
+    thread::scope(|scope| {
+        let observer = scope.spawn(|| {
+            let receive = || {
+                server
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap()
+            };
+            let reply = |request: tiny_http::Request| {
+                let name = request.url().strip_prefix("/content/").unwrap();
+                let (_, bytes) = payloads.iter().find(|(path, _)| *path == name).unwrap();
+                request.respond(tiny_http::Response::from_data(bytes.clone()))
+            };
+            // Hold both responses until two requests are in flight, so the sample
+            // is the first worker wave regardless of OS thread start order.
+            let first = [receive(), receive()];
+            let first_paths = first.each_ref().map(|request| request.url().to_owned());
+            control.pause();
+            let first_replies = first.into_iter().try_for_each(&reply);
+            let queued_while_paused = server.recv_timeout(Duration::from_millis(100));
+            let activated_while_paused = payloads
+                .iter()
+                .any(|(path, _)| request.root.join(path).exists());
+            control.resume();
+            first_replies.unwrap();
+            assert!(queued_while_paused.unwrap().is_none());
+            assert!(!activated_while_paused);
+            for _ in 2..payloads.len() {
+                reply(receive()).unwrap();
+            }
+            first_paths
+        });
+        let outcome = engine.execute(&request, &plan, &control, &|_| {}).unwrap();
+        let first_paths = observer.join().unwrap();
+        assert!(
+            first_paths
+                .iter()
+                .any(|path| path == "/content/archive.bin")
+        );
+        assert_eq!(outcome.downloaded_files, payloads.len());
+        assert_eq!(
+            outcome.network_bytes,
+            payloads
+                .iter()
+                .map(|(_, bytes)| bytes.len() as u64)
+                .sum::<u64>()
+        );
+    });
+    assert_eq!(planned_paths(), manifest_order);
+    for (path, bytes) in payloads {
+        assert_eq!(fs::read(request.root.join(path)).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn disk_plan_counts_fresh_bytes_and_only_concurrent_replacement_overlap() {
+    const UNIT: usize = 4096;
+    let engine = TransferEngine::new().unwrap();
+    let control = TransferControl::default();
+    let cases: [(&str, &[(u8, u8)], usize, u64); 4] = [
+        ("fresh", &[(20, 0), (30, 0), (50, 0)], 3, 100),
+        ("all shrink", &[(30, 100), (22, 100), (50, 100)], 2, 80),
+        (
+            "growth before shrink",
+            &[(33, 2), (28, 0), (20, 101)],
+            1,
+            79,
+        ),
+        (
+            "mixed three workers",
+            &[(31, 1), (30, 9), (5, 7), (10, 11), (8, 0)],
+            3,
+            83,
+        ),
+    ];
+    for (case, sizes, parallel, expected) in cases {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("game");
+        if case != "fresh" {
+            fs::create_dir(&root).unwrap();
+            fs::write(root.join("preserved.bin"), b"keep settings").unwrap();
+        }
+        let mut files = Vec::new();
+        for (index, &(new, old)) in sizes.iter().enumerate() {
+            let path = format!("{index}.bin");
+            if old > 0 {
+                fs::write(root.join(&path), vec![0; old as usize * UNIT]).unwrap();
+            }
+            files.push(ManifestFile {
+                path,
+                size: u64::from(new) * UNIT as u64,
+                blake3: blake3::hash(&vec![1; new as usize * UNIT])
+                    .to_hex()
+                    .to_string(),
+                ..Default::default()
+            });
+        }
+        if case != "fresh" {
+            files.push(ManifestFile {
+                path: "preserved.bin".into(),
+                size: 332,
+                blake3: "00".repeat(32),
+                ..Default::default()
+            });
+        }
+        let request = TransferRequest {
+            root,
+            manifest_url: "http://127.0.0.1/manifest".into(),
+            content_base_url: "http://127.0.0.1/content/".into(),
+            preserve_paths: vec!["preserved.bin".into()],
+            max_parallel: parallel,
+            ..Default::default()
+        };
+        let plan = engine
+            .plan_manifest(
+                &request,
+                Manifest {
+                    files,
+                    ..Default::default()
+                },
+                &control,
+                &|_| {},
+            )
+            .unwrap();
+        assert_eq!(plan.downloads.len(), sizes.len(), "{case}");
+        assert!(plan.to_delete.is_empty(), "{case}");
+        assert_eq!(plan.required_free_bytes, expected * UNIT as u64, "{case}");
+    }
+}
+
+#[test]
+fn physically_allocated_partial_reduces_required_space_for_resume() {
+    let temp = TempDir::new().unwrap();
+    prepare(&temp);
+    let bytes = data(1024 * 1024);
+    let server = Server::start(manifest(&bytes), bytes.clone(), Behavior::Normal);
+    let request = server.request(&temp);
+    let prefix = 128 * 1024;
+    fs::write(request.root.join("game.bin.part"), &bytes[..prefix]).unwrap();
+    let engine = TransferEngine::new().unwrap();
+    let control = TransferControl::default();
+    let plan = engine.plan(&request, &control, &|_| {}).unwrap();
+    assert_eq!(plan.required_free_bytes, (bytes.len() - prefix) as u64);
+    assert!(plan.to_delete.is_empty());
+    let outcome = engine.execute(&request, &plan, &control, &|_| {}).unwrap();
+    assert_eq!(outcome.network_bytes, plan.required_free_bytes);
+    assert_eq!(fs::read(request.root.join("game.bin")).unwrap(), bytes);
+}
+
+#[test]
+fn stale_resumed_prefix_requires_complete_retry_before_promotion() {
+    let temp = TempDir::new().unwrap();
+    prepare(&temp);
+    let bytes = data(1024 * 1024);
+    let server = Server::start(manifest(&bytes), bytes.clone(), Behavior::Normal);
+    let request = server.request(&temp);
+    let prefix = 128 * 1024;
+    fs::write(request.root.join("game.bin.part"), vec![0; prefix]).unwrap();
+    let outcome = TransferEngine::new()
+        .unwrap()
+        .run(&request, &TransferControl::default(), &|_| {})
+        .unwrap();
+    assert_eq!(fs::read(request.root.join("game.bin")).unwrap(), bytes);
+    assert_eq!(outcome.network_bytes, (2 * bytes.len() - prefix) as u64);
+    assert_eq!(
+        *server.ranges.lock().unwrap(),
+        vec![Some(format!("bytes={prefix}-")), None]
+    );
+}
+
+#[test]
+fn multiple_games_reorder_pause_cancel_then_restore_and_resume() {
+    let temp = TempDir::new().unwrap();
+    let mut jobs = Vec::new();
+    for (name, size) in [
+        ("first", 4 * 1024 * 1024),
+        ("cancelled", 64 * 1024),
+        ("priority", 2 * 1024 * 1024),
+    ] {
+        let bytes = data(size);
+        let mut manifest = manifest(&bytes);
+        manifest.game_id = name.into();
+        let server = Server::start(manifest, bytes, Behavior::Slow);
+        let mut request = server.request(&temp);
+        request.game_id = name.into();
+        request.root = temp.path().join(name);
+        jobs.push((server, request));
+    }
+    let path = temp.path().join("queue.json");
+    let queue = DownloadQueue::new(&path).unwrap();
+    let first = queue.enqueue(jobs[0].1.clone()).unwrap();
+    let part = jobs[0].1.root.join("game.bin.part");
+    wait_until(|| fs::metadata(&part).is_ok_and(|meta| meta.len() >= 256 * 1024));
+    let cancelled = queue.enqueue(jobs[1].1.clone()).unwrap();
+    queue.cancel(&cancelled).unwrap();
+    let priority = queue.enqueue(jobs[2].1.clone()).unwrap();
+    queue.move_before(&priority, Some(&first)).unwrap();
+    let state = |queue: &DownloadQueue, id: &str| {
+        queue
+            .snapshot()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap()
+            .state
+    };
+    wait_until(|| state(&queue, &priority) == QueueState::Running);
+    queue.pause(&first).unwrap();
+    wait_until(|| state(&queue, &priority) == QueueState::Completed);
+    assert_eq!(state(&queue, &first), QueueState::Paused);
+    assert_eq!(state(&queue, &cancelled), QueueState::Cancelled);
+    assert!(jobs[1].0.ranges.lock().unwrap().is_empty());
+    assert!(part.is_file());
+    drop(queue);
+
+    let queue = DownloadQueue::new(path).unwrap();
+    assert_eq!(state(&queue, &first), QueueState::Paused);
+    assert_eq!(state(&queue, &cancelled), QueueState::Cancelled);
+    assert_eq!(state(&queue, &priority), QueueState::Completed);
+    queue.resume(&first).unwrap();
+    wait_until(|| state(&queue, &first) == QueueState::Completed);
+    assert!(jobs[0].0.ranges.lock().unwrap().iter().any(Option::is_some));
+    assert!(!part.exists());
+    assert_eq!(
+        fs::read(jobs[0].1.root.join("game.bin")).unwrap(),
+        data(4 * 1024 * 1024)
+    );
+    assert_eq!(
+        fs::read(jobs[2].1.root.join("game.bin")).unwrap(),
+        data(2 * 1024 * 1024)
+    );
+}
+
+#[test]
 fn repairs_corrupted_file_and_writes_version_only_after_hashes_match() {
     let bytes = data(200_000);
     let server = Server::start(manifest(&bytes), bytes.clone(), Behavior::Normal);
@@ -1006,6 +1329,58 @@ fn modpack_dependency_runs_only_after_successful_game_install() {
 }
 
 #[test]
+fn a_cancelled_bundle_resumes_from_either_part() {
+    for resume_modpack in [false, true] {
+        let base_bytes = data(2 * 1024 * 1024);
+        let mod_bytes = data(32_000);
+        let base = Server::start(manifest(&base_bytes), base_bytes.clone(), Behavior::Slow);
+        let mut mod_manifest = manifest(&mod_bytes);
+        mod_manifest.files[0].path = "mod.bin".into();
+        let mods = Server::start(mod_manifest, mod_bytes.clone(), Behavior::Normal);
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("queue.json");
+        let queue = DownloadQueue::new(&path).unwrap();
+        let req = base.request(&temp);
+        let part = req.root.join("game.bin.part");
+        let base_id = queue.enqueue(req).unwrap();
+        let mut request = mods.request(&temp);
+        request.scope = SyncScope::OwnFilesOnly;
+        request.depends_on = Some(base_id.clone());
+        let mod_id = queue.enqueue(request).unwrap();
+        wait_until(|| fs::metadata(&part).is_ok_and(|meta| meta.len() > 0));
+        queue.cancel(&base_id).unwrap();
+        wait_until(|| {
+            queue
+                .snapshot()
+                .iter()
+                .any(|item| item.id == mod_id && item.state == QueueState::Paused)
+        });
+        assert!(mods.ranges.lock().unwrap().is_empty());
+        queue.shutdown();
+
+        let queue = DownloadQueue::new(path).unwrap();
+        queue
+            .resume(if resume_modpack { &mod_id } else { &base_id })
+            .unwrap();
+        wait_until(|| {
+            queue
+                .snapshot()
+                .iter()
+                .all(|item| item.state == QueueState::Completed)
+        });
+        assert!(base.ranges.lock().unwrap().iter().any(Option::is_some));
+        assert_eq!(
+            fs::read(temp.path().join("game/game.bin")).unwrap(),
+            base_bytes
+        );
+        assert_eq!(
+            fs::read(temp.path().join("game/mod.bin")).unwrap(),
+            mod_bytes
+        );
+    }
+}
+
+#[test]
 fn failed_or_missing_dependency_keeps_mods_paused_even_after_resume() {
     let bytes = data(20_000);
     let base = Server::start(manifest(&bytes), bytes.clone(), Behavior::Corrupt);
@@ -1025,10 +1400,11 @@ fn failed_or_missing_dependency_keeps_mods_paused_even_after_resume() {
     });
     queue.resume(&mod_id).unwrap();
     wait_until(|| {
-        queue
-            .snapshot()
-            .iter()
-            .any(|i| i.id == mod_id && i.state == QueueState::Paused)
+        base.ranges.lock().unwrap().len() > 3
+            && queue
+                .snapshot()
+                .iter()
+                .any(|i| i.id == mod_id && i.state == QueueState::Paused)
     });
     assert!(mods.ranges.lock().unwrap().is_empty());
     let other = TempDir::new().unwrap();
@@ -1041,6 +1417,9 @@ fn failed_or_missing_dependency_keeps_mods_paused_even_after_resume() {
             .iter()
             .any(|i| i.id == missing_id && i.state == QueueState::Paused)
     });
+    let saved = fs::read(root.path().join("queue.json")).unwrap();
+    assert!(queue.resume(&missing_id).is_err());
+    assert_eq!(fs::read(root.path().join("queue.json")).unwrap(), saved);
     assert!(mods.ranges.lock().unwrap().is_empty());
     queue.shutdown();
 }

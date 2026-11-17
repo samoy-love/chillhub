@@ -51,6 +51,17 @@ fn first_install_upgrade_repeat_and_rollback_have_distinct_gates() {
     );
 }
 #[test]
+fn prerelease_does_not_show_final_release_notes_until_upgrade() {
+    let releases = entries_since("");
+    let current = env!("CARGO_PKG_VERSION");
+    let preview = format!("{current}-rc.1");
+    let previous = &releases[1].version;
+
+    assert!(!should_show(previous, &preview));
+    assert!(should_show(&preview, current));
+}
+
+#[test]
 fn current_release_is_first_and_player_changes_are_bounded() {
     let entries: Vec<Release> =
         serde_json::from_str(include_str!("../Data/changelog.json")).unwrap();

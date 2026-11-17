@@ -103,3 +103,45 @@ fn failed_check_reports_error_code_without_claiming_checked_bytes_as_downloaded(
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].event, "error");
 }
+
+#[test]
+fn library_shows_running_base_before_its_waiting_modpack_and_clears_old_failure() {
+    let mut base = task(QueueState::Running, TransferOperation::Install);
+    base.id = "base".into();
+    let mut mods = task(QueueState::Waiting, TransferOperation::Install);
+    mods.id = "mods".into();
+    mods.request.depends_on = Some("base".into());
+    let mut tasks = vec![base, mods];
+    assert_eq!(library_queue_task(&tasks, "fixture").unwrap().id, "base");
+    tasks[0].state = QueueState::Completed;
+    assert_eq!(library_queue_task(&tasks, "fixture").unwrap().id, "mods");
+    tasks[1].state = QueueState::Failed;
+    assert_eq!(
+        library_queue_task(&tasks, "fixture").unwrap().state,
+        QueueState::Failed
+    );
+    tasks.push(task(QueueState::Completed, TransferOperation::Install));
+    assert!(library_queue_task(&tasks, "fixture").is_none());
+    assert!(library_queue_task(&tasks, "other-game").is_none());
+}
+
+#[test]
+fn library_labels_keep_the_stage_visible_without_truncating_actionable_states() {
+    for (state, label) in [
+        (QueueState::Failed, "Ошибка загрузки"),
+        (QueueState::NeedsConfirmation, "Нужен выбор"),
+        (QueueState::Pausing, "Ставим на паузу"),
+    ] {
+        assert_eq!(
+            library_queue_label(&task(state, TransferOperation::Install)),
+            label
+        );
+    }
+    let mut running = task(QueueState::Running, TransferOperation::Verify);
+    for stage in [TransferStage::Checking, TransferStage::Verifying] {
+        running.progress = Some(progress(stage, 0, 0));
+        assert_eq!(library_queue_label(&running), "Проверяем");
+    }
+    running.progress = Some(progress(TransferStage::Downloading, 10, 0));
+    assert_eq!(library_queue_label(&running), "Скачиваем");
+}

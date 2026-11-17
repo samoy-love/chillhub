@@ -146,7 +146,7 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     }
     // Temporary siblings must never overlap a legitimate manifest file.
     for path in &files {
-        if files.contains(&format!("{path}.part")) || dirs.contains(&format!("{path}.part")) {
+        if spellings.contains_key(&format!("{path}.part")) {
             return Err(format!("Файл пересекается с временным файлом: {path}"));
         }
     }
@@ -194,7 +194,7 @@ pub fn is_reparse(meta: &fs::Metadata) -> bool {
     false
 }
 
-fn reject_link(path: &Path) -> io::Result<()> {
+pub(crate) fn reject_link(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(meta) if is_reparse(&meta) => Err(io::Error::other(format!(
             "Ссылка или точка повторной обработки: {}",

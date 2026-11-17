@@ -1,5 +1,43 @@
 use super::*;
 #[test]
+fn cleanup_requires_a_live_nonempty_catalog_and_rechecks_republished_games() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let root = paths.games_dir.join("local-game");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join(".version"), "1").unwrap();
+    let mut snapshot = crate::net::CatalogSnapshot {
+        library: crate::model::LibraryResponse {
+            items: vec![GameRecord {
+                game_id: "other".into(),
+                ..Default::default()
+            }],
+        },
+        offline: true,
+        all_entries_valid: true,
+        fetched_at: String::new(),
+        warning: None,
+    };
+    assert!(confirmed_orphans(&paths, &snapshot).is_err());
+    snapshot.offline = false;
+    assert_eq!(
+        confirmed_orphans(&paths, &snapshot).unwrap()[0].id,
+        "local-game"
+    );
+    snapshot.all_entries_valid = false;
+    assert!(confirmed_orphans(&paths, &snapshot).is_err());
+    snapshot.all_entries_valid = true;
+    snapshot.library.items.clear();
+    assert!(confirmed_orphans(&paths, &snapshot).is_err());
+    snapshot.library.items.push(GameRecord {
+        game_id: "LOCAL-GAME".into(),
+        ..Default::default()
+    });
+    assert!(confirmed_orphans(&paths, &snapshot).unwrap().is_empty());
+    assert!(root.join(".version").is_file());
+}
+
+#[test]
 fn only_marked_unpublished_games_are_offered_for_removal() {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temp.path());

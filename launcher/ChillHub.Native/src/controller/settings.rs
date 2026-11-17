@@ -238,8 +238,8 @@ pub(super) fn save(ui: &AppWindow, state: &State, next: AfterSave) {
                     if api_changed {
                         match chillhub_native::net::ApiClient::new(&config.api_base_url) {
                             Ok(api) => {
-                                s.services.api =
-                                    api.with_diagnostics(s.services.paths.data_dir.clone())
+                                let data = s.services.paths.data_dir.clone();
+                                s.services.replace_api(api.with_diagnostics(data));
                             }
                             Err(e) => {
                                 drop(s);

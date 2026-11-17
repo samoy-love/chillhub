@@ -728,6 +728,35 @@ fn first_modpack_install_obeys_update_block_for_an_existing_game() {
     services.queue.shutdown();
 }
 
+#[test]
+fn first_local_install_includes_modpack_under_install_gate() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let (server, game) = fixture_game();
+    server.routes.lock().unwrap().insert("/api/maintenance".into(), (200,
+        br#"{"enabled":true,"message":"Updates paused","blocks":{"install":false,"update":true}}"#.to_vec()));
+    let services = services(&paths, &server.base);
+    let tasks = services
+        .enqueue_game(&game, LaunchTarget::LocalModded, None, false, false)
+        .unwrap();
+    assert_eq!(tasks.len(), 2);
+    wait_completed(&services);
+    let root = paths.game_root(&game.game_id).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join(".version")).unwrap().trim(),
+        "1.0.0"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".mods.version"))
+            .unwrap()
+            .trim(),
+        "pack-1.0.0"
+    );
+    assert!(root.join("Game.exe").is_file());
+    assert!(root.join("winhttp.dll").is_file());
+    services.queue.shutdown();
+}
+
 #[cfg(windows)]
 #[test]
 fn legacy_shortcut_launches_nested_fixture_and_tracks_exact_process_identity() {

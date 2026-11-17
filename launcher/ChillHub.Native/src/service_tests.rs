@@ -37,6 +37,62 @@ fn maintenance_blocks_only_named_operations() {
     };
     assert!(!blocked(&off, &LaunchAction::InstallGame));
 }
+
+#[test]
+fn confirmed_launch_restriction_survives_failed_checks_until_server_clears_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut services = Services::new(AppPaths::isolated(temp.path())).unwrap().0;
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    services.api = ApiClient::new(&format!("http://{}", server.server_addr())).unwrap();
+    let polling_api = services.api.clone();
+    let serve = std::thread::spawn(move || {
+        for (status, body) in [
+            (503, "{}"),
+            (
+                200,
+                r#"{"enabled":true,"message":"Обновляем игры","blocks":{"launch":true}}"#,
+            ),
+            (503, "{}"),
+            (200, "{}"),
+            (200, r#"{"enabled":false}"#),
+            (503, "{}"),
+            (503, "{}"),
+        ] {
+            let request = server
+                .recv_timeout(std::time::Duration::from_secs(4))
+                .unwrap()
+                .expect("maintenance request");
+            assert_eq!(request.url(), "/api/maintenance");
+            request
+                .respond(tiny_http::Response::from_string(body).with_status_code(status))
+                .unwrap();
+        }
+    });
+    assert!(services.maintenance_check(&LaunchAction::Play).is_ok());
+    assert!(polling_api.maintenance().unwrap().blocks.launch);
+    assert_eq!(
+        services.cached_launch_maintenance_check().unwrap_err(),
+        "Обновляем игры"
+    );
+    assert_eq!(
+        services.maintenance_check(&LaunchAction::Play).unwrap_err(),
+        "Обновляем игры"
+    );
+    assert_eq!(
+        services.maintenance_check(&LaunchAction::Play).unwrap_err(),
+        "Обновляем игры"
+    );
+    assert!(services.maintenance_check(&LaunchAction::Play).is_ok());
+    assert!(services.cached_launch_maintenance_check().is_ok());
+    assert!(services.maintenance_check(&LaunchAction::Play).is_ok());
+    assert!(
+        services
+            .maintenance_check(&LaunchAction::InstallGame)
+            .is_err()
+    );
+    serve.join().unwrap();
+    services.queue.shutdown();
+}
 #[test]
 fn delete_removes_only_the_confirmed_game() {
     let temp = tempfile::tempdir().unwrap();

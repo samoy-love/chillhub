@@ -807,6 +807,12 @@ fn can_launch_from_tray(
         && !modal_open
         && action.is_some_and(|a| *a != chillhub_native::launch::LaunchAction::Unavailable)
 }
+fn tray_requires_window(
+    ready: bool,
+    action: Option<&chillhub_native::launch::LaunchAction>,
+) -> bool {
+    !ready || action != Some(&chillhub_native::launch::LaunchAction::Play)
+}
 fn remember_tray_hint(store: &chillhub_native::config::ConfigStore) -> Result<(), String> {
     store.update(|c| c.tray_hint_shown = true).map(|_| ())
 }
@@ -974,7 +980,12 @@ pub(super) fn create_tray(ui: &AppWindow, state: &State) -> Result<Tray, String>
                                     s.option.as_ref().map(|o| &o.action),
                                 )
                             };
-                            let _ = show(&ui);
+                            if tray_requires_window(
+                                ready,
+                                state.borrow().option.as_ref().map(|option| &option.action),
+                            ) {
+                                let _ = show(&ui);
+                            }
                             if ready {
                                 controller::play(&ui, &state);
                             }

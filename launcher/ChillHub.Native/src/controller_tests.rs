@@ -300,7 +300,6 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         choices: HashMap::new(),
         launching: Default::default(),
         query: String::new(),
-        only_mods: false,
         mod_query: String::new(),
         mod_category: "Все".into(),
         generation: 0,
@@ -337,7 +336,9 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         library_status: Default::default(),
         pending: None,
         shortcut: None,
+        defer_startup_changelog: false,
         pending_shortcuts: Default::default(),
+        shortcut_installs: Default::default(),
         update: None,
         offline: false,
     }));
@@ -393,16 +394,22 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     }
                     ui.invoke_search_edited("Без дополнений".into());
                     if ui.get_games().row_count() != 1 { return Err("plain game search failed".into()); }
-                    ui.invoke_mods_filter_toggled(true);
-                    if ui.get_games().row_count() != 0 { return Err("no-results filter failed".into()); }
+                    ui.invoke_search_edited("Несуществующая игра".into());
+                    if ui.get_games().row_count() != 0 { return Err("no-results search failed".into()); }
                     ui.invoke_search_edited("".into());
-                    if ui.get_games().row_count() != 1 { return Err("mods-only filter failed".into()); }
-                    ui.invoke_mods_filter_toggled(false);
+                    if ui.get_games().row_count() != 2 { return Err("clearing search did not restore all games".into()); }
                     hold_content.store(true,Ordering::Relaxed);
                     *stage.borrow_mut() = (10, 0);
                     ui.invoke_play_requested(); // exactly once; action is InstallGame
                 }
                 10 if !ui.get_operation_busy() && captured.borrow().tasks.iter().any(|t|t.state==QueueState::Running) => {
+                    if !ui.get_panel_kind().is_empty() || ui.get_downloads_active() <= 0 {
+                        return Err("install must affect the downloads count without blocking the library".into());
+                    }
+                    ui.invoke_panel_requested("downloads".into());
+                    if ui.get_panel_kind() != "downloads" || ui.get_queue_active().id.is_empty() {
+                        return Err("the downloads action must open the active installation".into());
+                    }
                     ui.invoke_panel_closed();ui.invoke_panel_requested("settings".into());
                     ui.set_settings_path("relative-games-folder".into());ui.invoke_settings_leave("".into());
                     *stage.borrow_mut()=(11,0);
@@ -420,6 +427,38 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                 1 if !ui.get_busy() && ui.get_can_play() && ui.get_play_label() == "Играть" => {
                     let tasks = captured.borrow().tasks.clone();
                     if tasks.len() != 2 || !tasks.iter().all(|t| t.state == QueueState::Completed) { return Ok(false); }
+                    let selected = captured.borrow().selected;
+                    // The fixture advertises Steam in the UI, but has no AppID
+                    // and cannot inspect a Steam installation on the test host.
+                    captured.borrow_mut().catalog[selected].steam_supported = true;
+                    ui.invoke_source_selected("steam".into());
+                    if !ui.get_busy() || ui.get_play_label() != "Проверяем…" {
+                        return Err("the copy probe retained the previous play action".into());
+                    }
+                    *stage.borrow_mut() = (19, 0);
+                }
+                19 if !ui.get_busy() => {
+                    let ready_library_row = ui.get_games().row_data(1).is_some_and(|row| {
+                        row.id == "fixture" && row.status == "Установлена" && row.status_kind == "ready"
+                    });
+                    if ui.get_source() != "steam"
+                        || ui.get_play_label() != "Недоступно"
+                        || ui.get_can_play()
+                        || ui.get_has_game_files()
+                        || ui.get_can_verify_game()
+                        || ui.get_can_verify_mods()
+                        || ui.get_can_create_shortcut()
+                        || !ready_library_row
+                    {
+                        return Err("missing Steam copy changed local library readiness or allowed file actions".into());
+                    }
+                    let selected = captured.borrow().selected;
+                    captured.borrow_mut().catalog[selected].steam_supported = false;
+                    ui.invoke_source_selected("local".into());
+                    ui.invoke_mode_selected("mods".into());
+                    *stage.borrow_mut() = (20, 0);
+                }
+                20 if !ui.get_busy() && ui.get_can_play() && ui.get_play_label() == "Играть" => {
                     captured.borrow_mut().launching.insert(("fixture".into(), false));
                     controller::refresh_choice(&ui, &captured);
                     *stage.borrow_mut() = (13, 0);
@@ -458,7 +497,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     ui_action_tests::start_shortcut_during_catalog_refresh(&ui, &captured)?;
                     *stage.borrow_mut() = (18, 0);
                 }
-                18 if !ui.get_operation_busy() && !ui.get_busy() => {
+                18 if !ui.get_operation_busy() && !ui.get_busy() && ui.get_can_play() => {
                     ui_action_tests::check_shortcut_launch_finished(&ui, &captured)?;
                     let tasks = captured.borrow().tasks.clone();
                     ui.invoke_panel_closed();
@@ -557,13 +596,6 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     ui.invoke_game_selected(0);
                     if captured.borrow().catalog[captured.borrow().selected].has_mods { return Err("plain search did not select the plain game".into()); }
                     ui.invoke_search_edited("".into());
-                    ui.invoke_mods_filter_toggled(true);
-                    if !captured.borrow().catalog[captured.borrow().selected].has_mods || ui.get_selected_game() != 0 {
-                        return Err("mods filter left an excluded game open".into());
-                    }
-                    ui.invoke_mods_filter_toggled(false);
-                    // The later alias/paused-queue scenario concerns this plain
-                    // game; restore that selection after the filter scenario.
                     ui.invoke_search_edited("Без дополнений".into());
                     ui.invoke_game_selected(0);
                     for id in ["old-one","old-two"] {
@@ -1085,6 +1117,7 @@ fn test_empty_catalog(ui: &AppWindow, state: &State) {
             chillhub_native::net::CatalogSnapshot {
                 library: Default::default(),
                 offline: false,
+                all_entries_valid: true,
                 fetched_at: String::new(),
                 warning: None,
             },
