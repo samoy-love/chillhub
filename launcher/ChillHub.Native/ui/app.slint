@@ -699,7 +699,6 @@ export component AppWindow inherits Window {
                     if root.games.length > 0 && root.selected-game >= 0: Rectangle {
                         x: 0px; y: root.selected-game * 48px + 1px; width: parent.width; height: 46px;
                         border-radius: 9px; background: #37313f;
-                        animate y { duration: root.reduced-motion ? 0ms : 220ms; easing: ease-out; }
                         Rectangle { x: 0px; y: 13px; width: 3px; height: 20px; border-radius: 2px; background: Theme.accent; }
                     }
                     for game[i] in root.games: Rectangle {

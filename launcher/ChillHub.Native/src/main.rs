@@ -11,6 +11,8 @@ mod frame_pacing;
 mod image_loader;
 mod install_ui;
 mod karaoke;
+#[cfg(test)]
+mod main_runtime_tests;
 mod orphan_ui;
 #[cfg(feature = "benchmark")]
 mod perf_probe;
@@ -52,6 +54,7 @@ struct AppState {
     data_root: PathBuf,
     art_root: PathBuf,
     selected: usize,
+    displayed_game_id: Option<String>,
     visible: Vec<usize>,
     icons: Vec<Image>,
     choices: HashMap<String, (String, String)>,
@@ -94,8 +97,72 @@ struct AppState {
     library_status: HashMap<String, (String, String)>,
     pending: Option<controller::Confirmation>,
     shortcut: Option<ShortcutRequest>,
+    pending_shortcuts: std::collections::VecDeque<ShortcutRequest>,
     update: Option<chillhub_native::update::UpdateRelease>,
     offline: bool,
+}
+impl AppState {
+    fn new(
+        services: Services,
+        prefs: AppConfig,
+        data_root: PathBuf,
+        art_root: PathBuf,
+        seed: Vec<Game>,
+        shortcut: Option<ShortcutRequest>,
+    ) -> Self {
+        Self {
+            visible: vec![],
+            selected: 0,
+            displayed_game_id: None,
+            catalog: vec![],
+            records: vec![],
+            seed,
+            data_root,
+            art_root,
+            icons: vec![],
+            choices: HashMap::new(),
+            launching: Default::default(),
+            query: String::new(),
+            only_mods: false,
+            mod_query: String::new(),
+            mod_category: "Все".into(),
+            generation: 0,
+            catalog_generation: 0,
+            gallery_generation: 0,
+            gallery_index: 0,
+            video: None,
+            native_hwnd: 0,
+            viewer_restore: None,
+            viewer_previous_volume: None,
+            video_timer: Timer::default(),
+            toast_timer: Timer::default(),
+            report_notices: Default::default(),
+            maintenance_timer: Timer::default(),
+            update_timer: Timer::default(),
+            poll_inflight: false,
+            maintenance: Default::default(),
+            catalog_poll_inflight: false,
+            catalog_checked_at: std::time::Instant::now(),
+            last_activation: None,
+            update_inflight: false,
+            security_offers: Default::default(),
+            orphan_notice: Default::default(),
+            estimate_inflight: false,
+            services,
+            prefs,
+            option: None,
+            choice_generation: 0,
+            choice_epoch: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            tasks: vec![],
+            queue_speeds: Default::default(),
+            library_status: Default::default(),
+            pending: None,
+            shortcut,
+            pending_shortcuts: Default::default(),
+            update: None,
+            offline: false,
+        }
+    }
 }
 struct ViewerRestore {
     size: slint::winit_030::winit::dpi::PhysicalSize<u32>,
@@ -111,10 +178,10 @@ fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
     ))
     .into()
 }
-fn roots() -> Result<(PathBuf, PathBuf), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let parent = exe.parent().unwrap();
-    if parent.join("Data/games.json").is_file() {
+fn roots(exe: &Path) -> Result<(PathBuf, PathBuf), String> {
+    if let Some(parent) = exe.parent()
+        && parent.join("Data/games.json").is_file()
+    {
         return Ok((parent.to_owned(), parent.join("art")));
     }
     #[cfg(feature = "benchmark")]
@@ -184,22 +251,31 @@ fn select_game(ui: &AppWindow, state: &State, index: usize) {
         refresh_library(ui, state);
         return;
     }
-    let (game, art, data, generation, services) = {
+    let (game, art, data, generation, services, game_changed) = {
         let mut s = state.borrow_mut();
         if index >= s.catalog.len() {
             return;
+        }
+        let game = s.catalog[index].clone();
+        let game_changed = s.displayed_game_id.as_deref() != Some(game.id.as_str());
+        if game_changed {
+            s.displayed_game_id = Some(game.id.clone());
         }
         s.selected = index;
 
         s.generation += 1;
         (
-            s.catalog[index].clone(),
+            game,
             s.art_root.clone(),
             s.data_root.clone(),
             s.generation,
             s.services.clone(),
+            game_changed,
         )
     };
+    if game_changed {
+        reset_hero(ui);
+    }
     ui.set_game_title(game.title.clone().into());
     ui.set_description(game.description.clone().into());
     ui.set_genre(game.genre.clone().into());
@@ -442,6 +518,11 @@ fn toast(ui: &AppWindow, state: &State, text: &str) {
         },
     );
 }
+fn reset_hero(ui: &AppWindow) {
+    ui.set_hero(Image::default());
+    ui.set_hero_previous(Image::default());
+    ui.set_hero_progress(1.0);
+}
 fn clear_game(ui: &AppWindow, state: &State) {
     IMAGE_REQUEST_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     HERO_DISPLAY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -454,6 +535,7 @@ fn clear_game(ui: &AppWindow, state: &State) {
             + 1;
         s.option = None;
         s.selected = usize::MAX;
+        s.displayed_game_id = None;
     }
     if matches!(ui.get_panel_kind().as_str(), "gallery" | "mods" | "manage") {
         close_panel(ui, state);
@@ -461,9 +543,7 @@ fn clear_game(ui: &AppWindow, state: &State) {
     ui.set_game_title("".into());
     ui.set_description("".into());
     ui.set_genre("".into());
-    ui.set_hero(Image::default());
-    ui.set_hero_previous(Image::default());
-    ui.set_hero_progress(1.0);
+    reset_hero(ui);
     ui.set_media(ModelRc::default());
     ui.set_mod_benefits(ModelRc::default());
     ui.set_mods(ModelRc::default());
@@ -675,9 +755,24 @@ fn set_viewer_fullscreen(ui: &AppWindow, state: &State, enabled: bool) {
 }
 fn open_media(ui: &AppWindow, state: &State, index: usize) {
     use slint::winit_030::WinitWindowAccessor;
-    if state.borrow().catalog.is_empty() {
-        return;
-    }
+    // Ignore a stale click from a replaced media model before closing the
+    // current panel or changing the selected slide.
+    let (game_id, title, media, data, services) = {
+        let s = state.borrow();
+        let Some(game) = s.catalog.get(s.selected) else {
+            return;
+        };
+        let Some(media) = game.media.get(index) else {
+            return;
+        };
+        (
+            game.id.clone(),
+            game.title.clone(),
+            media.clone(),
+            s.data_root.clone(),
+            s.services.clone(),
+        )
+    };
     ui.set_viewer_quality_open(false);
     if ui.get_gallery_open() {
         let mut s = state.borrow_mut();
@@ -689,23 +784,22 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
     } else {
         close_panel(ui, state);
     }
-    let (game, data, generation) = {
+    let generation = {
         let mut s = state.borrow_mut();
-        let Some(game) = s.catalog.get(s.selected).cloned() else {
-            return;
-        };
         s.gallery_index = index;
-        (game, s.data_root.clone(), s.gallery_generation)
-    };
-    let Some(media) = game.media.get(index) else {
-        return;
+        s.gallery_generation
     };
     if media.kind != "video" {
         ui.set_gallery_image(Image::default());
         ui.set_gallery_image_state("loading".into());
+    } else {
+        ui.set_video_position(0.0);
+        ui.set_video_playing(false);
+        ui.set_video_failed(false);
+        ui.set_video_duration(0.0);
+        ui.set_video_time_label("Загрузка видео…".into());
     }
-    let services = state.borrow().services.clone();
-    ui.set_panel_title(game.title.into());
+    ui.set_panel_title(title.into());
     ui.set_panel_subtitle(media.caption.clone().into());
     ui.set_gallery_caption(media.caption.clone().into());
     ui.set_gallery_index(index as i32);
@@ -743,7 +837,10 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
     let path = match location {
         Ok(p) => PathBuf::from(p),
         Err(error) => {
-            if media.kind != "video" {
+            if media.kind == "video" {
+                ui.set_video_failed(true);
+                ui.set_video_time_label("Ошибка видео".into());
+            } else {
                 ui.set_gallery_image_state("error".into());
             }
             toast(ui, state, &error);
@@ -755,12 +852,8 @@ fn open_media(ui: &AppWindow, state: &State, index: usize) {
         ui.set_gallery_image(Image::default());
         services.api.event(
             "media.trailer_open",
-            serde_json::json!({"game": game.id, "index": index}),
+            serde_json::json!({"game": game_id, "index": index}),
         );
-        ui.set_video_position(0.0);
-        ui.set_video_failed(false);
-        ui.set_video_duration(0.0);
-        ui.set_video_time_label("Загрузка видео…".into());
         let weak = ui.as_weak();
         let weak_state = Rc::downgrade(state);
         Timer::single_shot(Duration::from_millis(32), move || {
@@ -1071,7 +1164,9 @@ fn bind(ui: &AppWindow, state: &State) {
         close_panel(&ui, &state);
     });
     handler!(on_media_selected, |ui, state, index| {
-        open_media(&ui, &state, index.max(0) as usize);
+        if let Ok(index) = usize::try_from(index) {
+            open_media(&ui, &state, index);
+        }
     });
     handler!(on_media_retry, |ui, state| {
         let index = state.borrow().gallery_index;
@@ -1088,7 +1183,7 @@ fn bind(ui: &AppWindow, state: &State) {
             if count == 0 {
                 return;
             }
-            (s.gallery_index as i32 + delta).rem_euclid(count as i32) as usize
+            (s.gallery_index as i64 + i64::from(delta)).rem_euclid(count as i64) as usize
         };
         open_media(&ui, &state, index);
     });
@@ -1266,18 +1361,37 @@ fn initialize_native(ui: &AppWindow, state: &State) -> Result<Option<Timer>, Str
         Ok(None)
     }
 }
-fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
-    let renderer = args
-        .windows(2)
-        .find(|pair| pair[0] == "--renderer")
-        .map(|pair| pair[1].as_str())
-        .unwrap_or("software");
+fn option_value<'a>(args: &'a [String], option: &str) -> Result<Option<&'a str>, String> {
+    let Some(index) = args.iter().position(|arg| arg == option) else {
+        return Ok(None);
+    };
+    args.get(index + 1)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty() && !value.starts_with("--"))
+        .map(Some)
+        .ok_or_else(|| format!("Не задано значение для {option}"))
+}
+
+fn renderer_from_args(args: &[String]) -> Result<&str, String> {
+    let renderer = option_value(args, "--renderer")?.unwrap_or("software");
     let accepted = matches!(renderer, "femtovg-wgpu" | "software")
         || (cfg!(feature = "benchmark") && renderer == "femtovg");
     if !accepted {
         return Err(format!("Неизвестный способ отрисовки: {renderer}"));
     }
+    Ok(renderer)
+}
+
+fn preview_directory(args: &[String]) -> Result<Option<&Path>, String> {
+    let folder = option_value(args, "--preview-directory")?.map(Path::new);
+    if folder.is_some_and(|path| !path.is_absolute()) {
+        return Err("Проверочная папка должна иметь полный путь".into());
+    }
+    Ok(folder)
+}
+
+fn run(args: &[String]) -> Result<(), String> {
+    let renderer = renderer_from_args(args)?;
     let mut backend = slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name(renderer.into());
@@ -1289,10 +1403,11 @@ fn run() -> Result<(), String> {
         backend = backend.require_wgpu_30(slint::wgpu_30::WGPUConfiguration::Automatic(settings));
     }
     backend.select().map_err(|e| e.to_string())?;
-    let (data_root, art_root) = roots()?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let (data_root, art_root) = roots(&exe)?;
     let seed = catalog::load(&data_root.join("Data/games.json")).unwrap_or_default();
     let paths = chillhub_native::paths::AppPaths::discover()?;
-    let instance = desktop::Instance::acquire(&paths.data_dir, &args)?;
+    let mut instance = desktop::Instance::acquire(&paths.data_dir, args)?;
     if !instance.primary {
         return Ok(());
     }
@@ -1302,63 +1417,16 @@ fn run() -> Result<(), String> {
         serde_json::json!({"name": renderer, "colorImageSampling": "bilinear", "animationFpsLimit": 60}),
     );
     let _ = PANIC_CONTEXT.set((services.api.clone(), services.paths.data_dir.clone()));
-    let shortcut = ShortcutRequest::parse_args(&args)?;
-    let state = Rc::new(RefCell::new(AppState {
-        visible: vec![],
-        selected: 0,
-        catalog: vec![],
-        records: vec![],
-        seed,
-        data_root,
-        art_root,
-        icons: vec![],
-        choices: HashMap::new(),
-        launching: Default::default(),
-        query: String::new(),
-        only_mods: false,
-        mod_query: String::new(),
-        mod_category: "Все".into(),
-        generation: 0,
-        catalog_generation: 0,
-        gallery_generation: 0,
-        gallery_index: 0,
-        video: None,
-        native_hwnd: 0,
-        viewer_restore: None,
-        viewer_previous_volume: None,
-        video_timer: Timer::default(),
-        toast_timer: Timer::default(),
-        report_notices: Default::default(),
-        maintenance_timer: Timer::default(),
-        update_timer: Timer::default(),
-        poll_inflight: false,
-        maintenance: Default::default(),
-        catalog_poll_inflight: false,
-        catalog_checked_at: std::time::Instant::now(),
-        last_activation: None,
-        update_inflight: false,
-        security_offers: Default::default(),
-        orphan_notice: Default::default(),
-        estimate_inflight: false,
-        services,
-        prefs,
-        option: None,
-        choice_generation: 0,
-        choice_epoch: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        tasks: vec![],
-        queue_speeds: Default::default(),
-        library_status: Default::default(),
-        pending: None,
-        shortcut,
-        update: None,
-        offline: false,
-    }));
+    let shortcut = ShortcutRequest::parse_args(args)?;
+    let state = Rc::new(RefCell::new(AppState::new(
+        services, prefs, data_root, art_root, seed, shortcut,
+    )));
     ACTIVE_STATE.with(|slot| *slot.borrow_mut() = Some(state.clone()));
     let ui = AppWindow::new().map_err(|e| e.to_string())?;
     ui.set_launcher_version(env!("CARGO_PKG_VERSION").into());
     bind(&ui, &state);
     controller::initialize(&ui, &state);
-    instance.listen(ui.as_weak());
+    instance.listen(ui.as_weak())?;
     ui.show().map_err(|e| e.to_string())?;
     controller::install_window_refresh(&ui);
     #[cfg(feature = "benchmark")]
@@ -1432,15 +1500,14 @@ fn run() -> Result<(), String> {
 }
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
-    if let Some(folder) = args
-        .windows(2)
-        .find(|pair| pair[0] == "--preview-directory")
-        .map(|p| PathBuf::from(&p[1]))
-    {
-        if !folder.is_absolute() {
-            desktop::show_error("Проверочная папка должна иметь полный путь");
+    let preview = match preview_directory(&args) {
+        Ok(preview) => preview,
+        Err(error) => {
+            desktop::show_error(&error);
             return;
         }
+    };
+    if let Some(folder) = preview {
         // Explicit local QA profile, isolated before any worker starts. Never migrated
         // into the production roaming configuration or included in an update payload.
         unsafe {
@@ -1465,7 +1532,7 @@ fn main() {
             std::env::set_var("WGPU_BACKEND", "dx12");
         }
     }
-    if let Err(error) = run() {
+    if let Err(error) = run(&args) {
         let log = chillhub_native::diagnostics::startup_log("startup-error", &error);
         if let Some((api, data)) = PANIC_CONTEXT.get() {
             chillhub_native::diagnostics::report_error(api, data, "startup", &error);

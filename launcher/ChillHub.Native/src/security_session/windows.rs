@@ -223,6 +223,36 @@ fn send<T: Serialize>(pipe: &mut fs::File, value: &T) -> Result<(), String> {
     pipe.write_all(&bytes).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize, Deserialize)]
+enum JournalReceipt {
+    Recorded,
+    Failed(String),
+}
+
+fn send_result_and_wait_for_receipt(
+    pipe: &mut fs::File,
+    parent: &fs::File,
+    result: &ExclusionResult,
+    deadline: Instant,
+) -> Result<(), String> {
+    let receipt = (|| {
+        send(pipe, result)?;
+        let response = line(pipe, parent, Some(deadline))?;
+        serde_json::from_str::<JournalReceipt>(&response)
+            .map_err(|_| "Некорректное подтверждение сохранения журнала".to_owned())
+    })()
+    .map_err(|error| {
+        format!(
+            "Изменение могло примениться для папки «{}», но сохранение журнала не подтверждено: {error}",
+            result.path,
+        )
+    })?;
+    match receipt {
+        JournalReceipt::Recorded => Ok(()),
+        JournalReceipt::Failed(error) => Err(journal_failure(&result.path, &error)),
+    }
+}
+
 pub struct ElevatedSession {
     pipe: Mutex<fs::File>,
     parent: fs::File,
@@ -239,7 +269,14 @@ impl ElevatedSession {
         }
         apply_with_sink(&self.request, |result| {
             let mut pipe = self.pipe.lock().map_err(|_| "Соединение недоступно")?;
-            send(&mut pipe, result)
+            // Sending does not prove that the ordinary helper recorded the
+            // result. Do not start the next change until persistence succeeds.
+            send_result_and_wait_for_receipt(
+                &mut pipe,
+                &self.parent,
+                result,
+                Instant::now() + Duration::from_secs(30),
+            )
         })
     }
 }
@@ -291,14 +328,24 @@ pub fn elevated_request_from_args(args: &[String]) -> Result<Option<Arc<Elevated
         Some(Instant::now() + Duration::from_secs(30)),
     )?)
     .map_err(|_| "Некорректный запрос")?;
+    let (request, lease) = accept_envelope(envelope, &args[2])?;
+    Ok(Some(Arc::new(ElevatedSession {
+        pipe: Mutex::new(pipe),
+        parent,
+        _lease: lease,
+        request,
+    })))
+}
+
+fn accept_envelope(envelope: Envelope, token: &str) -> Result<(SecurityRequest, fs::File), String> {
     if envelope
         .token
         .as_bytes()
         .iter()
-        .zip(args[2].bytes())
+        .zip(token.bytes())
         .fold(0u8, |v, (a, b)| v | (a ^ b))
         != 0
-        || envelope.token.len() != args[2].len()
+        || envelope.token.len() != token.len()
     {
         return Err("Запрос не совпал".into());
     }
@@ -314,18 +361,13 @@ pub fn elevated_request_from_args(args: &[String]) -> Result<Option<Arc<Elevated
         return Err("Некорректная сессия настройки".into());
     }
     let lease = open_lease(&envelope.lease_path, false, false)?;
-    Ok(Some(Arc::new(ElevatedSession {
-        pipe: Mutex::new(pipe),
-        parent,
-        _lease: lease,
-        request,
-    })))
+    Ok((request, lease))
 }
 
 pub fn elevate_helper(request: &SecurityRequest) -> Result<(), String> {
     let journal = journal_path()?;
-    let request = filter_owned_removals(request, &journal)?;
-    prepare_directories(&request)?;
+    let request = preflight_journal(request, &journal)?;
+    prepare_directories(&request, is_elevated())?;
     let name = format!("ChillHub.Security.{}", uuid::Uuid::new_v4());
     let token = format!(
         "{}{}",
@@ -384,39 +426,52 @@ pub fn elevate_helper(request: &SecurityRequest) -> Result<(), String> {
                 lease_path: journal.with_file_name("security-session.lock"),
             },
         )?;
-        let mut seen = std::collections::HashSet::new();
-        let mut journal_error = None;
-        while seen.len() < request.paths.len() {
-            let result: ExclusionResult = serde_json::from_str(&line(&mut pipe, &child, None)?)
-                .map_err(|_| "Некорректный результат настройки")?;
-            let key = result_path_key(request.operation, Path::new(&result.path))?;
-            if !request
-                .paths
-                .iter()
-                .any(|p| result_path_matches(request.operation, p, Path::new(&result.path)))
-                || !seen.insert(key)
-            {
-                return Err("Помощник вернул неизвестный или повторный путь".into());
-            }
-            if let Err(error) = record_results(&journal, &[result]) {
-                journal_error.get_or_insert(error);
-            }
-        }
-        match journal_error {
-            Some(error) => Err(format!(
-                "Изменения могли примениться, но журнал сохранить не удалось: {error}"
-            )),
-            None => Ok(()),
-        }
+        receive_results(&request, &mut pipe, &child, None, |result| {
+            record_results(&journal, std::slice::from_ref(result))
+        })
     })();
-    // Even a malformed reply or a failed journal must not release the install
-    // guard while the elevated window/process still owns its executable.
-    drop(pipe);
+    // Keep the final receipt readable until the elevated window closes.
+    // If no receipt could be sent, the elevated side has a bounded wait.
+    // The install guard must also remain held while it owns its executable.
     let waited = unsafe { WaitForSingleObject(handle(&child), INFINITE) };
+    drop(pipe);
     if waited != WAIT_OBJECT_0 {
         return Err("Не удалось дождаться закрытия помощника".into());
     }
     result
+}
+
+fn receive_results(
+    request: &SecurityRequest,
+    pipe: &mut fs::File,
+    child: &fs::File,
+    deadline: Option<Instant>,
+    mut record: impl FnMut(&ExclusionResult) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < request.paths.len() {
+        let result: ExclusionResult = serde_json::from_str(&line(pipe, child, deadline)?)
+            .map_err(|_| "Некорректный результат настройки")?;
+        let path = Path::new(&result.path);
+        let key = result_path_key(request.operation, path)?;
+        if !request
+            .paths
+            .iter()
+            .any(|p| result_path_matches(request.operation, p, path))
+            || !seen.insert(key)
+        {
+            return Err("Помощник вернул неизвестный или повторный путь".into());
+        }
+        if let Err(error) = record(&result) {
+            let message = journal_failure(&result.path, &error);
+            let _ = send(pipe, &JournalReceipt::Failed(error));
+            return Err(message);
+        }
+        send(pipe, &JournalReceipt::Recorded).map_err(|error| {
+            format!("Журнал сохранён, но помощник не получил подтверждение: {error}")
+        })?;
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod transport_tests;

@@ -21,8 +21,7 @@ fn main() -> Result<(), String> {
     result
 }
 
-fn finish(ui: &AuxiliaryWindow, result: Result<(), String>, log: &Result<HelperLog, String>) {
-    let caption = helper_runtime::record_result(log, &result);
+fn finish(ui: &AuxiliaryWindow, result: Result<(), String>, caption: &str) {
     ui.set_busy(false);
     ui.set_can_close(true);
     ui.set_error(result.is_err());
@@ -45,11 +44,24 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
     helper_runtime::select_renderer()?;
     let ui = AuxiliaryWindow::new().map_err(|e| e.to_string())?;
     helper_runtime::style_window(ui.window());
-    start(&ui, std::env::args().skip(1).collect(), log);
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    start(
+        &ui,
+        log,
+        move || update::job_from_args(&args),
+        update::execute_job,
+    );
     ui.run().map_err(|e| e.to_string())
 }
 
-fn start(ui: &AuxiliaryWindow, args: Vec<String>, log: Result<HelperLog, String>) {
+fn start(
+    ui: &AuxiliaryWindow,
+    log: Result<HelperLog, String>,
+    load_job: impl FnOnce() -> Result<update::UpdateJob, String> + Send + 'static,
+    execute: impl FnOnce(&update::UpdateJob, &(dyn Fn(&str, f32) + Sync)) -> Result<(), String>
+    + Send
+    + 'static,
+) {
     ui.set_window_title("Обновление · Chill Hub".into());
     ui.set_heading("Обновление Chill Hub".into());
     ui.set_subtitle("Обновляем лаунчер. Игры и настройки сохранятся.".into());
@@ -77,7 +89,7 @@ fn start(ui: &AuxiliaryWindow, args: Vec<String>, log: Result<HelperLog, String>
     let worker_log = log.clone();
     let spawn = std::thread::Builder::new().name("chillhub-update".into()).spawn(move || {
         let result = helper_runtime::caught(|| {
-            let job = update::job_from_args(&args)?;
+            let job = load_job()?;
             let recovery = job.mode == update::UpdateMode::Recovery;
             let details = if recovery {
                 format!("Восстанавливаем версию {} из резервной копии. Настройки и игры сохранятся.", job.staged.current_version)
@@ -92,7 +104,7 @@ fn start(ui: &AuxiliaryWindow, args: Vec<String>, log: Result<HelperLog, String>
                 if recovery { ui.set_heading("Восстановление Chill Hub".into()); ui.set_subtitle("Возвращаем файлы предыдущей версии и перезапускаем лаунчер.".into()); }
             });
             let last = std::sync::Mutex::new(String::new());
-            update::execute_job(&job, &|status, progress| {
+            execute(&job, &|status, progress| {
                 if let Ok(mut previous) = last.lock() && *previous != status {
                     if let Ok(log) = &worker_log { let _ = log.record("progress", status); }
                     *previous = status.to_owned();
@@ -101,18 +113,15 @@ fn start(ui: &AuxiliaryWindow, args: Vec<String>, log: Result<HelperLog, String>
                 let _ = weak.upgrade_in_event_loop(move |ui| { ui.set_status(status.into()); ui.set_progress(progress); });
             })
         });
-        let fallback = result.clone();
-        let completion_log = worker_log.clone();
-        if weak.upgrade_in_event_loop(move |ui| finish(&ui, result, &completion_log)).is_err() {
-            helper_runtime::record_result(&worker_log, &fallback);
-        }
+        // Persist the outcome even when the window disappears before the
+        // event loop can deliver the final UI update.
+        let caption = helper_runtime::record_result(&worker_log, &result);
+        let _ = weak.upgrade_in_event_loop(move |ui| finish(&ui, result, &caption));
     });
     if let Err(error) = spawn {
-        finish(
-            ui,
-            Err(format!("Не удалось начать обновление: {error}")),
-            &log,
-        );
+        let result = Err(format!("Не удалось начать обновление: {error}"));
+        let caption = helper_runtime::record_result(&log, &result);
+        finish(ui, result, &caption);
     }
 }
 

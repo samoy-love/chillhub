@@ -571,6 +571,33 @@ fn real_ui_headless_layout_and_actions() {
     })))
     .expect("headless platform only");
     let mut h = Harness::new();
+    // The selection marker must identify the clicked game on its first frame,
+    // without passing over unrelated games during a long library jump.
+    {
+        let library = Harness::new();
+        resize(library.ui.window(), 1360, 850, 1.0);
+        library.ui.set_selected_game(0);
+        settle();
+        let last = library.ui.get_games().row_count() - 1;
+        let marker_at = |index: usize| {
+            let title = library.ui.get_games().row_data(index).unwrap().title;
+            let row = ElementHandle::find_by_accessible_label(&library.ui, title.as_str())
+                .find(|e| e.accessible_enabled().is_some())
+                .unwrap();
+            let position = row.absolute_position();
+            ((position.x + 1.0) as usize, (position.y + 24.0) as usize)
+        };
+        let before = library.ui.window().take_snapshot().unwrap();
+        let first_point = marker_at(0);
+        let pixel = |image: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, point: (usize, usize)| {
+            image.as_slice()[point.1 * image.width() as usize + point.0]
+        };
+        let selected_color = pixel(&before, first_point);
+        library.ui.invoke_game_selected(last as i32);
+        let immediate = library.ui.window().take_snapshot().unwrap();
+        assert_eq!(pixel(&immediate, marker_at(last)), selected_color);
+        assert_ne!(pixel(&immediate, first_point), selected_color);
+    }
     // Exercise the actual TextInput event path with EN and RU key text, including
     // Slint's clipboard-backed methods and ordinary character entry.
     {

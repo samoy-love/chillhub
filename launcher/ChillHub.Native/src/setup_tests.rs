@@ -131,6 +131,30 @@ fn setup_rejects_root_relative_and_command_injection_paths() {
     }
     assert!(directory("C:\\Games\\Chill Hub").is_ok());
 }
+
+#[test]
+fn setup_rejects_existing_files_and_the_windows_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("not a folder.txt");
+    std::fs::write(&file, "keep").unwrap();
+    assert!(
+        directory(file.to_str().unwrap())
+            .unwrap_err()
+            .contains("уже есть файл")
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep");
+    assert!(directory(root.path().join("new folder").to_str().unwrap()).is_ok());
+    if let Some(windows) = std::env::var_os("WINDIR") {
+        let windows = PathBuf::from(windows);
+        for path in [&windows, &windows.join("System32")] {
+            assert!(
+                directory(path.to_str().unwrap())
+                    .unwrap_err()
+                    .contains("системную папку")
+            );
+        }
+    }
+}
 #[test]
 fn setup_keeps_games_outside_installation_and_rejects_foreign_files() {
     let root = tempfile::tempdir().unwrap();
@@ -145,6 +169,54 @@ fn setup_keeps_games_outside_installation_and_rejects_foreign_files() {
     assert_eq!(
         std::fs::read_to_string(install.join("personal.txt")).unwrap(),
         "keep"
+    );
+    std::fs::write(install.join("ChillHub.exe"), "existing installation").unwrap();
+    assert!(validate_paths(&install, &games).is_ok());
+}
+
+#[test]
+fn real_setup_requires_an_existing_absolute_engine_and_passes_removal_options() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = root.path().join("uninstaller.exe");
+    let install = root.path().join("Existing Install");
+    let mut args = [
+        "uninstall".to_owned(),
+        "uninstaller.exe".to_owned(),
+        install.display().to_string(),
+        root.path().join("Games").display().to_string(),
+        "1.8.9".to_owned(),
+    ];
+    assert!(
+        Request::parse(&args)
+            .unwrap_err()
+            .contains("Не найден установщик")
+    );
+    args[1] = engine.display().to_string();
+    assert!(Request::parse(&args).is_err());
+    std::fs::write(&engine, "fixture, not an executable").unwrap();
+    let request = Request::parse(&args).unwrap();
+    assert!(request.removing);
+    assert!(!request.preview);
+    let command = engine_command(&request, true, true);
+    assert_eq!(command.get_program(), engine.as_os_str());
+    let removal: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        removal,
+        [
+            "/S".to_owned(),
+            "/DELETEGAMES".to_owned(),
+            format!("_?={}", install.display())
+        ]
+    );
+    let keep = engine_command(&request, true, false);
+    assert!(!keep.get_args().any(|arg| arg == "/DELETEGAMES"));
+    assert!(
+        execute(&request, true, false)
+            .unwrap_err()
+            .contains("Не удалось начать операцию")
     );
 }
 #[test]

@@ -23,7 +23,7 @@ try {
             $tail = $contents.Substring($attribute.Index + $attribute.Length)
             $declaration = [regex]::Match($tail, '\A(?:[ \t]*#\[[^\r\n]+\][ \t]*\r?\n)*[ \t]*([^\r\n]+)').Groups[1].Value
             # A test-only import, module declaration, or extern declaration contains no executable code.
-            if ($declaration -notmatch '^(?:mod\s+\w+|(?:pub(?:\([^)]*\))?\s+)?use\s+.+|fn\s+[^{};]+);\s*$') {
+            if ($declaration -notmatch '^(?:pub(?:\([^)]*\))?\s+)?(?:mod\s+\w+|use\s+.+|fn\s+[^{};]+);\s*$') {
                 throw "Перенесите тестовые вспомогательные функции из $($source.Name) в отдельный файл *_tests.rs."
             }
         }

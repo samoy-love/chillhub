@@ -73,14 +73,7 @@ fn main() -> Result<(), String> {
     result
 }
 
-fn finish(
-    ui: &AuxiliaryWindow,
-    result: Result<String, String>,
-    elevated: bool,
-    log: &Result<HelperLog, String>,
-) {
-    let caption =
-        helper_runtime::record_result(log, &result.as_ref().map(|_| ()).map_err(Clone::clone));
+fn finish(ui: &AuxiliaryWindow, result: Result<String, String>, elevated: bool, caption: &str) {
     ui.set_busy(false);
     ui.set_can_close(true);
     ui.set_error(result.is_err());
@@ -186,11 +179,6 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
             });
         }
         Ok(request) => {
-            let verb = if request.operation == SecurityOperation::Add {
-                "Добавить исключения"
-            } else {
-                "Удалить эти исключения"
-            };
             let selected = if elevated || request.operation == SecurityOperation::Remove {
                 0
             } else {
@@ -229,91 +217,23 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
                         let _ = weak.upgrade_in_event_loop(move |ui| ui.set_status(message.into()));
                     });
             });
-            let weak = ui.as_weak();
-            ui.on_primary(move || {
-                let Some(ui) = weak.upgrade() else {
-                    return;
-                };
-                if ui.get_busy() {
-                    return;
-                }
-                if ui.get_selected_provider() != 0 {
-                    if let Err(error) =
-                        security::open_guide(ui.get_selected_provider().max(0) as usize)
-                    {
-                        ui.set_status(error.into());
+            bind_primary(
+                &ui,
+                request,
+                elevated,
+                log,
+                move |request| {
+                    if !elevated {
+                        security::elevate_helper(request)?;
+                        return Ok(Vec::new());
                     }
-                    return;
-                }
-                ui.set_busy(true);
-                ui.set_can_close(false);
-                ui.set_status(
-                    if elevated {
-                        "Windows применяет настройку. Дождитесь результата…"
-                    } else {
-                        "Завершите настройку в окне с подтверждением Windows…"
+                    match &elevated_session {
+                        Some(session) => session.apply_confirmed(),
+                        None => security::apply_confirmed(request),
                     }
-                    .into(),
-                );
-                if let Ok(log) = &log {
-                    let _ = log.record(
-                        if elevated {
-                            "confirmed"
-                        } else {
-                            "elevation-requested"
-                        },
-                        verb,
-                    );
-                }
-                let request = request.clone();
-                let elevated_session = elevated_session.clone();
-                let worker_log = log.clone();
-                let worker_ui = weak.clone();
-                let spawn = std::thread::Builder::new()
-                    .name("chillhub-security".into())
-                    .spawn(move || {
-                        let result = helper_runtime::caught(|| {
-                            if !elevated {
-                                return security::elevate_helper(&request).map(|_| String::new());
-                            }
-                            let results = match elevated_session {
-                                Some(session) => session.apply_confirmed()?,
-                                None => security::apply_confirmed(&request)?,
-                            };
-                            if let Ok(log) = &worker_log {
-                                for result in &results {
-                                    let _ = log.record(
-                                        &result.status,
-                                        &format!("{}: {}", result.path, result.detail),
-                                    );
-                                }
-                            }
-                            Ok(results
-                                .into_iter()
-                                .map(|r| format!("{}\n{}", r.path, r.detail))
-                                .collect::<Vec<_>>()
-                                .join("\n\n"))
-                        });
-                        let fallback = result.as_ref().map(|_| ()).map_err(Clone::clone);
-                        let completion_log = worker_log.clone();
-                        if worker_ui
-                            .upgrade_in_event_loop(move |ui| {
-                                finish(&ui, result, elevated, &completion_log)
-                            })
-                            .is_err()
-                        {
-                            helper_runtime::record_result(&worker_log, &fallback);
-                        }
-                    });
-                if let Err(error) = spawn {
-                    finish(
-                        &ui,
-                        Err(format!("Не удалось начать настройку: {error}")),
-                        elevated,
-                        &log,
-                    );
-                }
-            });
+                },
+                security::open_guide,
+            );
         }
     }
     ui.show().map_err(|e| e.to_string())?;
@@ -322,6 +242,99 @@ fn run(log: Result<HelperLog, String>) -> Result<(), String> {
         let _ = security::mark_introduction_shown();
     }
     ui.run().map_err(|e| e.to_string())
+}
+
+fn bind_primary(
+    ui: &AuxiliaryWindow,
+    request: security::SecurityRequest,
+    elevated: bool,
+    log: Result<HelperLog, String>,
+    execute: impl Fn(&security::SecurityRequest) -> Result<Vec<security::ExclusionResult>, String>
+    + Clone
+    + Send
+    + 'static,
+    open_guide: fn(usize) -> Result<(), String>,
+) {
+    let verb = if request.operation == SecurityOperation::Add {
+        "Добавить исключения"
+    } else {
+        "Удалить эти исключения"
+    };
+    let weak = ui.as_weak();
+    ui.on_primary(move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        if ui.get_busy() {
+            return;
+        }
+        let provider = ui.get_selected_provider();
+        if provider != 0 {
+            if let Ok(provider) = usize::try_from(provider)
+                && let Err(error) = open_guide(provider)
+            {
+                ui.set_status(error.into());
+            }
+            return;
+        }
+        ui.set_busy(true);
+        ui.set_can_close(false);
+        ui.set_status(
+            if elevated {
+                "Windows применяет настройку. Дождитесь результата…"
+            } else {
+                "Завершите настройку в окне с подтверждением Windows…"
+            }
+            .into(),
+        );
+        if let Ok(log) = &log {
+            let _ = log.record(
+                if elevated {
+                    "confirmed"
+                } else {
+                    "elevation-requested"
+                },
+                verb,
+            );
+        }
+        let request = request.clone();
+        let execute = execute.clone();
+        let worker_log = log.clone();
+        let worker_ui = weak.clone();
+        let spawn = std::thread::Builder::new()
+            .name("chillhub-security".into())
+            .spawn(move || {
+                let result = helper_runtime::caught(|| {
+                    let results = execute(&request)?;
+                    if let Ok(log) = &worker_log {
+                        for result in &results {
+                            let _ = log.record(
+                                &result.status,
+                                &format!("{}: {}", result.path, result.detail),
+                            );
+                        }
+                    }
+                    Ok(results
+                        .into_iter()
+                        .map(|r| format!("{}\n{}", r.path, r.detail))
+                        .collect::<Vec<_>>()
+                        .join("\n\n"))
+                });
+                let caption = completion_caption(&worker_log, &result);
+                let _ = worker_ui.upgrade_in_event_loop(move |ui| {
+                    finish(&ui, result, elevated, &caption);
+                });
+            });
+        if let Err(error) = spawn {
+            let result = Err(format!("Не удалось начать настройку: {error}"));
+            let caption = completion_caption(&log, &result);
+            finish(&ui, result, elevated, &caption);
+        }
+    });
+}
+
+fn completion_caption(log: &Result<HelperLog, String>, result: &Result<String, String>) -> String {
+    helper_runtime::record_result(log, &result.as_ref().map(|_| ()).map_err(Clone::clone))
 }
 
 fn resume_confirmed_handoff(ui: &AuxiliaryWindow, authenticated: bool) {

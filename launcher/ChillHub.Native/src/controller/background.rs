@@ -92,6 +92,9 @@ fn failed(ui: &AppWindow, state: &State, activity: Activity, current: bool, erro
                 ui.set_load_error(
                     "Не удалось загрузить библиотеку. Попробуйте обновить её.".into(),
                 );
+                if let Some(request) = super::take_catalog_shortcut(ui, state) {
+                    super::offer_shortcut(ui, state, request);
+                }
             }
             Activity::Operation => ui.set_operation_busy(false),
             Activity::Poll => state.borrow_mut().poll_inflight = false,

@@ -6,6 +6,7 @@ use chillhub_native::feedback::FeedbackService;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static LIVE_SETTINGS_EPOCH: AtomicU64 = AtomicU64::new(0);
+const SAVING_LIVE: &str = "Сохраняем…";
 
 pub(super) enum AfterSave {
     Close,
@@ -61,7 +62,8 @@ pub(super) fn save_live(ui: &AppWindow, state: &State) {
     let reduced = ui.get_reduced_motion();
     let karaoke = ui.get_karaoke_enabled();
     let s = state.borrow();
-    if s.prefs.download_threads == threads
+    if ui.get_settings_save_status() != SAVING_LIVE
+        && s.prefs.download_threads == threads
         && s.prefs
             .extra
             .get("KaraokeEnabled")
@@ -82,7 +84,7 @@ pub(super) fn save_live(ui: &AppWindow, state: &State) {
     let services = s.services.clone();
     drop(s);
     let epoch = LIVE_SETTINGS_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
-    ui.set_settings_save_status("Сохраняем…".into());
+    ui.set_settings_save_status(SAVING_LIVE.into());
     background(
         ui,
         move || {
@@ -127,7 +129,6 @@ pub(super) fn save(ui: &AppWindow, state: &State, next: AfterSave) {
     if ui.get_operation_busy() {
         return;
     }
-    LIVE_SETTINGS_EPOCH.fetch_add(1, Ordering::SeqCst);
     let services = state.borrow().services.clone();
     let path = settings_ui::normalize_games_path(ui.get_settings_path().as_str())
         .to_string_lossy()
@@ -158,7 +159,8 @@ pub(super) fn save(ui: &AppWindow, state: &State, next: AfterSave) {
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
         != reduced;
-    if !reload_needed
+    if ui.get_settings_save_status() != SAVING_LIVE
+        && !reload_needed
         && current.download_threads == threads
         && current.speed_limit_mbps == speed
         && current.minimize_to_tray == tray
@@ -180,6 +182,8 @@ pub(super) fn save(ui: &AppWindow, state: &State, next: AfterSave) {
         ui.set_settings_error("Дождитесь запуска игр перед изменением папки или сервера.".into());
         return;
     }
+    LIVE_SETTINGS_EPOCH.fetch_add(1, Ordering::SeqCst);
+    ui.set_settings_save_status("".into());
     ui.set_operation_busy(true);
     background_for(
         ui,

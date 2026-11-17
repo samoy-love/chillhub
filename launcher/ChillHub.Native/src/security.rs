@@ -24,6 +24,7 @@ pub use session::{ElevatedSession, elevate_helper, elevated_request_from_args};
 pub const WARNING: &str = "Антивирус перестанет проверять файлы в выбранных папках, включая новые игры и моды. Исключение не подтверждает безопасность файлов.";
 pub const HELPER_NAME: &str = "ChillHub.SecurityHelper.exe";
 pub const MANUAL_URL: &str = "https://support.microsoft.com/en-us/windows/security/threat-malware-protection/virus-and-threat-protection-in-the-windows-security-app";
+const ELEVATION_REQUIRED: &str = "Для этого действия требуется подтверждение Windows";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -112,8 +113,11 @@ $result | ConvertTo-Json -Depth 6 -Compress
 "#;
 
 pub fn inspect() -> Result<SecurityReport, String> {
-    serde_json::from_str(&powershell(INSPECT, None)?)
-        .map_err(|e| format!("Не удалось прочитать состояние защиты: {e}"))
+    parse_report(&powershell(INSPECT, None)?)
+}
+
+fn parse_report(output: &str) -> Result<SecurityReport, String> {
+    serde_json::from_str(output).map_err(|e| format!("Не удалось прочитать состояние защиты: {e}"))
 }
 
 /// Reject broad locations, links, devices, remote shares and alternate streams.
@@ -312,10 +316,18 @@ fn filter_owned_removals(
     request: &SecurityRequest,
     journal: &Path,
 ) -> Result<SecurityRequest, String> {
+    // A corrupt or inaccessible journal would leave new exclusions untracked.
+    let owned = read_journal(journal)?;
+    filter_by_ownership(request, &owned)
+}
+
+fn filter_by_ownership(
+    request: &SecurityRequest,
+    owned: &SecurityJournal,
+) -> Result<SecurityRequest, String> {
     if request.operation != SecurityOperation::Remove {
         return Ok(request.clone());
     }
-    let owned = read_journal(journal)?;
     let mut registered: Vec<PathBuf> = Vec::new();
     for requested in &request.paths {
         let mut matched = false;
@@ -344,11 +356,11 @@ fn filter_owned_removals(
     })
 }
 
-fn prepare_directories(request: &SecurityRequest) -> Result<(), String> {
+fn prepare_directories(request: &SecurityRequest, elevated: bool) -> Result<(), String> {
     let paths = validate_requested_paths(&request.paths)?;
     if request.operation == SecurityOperation::Add {
         for path in paths {
-            if !path.is_dir() && is_elevated() {
+            if !path.is_dir() && elevated {
                 return Err(
                     "Создайте выбранную папку без прав администратора и повторите настройку".into(),
                 );
@@ -360,15 +372,7 @@ fn prepare_directories(request: &SecurityRequest) -> Result<(), String> {
 }
 
 pub fn mark_introduction_shown() -> Result<(), String> {
-    let path = journal_path()?;
-    let _lock = journal_lock(&path)?;
-    let mut journal = read_journal(&path)?;
-    journal.introduction_shown = true;
-    crate::paths::atomic_write(
-        &path,
-        &serde_json::to_vec(&journal).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    acknowledge_offer(None)
 }
 
 /// None is the initial offer; Some is a separate external Steam game folder.
@@ -413,7 +417,7 @@ pub fn acknowledge_offer_at(data: &Path, extra: Option<&Path>) -> Result<(), Str
 
 fn acknowledge_offer_in(path: &Path, extra: Option<&Path>) -> Result<(), String> {
     let _lock = journal_lock(path)?;
-    let mut state = read_journal(path)?;
+    let mut state = read_journal_locked(path)?;
     if let Some(extra) = extra {
         let extra = validate_directory_policy(extra, false)?;
         if !state
@@ -462,19 +466,63 @@ fn journal_path() -> Result<PathBuf, String> {
 }
 
 fn read_journal(path: &Path) -> Result<SecurityJournal, String> {
+    let _lock = journal_lock(path)?;
+    read_journal_locked(path)
+}
+
+fn read_journal_locked(path: &Path) -> Result<SecurityJournal, String> {
+    read_journal_contents(path).map(|(journal, _)| journal)
+}
+
+fn read_journal_contents(path: &Path) -> Result<(SecurityJournal, Option<Vec<u8>>), String> {
+    const MAX_BYTES: u64 = 1024 * 1024;
     crate::manifest::check_no_links(path).map_err(|e| e.to_string())?;
-    match fs::read(path) {
-        Ok(bytes) if bytes.len() <= 1024 * 1024 => serde_json::from_slice(&bytes)
-            .map_err(|_| "Журнал исключений повреждён. Он сохранён для восстановления".into()),
-        Ok(_) => Err("Журнал исключений слишком велик".into()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SecurityJournal::default()),
-        Err(e) => Err(e.to_string()),
+    let file = match crate::manifest::open_regular(path, false, false, false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((SecurityJournal::default(), None));
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("Журнал исключений слишком велик".into());
     }
+    let journal = serde_json::from_slice(&bytes)
+        .map_err(|_| "Журнал исключений повреждён. Он сохранён для восстановления")?;
+    Ok((journal, Some(bytes)))
+}
+
+fn preflight_journal(request: &SecurityRequest, path: &Path) -> Result<SecurityRequest, String> {
+    let _lock = journal_lock(path)?;
+    let parent = path.parent().ok_or("Не найдена папка журнала исключений")?;
+    let _guard = crate::manifest::DirectoryGuard::acquire(parent, true)
+        .map_err(|error| error.to_string())?;
+    let (journal, bytes) = read_journal_contents(path)?;
+    let request = filter_by_ownership(request, &journal)?;
+    // Verify the same atomic replacement that will record the result. Keep
+    // the original contents, including fields written by other versions.
+    let bytes = match bytes {
+        Some(bytes) => bytes,
+        None => serde_json::to_vec(&journal).map_err(|error| error.to_string())?,
+    };
+    crate::paths::atomic_write(path, &bytes)
+        .map_err(|error| format!("Не удалось проверить запись в журнал исключений: {error}"))?;
+    Ok(request)
+}
+
+fn journal_failure(path: &str, error: &str) -> String {
+    format!(
+        "Изменение могло примениться для папки «{path}», но журнал сохранить не удалось: {error}"
+    )
 }
 
 fn record_results(path: &Path, results: &[ExclusionResult]) -> Result<(), String> {
     let _lock = journal_lock(path)?;
-    let mut journal = read_journal(path)?;
+    let mut journal = read_journal_locked(path)?;
     for result in results {
         let item = PathBuf::from(&result.path);
         // A confirmed result remains recordable if a removable drive vanished
@@ -501,12 +549,64 @@ fn record_results(path: &Path, results: &[ExclusionResult]) -> Result<(), String
     .map_err(|e| e.to_string())
 }
 
-fn journal_lock(path: &Path) -> Result<crate::update::ProcessLock, String> {
+fn journal_lock(path: &Path) -> Result<JournalLock, String> {
     use sha2::{Digest, Sha256};
     let identity = crate::paths::path_identity(path)
         .ok_or("Не удалось проверить расположение журнала исключений")?;
     let key = format!("{:X}", Sha256::digest(identity.as_bytes()));
-    crate::update::ProcessLock::acquire(&format!("Local\\ChillHub.SecurityJournal.{key}"))
+    JournalLock::acquire(&format!("Local\\ChillHub.SecurityJournal.{key}"))
+}
+
+#[cfg(windows)]
+struct JournalLock(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl JournalLock {
+    fn acquire(name: &str) -> Result<Self, String> {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+            System::Threading::{CreateMutexW, WaitForSingleObject},
+        };
+        let name = name.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        // MoveFileExW may reject replacement while a reader has the old file
+        // open. Use the same bounded lock for reads and writes.
+        let result = unsafe { WaitForSingleObject(handle, 2000) };
+        if matches!(result, WAIT_OBJECT_0 | WAIT_ABANDONED) {
+            return Ok(Self(handle));
+        }
+        let error = if result == WAIT_TIMEOUT {
+            "Журнал исключений занят. Повторите настройку.".into()
+        } else {
+            std::io::Error::last_os_error().to_string()
+        };
+        unsafe { CloseHandle(handle) };
+        Err(error)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for JournalLock {
+    fn drop(&mut self) {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::ReleaseMutex};
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct JournalLock;
+
+#[cfg(not(windows))]
+impl JournalLock {
+    fn acquire(_: &str) -> Result<Self, String> {
+        Ok(Self)
+    }
 }
 
 /// Compatibility with the installed NSIS entry points. None means the offer was
@@ -545,7 +645,7 @@ fn request_from_args_in(
     }
     let journal_file = journal_location()?;
     let _journal_lock = journal_lock(&journal_file)?;
-    let journal = read_journal(&journal_file)?;
+    let journal = read_journal_locked(&journal_file)?;
     if remove {
         if journal.added_paths.is_empty() {
             return Ok(None);
@@ -641,19 +741,46 @@ ConvertTo-Json -InputObject @($results) -Depth 4 -Compress
 /// The caller MUST invoke this only from the helper's explicit confirmation
 /// callback. Even an elevated helper starts with a confirmation window.
 pub fn apply_confirmed(request: &SecurityRequest) -> Result<Vec<ExclusionResult>, String> {
-    let journal = journal_path()?;
-    let request = filter_owned_removals(request, &journal)?;
-    apply_with_sink(&request, |result| {
-        record_results(&journal, std::slice::from_ref(result))
+    if !is_elevated() {
+        return Err(ELEVATION_REQUIRED.into());
+    }
+    apply_in_journal(request, &journal_path()?, |input| {
+        powershell(CHANGE, Some(input))
+    })
+}
+
+fn apply_in_journal(
+    request: &SecurityRequest,
+    journal: &Path,
+    execute: impl FnMut(&[u8]) -> Result<String, String>,
+) -> Result<Vec<ExclusionResult>, String> {
+    let request = preflight_journal(request, journal)?;
+    apply_with(&request, true, execute, |result| {
+        record_results(journal, std::slice::from_ref(result))
+            .map_err(|error| journal_failure(&result.path, &error))
     })
 }
 
 fn apply_with_sink(
     request: &SecurityRequest,
+    record: impl FnMut(&ExclusionResult) -> Result<(), String>,
+) -> Result<Vec<ExclusionResult>, String> {
+    apply_with(
+        request,
+        is_elevated(),
+        |input| powershell(CHANGE, Some(input)),
+        record,
+    )
+}
+
+fn apply_with(
+    request: &SecurityRequest,
+    elevated: bool,
+    mut execute: impl FnMut(&[u8]) -> Result<String, String>,
     mut record: impl FnMut(&ExclusionResult) -> Result<(), String>,
 ) -> Result<Vec<ExclusionResult>, String> {
-    if !is_elevated() {
-        return Err("Для этого действия требуется подтверждение Windows".into());
+    if !elevated {
+        return Err(ELEVATION_REQUIRED.into());
     }
     let request = SecurityRequest {
         paths: validate_for_operation(&request.paths, request.operation)?,
@@ -667,7 +794,7 @@ fn apply_with_sink(
             operation: request.operation,
         };
         let input = serde_json::to_vec(&one).map_err(|e| e.to_string())?;
-        let result = powershell(CHANGE, Some(&input))
+        let result = execute(&input)
             .and_then(|text| {
                 let mut parsed: Vec<ExclusionResult> = serde_json::from_str(&text)
                     .map_err(|e| format!("Не удалось прочитать результат настройки: {e}"))?;

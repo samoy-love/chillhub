@@ -50,3 +50,30 @@ fn path_normalization_keeps_unc_and_missing_drive() {
         chillhub_native::paths::default_games_dir()
     );
 }
+
+#[test]
+fn package_links_reject_wrong_hosts_schemes_and_credentials_before_opening() {
+    for url in [
+        "invalid url",
+        "http://thunderstore.io/c/game/p/team/package/",
+        "https://thunderstore.io.example.com/",
+        "https://person@thunderstore.io/",
+        "https://:secret@thunderstore.io/",
+    ] {
+        assert!(open_package(url).is_err(), "{url}");
+    }
+}
+
+#[test]
+fn absent_or_regular_file_paths_have_no_tree_to_measure() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("game");
+    assert_eq!(folder_size(&file).unwrap(), 0);
+    std::fs::write(&file, b"existing file").unwrap();
+    assert_eq!(folder_size(&file).unwrap(), 0);
+    assert_eq!(
+        normalize_games_path("  "),
+        chillhub_native::paths::default_games_dir()
+    );
+    assert!(validate_path_override("D:/Fresh Games", None).is_ok());
+}

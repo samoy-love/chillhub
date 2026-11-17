@@ -62,6 +62,10 @@ struct Loopback {
 }
 impl Loopback {
     fn new() -> Self {
+        Self::with_title("Проверочная игра")
+    }
+
+    fn with_title(fixture_title: &str) -> Self {
         fn file(path: &str, bytes: &[u8]) -> ManifestFile {
             ManifestFile {
                 path: path.into(),
@@ -111,7 +115,7 @@ impl Loopback {
             },
             GameRecord {
                 game_id: "fixture".into(),
-                title: "Проверочная игра".into(),
+                title: fixture_title.into(),
                 has_latest: true,
                 latest_version: "1.0.0".into(),
                 exe_relative_path: "Game.exe".into(),
@@ -261,6 +265,8 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
     let temporary = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temporary.path());
     let server = Loopback::new();
+    let replacement_server = Loopback::with_title("Игра с нового сервера");
+    crate::main_runtime_tests::run(server.base.as_str());
     let mut prefs = AppConfig {
         games_path: paths.games_dir.to_string_lossy().into_owned(),
         api_base_url: server.base.clone(),
@@ -288,6 +294,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         data_root: temporary.path().into(),
         art_root: temporary.path().join("art"),
         selected: 0,
+        displayed_game_id: None,
         visible: vec![],
         icons: vec![],
         choices: HashMap::new(),
@@ -330,6 +337,7 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         library_status: Default::default(),
         pending: None,
         shortcut: None,
+        pending_shortcuts: Default::default(),
         update: None,
         offline: false,
     }));
@@ -349,8 +357,11 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
     let weak = ui.as_weak();
     let captured = state.clone();
     let base = server.base.clone();
+    let replacement_base = replacement_server.base.clone();
+    let replacement_games = temporary.path().join("replacement-games");
     let hold_content = server.hold_content.clone();
     let action_queue_ids = RefCell::new(Vec::new());
+    let hold_shortcut_confirmation_until = std::cell::Cell::new(None::<Instant>);
     let reject_catalog = server.reject_catalog.clone();
     let cleanup_root = paths.games_dir.join("confirmation-fixture");
     let cleanup_save = cleanup_root.join("save.dat");
@@ -439,6 +450,16 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     *stage.borrow_mut() = (16, 0);
                 }
                 16 if !ui.get_busy() && ui.get_can_play() && ui.get_play_label() == "Играть" => {
+                    ui_action_tests::start_failed_launch(&ui, &captured)?;
+                    *stage.borrow_mut() = (17, 0);
+                }
+                17 if !ui.get_busy() && captured.borrow().launching.is_empty() => {
+                    ui_action_tests::check_failed_launch(&ui, &captured)?;
+                    ui_action_tests::start_shortcut_during_catalog_refresh(&ui, &captured)?;
+                    *stage.borrow_mut() = (18, 0);
+                }
+                18 if !ui.get_operation_busy() && !ui.get_busy() => {
+                    ui_action_tests::check_shortcut_launch_finished(&ui, &captured)?;
                     let tasks = captured.borrow().tasks.clone();
                     ui.invoke_panel_closed();
                     ui.invoke_panel_requested("settings".into());
@@ -499,6 +520,10 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     *stage.borrow_mut() = (51, 0);
                 }
                 51 if ui_action_tests::check_local_queue(&ui, &captured, &action_queue_ids.borrow(), false)? => {
+                    *action_queue_ids.borrow_mut() = ui_action_tests::start_modpack_verification(&ui, &captured)?;
+                    *stage.borrow_mut() = (52, 0);
+                }
+                52 if ui_action_tests::check_modpack_verification(&ui, &captured, &action_queue_ids.borrow())? => {
                     captured.borrow_mut().choices.insert("fixture".into(), ("local".into(), "mods".into()));
                     ui.invoke_panel_closed();
                     ui.invoke_game_selected(0);
@@ -863,10 +888,69 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
                     let tasks = captured.borrow().services.queue.snapshot();
                     let task = tasks.first().ok_or("cleanup task disappeared")?;
                     match task.state {
-                        QueueState::Completed if !cleanup_save.exists() && cleanup_root.join(".version").is_file() => return Ok(true),
+                        QueueState::Completed if !cleanup_save.exists() && cleanup_root.join(".version").is_file() => {
+                            ui.invoke_panel_closed();
+                            controller::update_tests::start_automatic_update(&ui, &captured)?;
+                            *stage.borrow_mut() = (98, 0);
+                        }
                         QueueState::Waiting | QueueState::Running => {},
                         _ => return Err(format!("fresh cleanup confirmation did not finish the expected install: {task:?}")),
                     }
+                }
+                98 if !ui.get_operation_busy() => {
+                    controller::update_tests::check_automatic_update_failure(&ui, &captured)?;
+                    ui_action_tests::revert_live_setting(&ui)?;
+                    *stage.borrow_mut() = (99, 0);
+                }
+                99 if ui.get_settings_save_status() == "Сохранено" => {
+                    ui_action_tests::check_reverted_live_setting(&ui, &captured)?;
+                    ui_action_tests::request_shortcut_batch(&ui, &captured)?;
+                    ui_action_tests::check_catalog_does_not_preempt_shortcut_batch(&ui, &captured)?;
+                    *stage.borrow_mut() = (100, 0);
+                }
+                100 if !ui.get_loading() && ui.get_panel_kind() == "confirm" => {
+                    if captured.borrow().pending_shortcuts.len() != 1 || !ui.get_panel_body().contains("Shortcut.exe") {
+                        return Err("the second activation superseded the first shortcut".into());
+                    }
+                    hold_shortcut_confirmation_until.set(Some(Instant::now() + Duration::from_millis(350)));
+                    *stage.borrow_mut() = (101, captured.borrow().catalog_generation);
+                }
+                101 if hold_shortcut_confirmation_until.get().is_some_and(|until| Instant::now() >= until) => {
+                    if ui.get_loading() || ui.get_panel_kind() != "confirm"
+                        || captured.borrow().catalog_generation != expected_generation {
+                        return Err("queued shortcut replaced an open confirmation".into());
+                    }
+                    ui_action_tests::confirm_stale_shortcut(&ui, &captured)?;
+                    *stage.borrow_mut() = (102, 0);
+                }
+                102 if !ui.get_operation_busy() => {
+                    ui_action_tests::check_stale_shortcut(&ui, &captured)?;
+                    *stage.borrow_mut() = (106, 0);
+                }
+                106 if !ui.get_loading() && ui.get_toast().contains("Не удалось открыть игру из ярлыка") => {
+                    if captured.borrow().pending.is_some() || ui.get_panel_kind() == "confirm" || !captured.borrow().pending_shortcuts.is_empty() {
+                        return Err("shortcut to a file outside the game folder prompted a launch or stayed queued".into());
+                    }
+                    ui_action_tests::delete_shortcut_fixture(&ui, &captured)?;
+                    *stage.borrow_mut() = (103, 0);
+                }
+                103 if !ui.get_operation_busy() => {
+                    ui_action_tests::check_shortcut_fixture_deleted(&ui, &captured)?;
+                    ui_action_tests::submit_library_switch(&ui, &replacement_games, "file:///invalid-api")?;
+                    *stage.borrow_mut() = (104, 0);
+                }
+                104 if !ui.get_operation_busy() => {
+                    ui_action_tests::check_library_switch_rejected(&ui, &captured, &original_games, &base, &replacement_games)?;
+                    ui.set_settings_api(replacement_base.clone().into());
+                    ui.invoke_settings_leave("".into());
+                    *stage.borrow_mut() = (105, 0);
+                }
+                105 if !ui.get_operation_busy() && !ui.get_loading() && !ui.get_busy() => {
+                    if !captured.borrow().records.iter().any(|game| game.title == "Игра с нового сервера") {
+                        return Ok(false);
+                    }
+                    ui_action_tests::check_library_switch_saved(&ui, &captured, &replacement_games, &replacement_base, &original_games)?;
+                    return Ok(true);
                 }
                 _ => {}
             }

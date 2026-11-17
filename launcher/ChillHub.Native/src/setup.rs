@@ -61,6 +61,15 @@ fn directory(raw: &str) -> Result<PathBuf, String> {
             "Выберите отдельную папку с полным путём, например D:\\Games\\ChillHub.".into(),
         );
     }
+    if path.is_file() {
+        return Err("На месте выбранной папки уже есть файл. Выберите другую папку.".into());
+    }
+    let identity = PathBuf::from(
+        crate::paths::canonical_path_with_missing(&path)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .to_lowercase(),
+    );
     for name in [
         "USERPROFILE",
         "APPDATA",
@@ -71,12 +80,6 @@ fn directory(raw: &str) -> Result<PathBuf, String> {
     ] {
         if let Some(value) = std::env::var_os(name) {
             let protected = PathBuf::from(value);
-            let identity = PathBuf::from(
-                crate::paths::canonical_path_with_missing(&path)
-                    .map_err(|e| e.to_string())?
-                    .to_string_lossy()
-                    .to_lowercase(),
-            );
             let protected = PathBuf::from(
                 crate::paths::canonical_path_with_missing(&protected)
                     .map_err(|e| e.to_string())?
@@ -98,9 +101,11 @@ fn validate_paths(install: &Path, games: &Path) -> Result<(), String> {
     let install = crate::paths::canonical_path_with_missing(install).map_err(|e| e.to_string())?;
     let games = crate::paths::canonical_path_with_missing(games).map_err(|e| e.to_string())?;
     let identity = |p: &Path| p.to_string_lossy().to_lowercase();
-    let install = PathBuf::from(identity(&install));
-    let games = PathBuf::from(identity(&games));
-    if install.starts_with(&games) || games.starts_with(&install) {
+    let install_identity = PathBuf::from(identity(&install));
+    let games_identity = PathBuf::from(identity(&games));
+    if install_identity.starts_with(&games_identity)
+        || games_identity.starts_with(&install_identity)
+    {
         return Err(
             "Папки лаунчера и игр должны быть раздельными и не находиться друг внутри друга."
                 .into(),

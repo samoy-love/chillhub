@@ -1,11 +1,16 @@
 use super::*;
 use std::{
     collections::VecDeque,
+    fs::{File, OpenOptions},
     io::Read,
+    os::windows::{
+        fs::OpenOptionsExt,
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    },
     ptr,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -13,6 +18,10 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
+    Storage::FileSystem::{
+        DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        FileDispositionInfo, SetFileInformationByHandle,
+    },
     System::{LibraryLoader::GetModuleHandleW, Threading::*},
     UI::{Shell::*, WindowsAndMessaging::*},
 };
@@ -26,13 +35,13 @@ fn fresh_request(modified: SystemTime, now: SystemTime) -> bool {
         <= Duration::from_secs(120)
 }
 fn publish_request(data: &Path, args: &[String]) -> Result<PathBuf, String> {
-    let directory = data.join("requests");
-    let _guard = chillhub_native::manifest::DirectoryGuard::acquire(&directory, true)
-        .map_err(|e| e.to_string())?;
     let bytes = serde_json::to_vec(args).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > REQUEST_LIMIT {
         return Err("Запрос ярлыка слишком большой".into());
     }
+    let directory = data.join("requests");
+    let _guard = chillhub_native::manifest::DirectoryGuard::acquire(&directory, true)
+        .map_err(|e| e.to_string())?;
     let path = directory.join(format!("{}.json", uuid::Uuid::new_v4()));
     chillhub_native::paths::atomic_write(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path)
@@ -53,28 +62,78 @@ fn await_activation_or_ownership(
         Err("Не удалось дождаться запущенного лаунчера".into())
     }
 }
-/// Read only pinned regular files; never follow request-directory/file links.
-fn consume_requests(data: &Path, now: SystemTime) -> Vec<Vec<String>> {
+/// A scan pins the directory and its regular entries until the visible
+/// launcher accepts the requests. A dropped scan leaves them untouched.
+struct PreparedRequests {
+    _guard: chillhub_native::manifest::DirectoryGuard,
+    files: Vec<File>,
+    commands: Vec<Vec<String>>,
+    has_more: bool,
+}
+
+impl PreparedRequests {
+    fn remove(self) -> std::io::Result<bool> {
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        let mut error = None;
+        for file in self.files {
+            if unsafe {
+                SetFileInformationByHandle(
+                    file.as_raw_handle().cast(),
+                    FileDispositionInfo,
+                    (&raw const disposition).cast(),
+                    size_of::<FILE_DISPOSITION_INFO>() as u32,
+                )
+            } == 0
+            {
+                error.get_or_insert_with(std::io::Error::last_os_error);
+            }
+        }
+        error.map_or(Ok(self.has_more), Err)
+    }
+}
+
+fn prepare_requests(
+    data: &Path,
+    now: SystemTime,
+    promoted_request: Option<&Path>,
+) -> Option<PreparedRequests> {
     let directory = data.join("requests");
-    let Ok(_guard) = chillhub_native::manifest::DirectoryGuard::acquire(&directory, false) else {
-        return Vec::new();
+    let guard = chillhub_native::manifest::DirectoryGuard::acquire(&directory, false).ok()?;
+    let entries = std::fs::read_dir(&directory).ok()?;
+    let mut requests = PreparedRequests {
+        _guard: guard,
+        files: Vec::new(),
+        commands: Vec::new(),
+        has_more: false,
     };
-    let Ok(entries) = std::fs::read_dir(&directory) else {
-        return Vec::new();
-    };
-    let mut requests = Vec::new();
+    let mut eligible = Vec::new();
     for entry in entries.flatten().take(128) {
         let path = entry.path();
         if path.extension().is_none_or(|x| x != "json") {
             continue;
         }
-        let Ok(mut file) = chillhub_native::manifest::open_regular(&path, false, false, false)
+        let Ok(mut file) = OpenOptions::new()
+            .access_mode(GENERIC_READ | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
         else {
             continue;
         };
+        let Ok(meta) = file.metadata() else {
+            continue;
+        };
+        if !meta.is_file() || chillhub_native::manifest::is_reparse(&meta) {
+            continue;
+        }
+        if promoted_request == Some(path.as_path()) {
+            // The promoted launcher already received these arguments directly.
+            requests.files.push(file);
+            continue;
+        }
         let decoded = (|| {
-            let meta = file.metadata().ok()?;
-            if meta.len() > REQUEST_LIMIT || !fresh_request(meta.modified().ok()?, now) {
+            let modified = meta.modified().ok()?;
+            if meta.len() > REQUEST_LIMIT || !fresh_request(modified, now) {
                 return None;
             }
             let mut bytes = Vec::new();
@@ -87,24 +146,148 @@ fn consume_requests(data: &Path, now: SystemTime) -> Vec<Vec<String>> {
             }
             let args: Vec<String> = serde_json::from_slice(&bytes).ok()?;
             ShortcutRequest::parse_args(&args).ok().flatten()?;
-            Some(args)
+            Some((modified, args))
         })();
-        drop(file);
-        let _ = std::fs::remove_file(path);
-        if let Some(args) = decoded
-            && requests.len() < 32
-        {
-            requests.push(args);
+        if let Some((modified, args)) = decoded {
+            eligible.push((modified, path, file, args));
+        } else {
+            requests.files.push(file);
         }
     }
-    requests
+    // UUID names and filesystem enumeration do not represent arrival order.
+    eligible.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    requests.has_more = eligible.len() > 32;
+    for (_, _, file, args) in eligible.into_iter().take(32) {
+        requests.commands.push(args);
+        requests.files.push(file);
+    }
+    Some(requests)
 }
 pub(super) struct Instance {
     pub primary: bool,
     mutex: HANDLE,
-    event: usize,
-    acknowledged: usize,
+    events: Arc<ActivationEvents>,
+    scan_name: Vec<u16>,
+    promoted_request: Option<PathBuf>,
     data: PathBuf,
+    listener: Option<ActivationListener>,
+}
+
+struct ActivationEvents {
+    requested: OwnedHandle,
+    acknowledged: OwnedHandle,
+}
+
+#[derive(PartialEq, Eq)]
+enum ActivationWake {
+    Startup,
+    Requested,
+}
+
+struct ActivationControl {
+    stop: OwnedHandle,
+    active: AtomicBool,
+    publication: Mutex<()>,
+}
+
+impl ActivationControl {
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    fn wait_for_scan<'a>(&self, scan: &'a OwnedHandle) -> Option<ShortcutScan<'a>> {
+        let handles = [self.stop.as_raw_handle(), scan.as_raw_handle()];
+        let result = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
+        if result == WAIT_OBJECT_0 + 1 || result == WAIT_ABANDONED_0 + 1 {
+            Some(ShortcutScan(scan))
+        } else {
+            None
+        }
+    }
+
+    fn publish(&self, events: &ActivationEvents, acknowledge: bool, has_more: bool) -> bool {
+        // No file access while holding the gate. Shutdown only waits for
+        // any signal publication already in progress.
+        let _gate = self.publication.lock().unwrap();
+        if !self.is_active() {
+            return false;
+        }
+        unsafe {
+            if acknowledge {
+                SetEvent(events.acknowledged.as_raw_handle());
+            }
+            if has_more {
+                SetEvent(events.requested.as_raw_handle());
+            }
+        }
+        true
+    }
+}
+
+struct ShortcutScan<'a>(&'a OwnedHandle);
+
+impl Drop for ShortcutScan<'_> {
+    fn drop(&mut self) {
+        unsafe { ReleaseMutex(self.0.as_raw_handle()) };
+    }
+}
+
+struct ActivationListener {
+    control: Arc<ActivationControl>,
+}
+
+impl ActivationListener {
+    fn start(
+        events: Arc<ActivationEvents>,
+        mut activate: impl FnMut(&Arc<ActivationControl>, ActivationWake) -> bool + Send + 'static,
+    ) -> Result<Self, String> {
+        let stop = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
+        if stop.is_null() {
+            return Err("Не удалось открыть сигнал завершения лаунчера".into());
+        }
+        let control = Arc::new(ActivationControl {
+            stop: unsafe { OwnedHandle::from_raw_handle(stop) },
+            active: AtomicBool::new(true),
+            publication: Mutex::new(()),
+        });
+        let worker_control = control.clone();
+        let worker = thread::Builder::new()
+            .name("chillhub-instance".into())
+            .spawn(move || {
+                if !activate(&worker_control, ActivationWake::Startup) {
+                    return;
+                }
+                let handles = [
+                    worker_control.stop.as_raw_handle(),
+                    events.requested.as_raw_handle(),
+                ];
+                loop {
+                    // Stop wins when both events are signaled.
+                    let result =
+                        unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
+                    if result != WAIT_OBJECT_0 + 1
+                        || !activate(&worker_control, ActivationWake::Requested)
+                    {
+                        break;
+                    }
+                }
+            })
+            .map_err(|error| format!("Не удалось начать обработку ярлыков: {error}"))?;
+        // The worker may be in synchronous filesystem I/O on a redirected
+        // profile. Its owned handles outlive the UI without blocking shutdown.
+        drop(worker);
+        Ok(Self { control })
+    }
+}
+
+impl Drop for ActivationListener {
+    fn drop(&mut self) {
+        // An event already queued on the UI thread must not consume requests
+        // or use the acknowledgment handle once the instance has closed.
+        let _gate = self.control.publication.lock().unwrap();
+        self.control.active.store(false, Ordering::Release);
+        unsafe { SetEvent(self.control.stop.as_raw_handle()) };
+    }
 }
 fn instance_suffix(data: &Path, isolated: bool) -> Result<String, String> {
     if !isolated {
@@ -158,9 +341,14 @@ impl Instance {
             let mut instance = Self {
                 primary,
                 mutex,
-                event: event as usize,
-                acknowledged: acknowledged as usize,
+                events: Arc::new(ActivationEvents {
+                    requested: OwnedHandle::from_raw_handle(event),
+                    acknowledged: OwnedHandle::from_raw_handle(acknowledged),
+                }),
+                scan_name: wide(&format!("Local\\ChillHub.ScanRequests{suffix}")),
+                promoted_request: None,
                 data: data.into(),
+                listener: None,
             };
             if !primary {
                 let request = if shortcut {
@@ -174,66 +362,134 @@ impl Instance {
                 // to show its window. Take over after its mutex is released;
                 // normal activation returns immediately when the UI confirms.
                 instance.primary = await_activation_or_ownership(mutex, acknowledged, 7000)?;
-                if instance.primary
-                    && let Some(path) = request
-                {
-                    let _ = std::fs::remove_file(path);
+                if instance.primary {
+                    instance.promoted_request = request;
                 }
             }
             Ok(instance)
         }
     }
-    pub fn listen(&self, ui: slint::Weak<AppWindow>) {
-        if !self.primary {
-            return;
-        }
-        let handle = self.event;
-        let acknowledged = self.acknowledged;
-        let data = self.data.clone();
-        thread::spawn(move || {
-            loop {
-                if unsafe { WaitForSingleObject(handle as HANDLE, INFINITE) } != WAIT_OBJECT_0 {
-                    return;
-                }
-                let requests = consume_requests(&data, SystemTime::now());
-                let weak = ui.clone();
-                if slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = weak.upgrade() {
-                        show(&ui);
-                        for args in requests {
-                            controller::external_request(&ui, args);
-                        }
-                        unsafe {
-                            SetEvent(acknowledged as HANDLE);
-                        }
-                    }
-                })
-                .is_err()
+    pub fn listen(&mut self, ui: slint::Weak<AppWindow>) -> Result<(), String> {
+        self.listen_with(move |control, requests, accepted| {
+            let callback_control = control.clone();
+            let weak = ui.clone();
+            slint::invoke_from_event_loop(move || {
+                if callback_control.is_active()
+                    && let Some(ui) = weak.upgrade()
                 {
-                    return;
+                    deliver_activation(
+                        || show(&ui).is_ok(),
+                        || {
+                            for args in requests {
+                                controller::external_request(&ui, args);
+                            }
+                        },
+                        accepted,
+                    );
                 }
-            }
-        });
+            })
+            .is_ok()
+        })
+    }
+
+    fn listen_with(
+        &mut self,
+        deliver: impl Fn(&Arc<ActivationControl>, Vec<Vec<String>>, mpsc::Sender<bool>) -> bool
+        + Send
+        + 'static,
+    ) -> Result<(), String> {
+        if !self.primary || self.listener.is_some() {
+            return Ok(());
+        }
+        let scan = unsafe { CreateMutexW(ptr::null(), 0, self.scan_name.as_ptr()) };
+        if scan.is_null() {
+            return Err("Не удалось открыть очередь ярлыков лаунчера".into());
+        }
+        let scan = unsafe { OwnedHandle::from_raw_handle(scan) };
+        let promoted = self.promoted_request.take();
+        let events = self.events.clone();
+        let data = self.data.clone();
+        self.listener = Some(ActivationListener::start(
+            self.events.clone(),
+            move |control, wake| {
+                // A previous listener may still be finishing accepted files.
+                // Serialize only the workers so that takeover never blocks the UI.
+                let Some(_scan) = control.wait_for_scan(&scan) else {
+                    return false;
+                };
+                if !control.is_active() {
+                    return false;
+                }
+                let mut batch = prepare_requests(&data, SystemTime::now(), promoted.as_deref());
+                if !control.is_active() {
+                    return false;
+                }
+                let requests = batch
+                    .as_mut()
+                    .map(|batch| std::mem::take(&mut batch.commands))
+                    .unwrap_or_default();
+                let acknowledge = wake == ActivationWake::Requested;
+                if !acknowledge && requests.is_empty() {
+                    let has_more = batch.is_some_and(|batch| finish_shortcut_batch(batch, &data));
+                    return control.publish(&events, false, has_more);
+                }
+                let (accepted, receipt) = mpsc::channel();
+                if !deliver(control, requests, accepted) {
+                    return false;
+                }
+                // Waiting on the receipt keeps all disk work on this thread.
+                // Shutdown can stop the wait even when Slint has already exited.
+                loop {
+                    match receipt.recv_timeout(Duration::from_millis(25)) {
+                        Ok(true) => break,
+                        Ok(false) => return true,
+                        Err(mpsc::RecvTimeoutError::Timeout) if control.is_active() => {}
+                        Err(_) => return false,
+                    }
+                }
+                let has_more = batch.is_some_and(|batch| finish_shortcut_batch(batch, &data));
+                control.publish(&events, acknowledge, has_more)
+            },
+        )?);
+        Ok(())
     }
 }
 impl Drop for Instance {
     fn drop(&mut self) {
+        drop(self.listener.take());
         unsafe {
             if self.primary {
                 ReleaseMutex(self.mutex);
-            } else {
-                CloseHandle(self.event as HANDLE);
-                CloseHandle(self.acknowledged as HANDLE);
             }
             CloseHandle(self.mutex);
         }
     }
 }
-fn show(ui: &AppWindow) {
+fn finish_shortcut_batch(batch: PreparedRequests, data: &Path) -> bool {
+    batch.remove().unwrap_or_else(|error| {
+        chillhub_native::diagnostics::log(data, "shortcut.cleanup_error", &error.to_string());
+        false
+    })
+}
+
+fn deliver_activation(
+    show: impl FnOnce() -> bool,
+    dispatch: impl FnOnce(),
+    receipt: mpsc::Sender<bool>,
+) {
+    let shown = show();
+    if shown {
+        dispatch();
+    }
+    let _ = receipt.send(shown);
+}
+
+fn show(ui: &AppWindow) -> Result<(), slint::PlatformError> {
     use slint::winit_030::WinitWindowAccessor;
-    let _ = ui.show();
+    ui.show()?;
     ui.window().set_minimized(false);
     ui.window().with_winit_window(|w| w.focus_window());
+    Ok(())
 }
 pub fn show_error(message: &str) {
     unsafe {
@@ -253,6 +509,20 @@ struct MenuSelection {
     action: String,
     enabled: bool,
 }
+impl MenuSelection {
+    fn can_play(&self) -> bool {
+        self.enabled && !self.game_id.is_empty()
+    }
+
+    fn command(self, command: u32) -> Option<TrayEvent> {
+        match command {
+            1 => Some(TrayEvent::Show),
+            2 if self.can_play() => Some(TrayEvent::Play(self.game_id, self.action)),
+            3 => Some(TrayEvent::Exit),
+            _ => None,
+        }
+    }
+}
 struct Balloon {
     title: String,
     text: String,
@@ -266,6 +536,76 @@ struct PendingShell {
 struct ShellBridge {
     hwnd: AtomicUsize,
     pending: Mutex<PendingShell>,
+}
+impl ShellBridge {
+    fn new() -> Self {
+        Self {
+            hwnd: AtomicUsize::new(0),
+            pending: Mutex::new(PendingShell {
+                menu: MenuSelection::default(),
+                tip: "Chill Hub".into(),
+                notifications: VecDeque::new(),
+            }),
+        }
+    }
+
+    fn set_status(&self, status: &str, post_update: impl FnOnce(usize) -> bool) {
+        let tip = if status.trim().is_empty() {
+            "Chill Hub".into()
+        } else {
+            format!("Chill Hub — {}", status.trim())
+        };
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        if pending.tip == tip {
+            return;
+        }
+        pending.tip = tip;
+        drop(pending);
+        let hwnd = self.hwnd.load(Ordering::Acquire);
+        if hwnd != 0 {
+            post_update(hwnd);
+        }
+    }
+
+    fn notify(
+        &self,
+        title: &str,
+        text: &str,
+        error: bool,
+        post_update: impl FnOnce(usize) -> bool,
+    ) -> bool {
+        let hwnd = self.hwnd.load(Ordering::Acquire);
+        if hwnd == 0 {
+            return false;
+        }
+        let Ok(mut pending) = self.pending.lock() else {
+            return false;
+        };
+        // Hold the queue while posting so the receiving window reads this
+        // notification only after Windows has accepted the wakeup.
+        if !post_update(hwnd) {
+            return false;
+        }
+        if pending.notifications.len() == 8 {
+            pending.notifications.pop_front();
+        }
+        pending.notifications.push_back(Balloon {
+            title: title.chars().take(120).collect(),
+            text: text.chars().take(512).collect(),
+            error,
+        });
+        true
+    }
+
+    fn take_update(&self) -> Option<(String, Vec<Balloon>)> {
+        let mut pending = self.pending.lock().ok()?;
+        Some((
+            pending.tip.clone(),
+            pending.notifications.drain(..).collect(),
+        ))
+    }
 }
 static SHELL: OnceLock<Arc<ShellBridge>> = OnceLock::new();
 enum TrayEvent {
@@ -294,11 +634,12 @@ fn fill_wide<const N: usize>(target: &mut [u16; N], text: &str) {
     }
 }
 fn play_menu_label(title: &str, action: &str) -> String {
+    let title: String = title.chars().filter(|c| !c.is_control()).collect();
     let title = title.trim();
     if title.is_empty() {
         return "Игра не выбрана".into();
     }
-    let short: String = title.chars().filter(|c| !c.is_control()).take(90).collect();
+    let short: String = title.chars().take(90).collect();
     format!(
         "{action}: {}{}",
         short.replace('&', "&&"),
@@ -311,48 +652,17 @@ fn play_menu_label(title: &str, action: &str) -> String {
 }
 /// Event-driven rounded progress; equal text never calls the Windows shell.
 pub(super) fn set_status(status: &str) {
-    let Some(shell) = SHELL.get() else {
-        return;
-    };
-    let tip = if status.trim().is_empty() {
-        "Chill Hub".into()
-    } else {
-        format!("Chill Hub — {}", status.trim())
-    };
-    if let Ok(mut pending) = shell.pending.lock() {
-        if pending.tip == tip {
-            return;
-        }
-        pending.tip = tip;
-    }
-    let hwnd = shell.hwnd.load(Ordering::Acquire);
-    if hwnd != 0 {
-        unsafe {
-            PostMessageW(hwnd as HWND, TRAY_UPDATE, 0, 0);
-        }
+    if let Some(shell) = SHELL.get() {
+        shell.set_status(status, post_tray_update);
     }
 }
 /// Caller decides whether the window is hidden. No window is activated here.
 pub(super) fn notify(title: &str, text: &str, error: bool) -> bool {
-    let Some(shell) = SHELL.get() else {
-        return false;
-    };
-    let hwnd = shell.hwnd.load(Ordering::Acquire);
-    if hwnd == 0 {
-        return false;
-    }
-    let Ok(mut pending) = shell.pending.lock() else {
-        return false;
-    };
-    if pending.notifications.len() == 8 {
-        pending.notifications.pop_front();
-    }
-    pending.notifications.push_back(Balloon {
-        title: title.chars().take(120).collect(),
-        text: text.chars().take(512).collect(),
-        error,
-    });
-    drop(pending);
+    SHELL
+        .get()
+        .is_some_and(|shell| shell.notify(title, text, error, post_tray_update))
+}
+fn post_tray_update(hwnd: usize) -> bool {
     unsafe { PostMessageW(hwnd as HWND, TRAY_UPDATE, 0, 0) != 0 }
 }
 struct NativeTray {
@@ -392,11 +702,7 @@ unsafe extern "system" fn window_proc(
                 return 0;
             }
             if message == TRAY_UPDATE {
-                let update =
-                    context.shell.pending.lock().ok().map(|mut p| {
-                        (p.tip.clone(), p.notifications.drain(..).collect::<Vec<_>>())
-                    });
-                if let Some((tip, notifications)) = update {
+                if let Some((tip, notifications)) = context.shell.take_update() {
                     fill_wide(&mut context.data.szTip, &tip);
                     let mut data = context.data;
                     data.uFlags = NIF_TIP | NIF_SHOWTIP;
@@ -428,12 +734,7 @@ unsafe extern "system" fn window_proc(
                 SetMenuDefaultItem(menu, 1, 0);
                 AppendMenuW(
                     menu,
-                    MF_STRING
-                        | if selected.game_id.is_empty() || !selected.enabled {
-                            MF_GRAYED
-                        } else {
-                            0
-                        },
+                    MF_STRING | if selected.can_play() { 0 } else { MF_GRAYED },
                     2,
                     wide(&play_menu_label(&selected.title, &selected.action)).as_ptr(),
                 );
@@ -450,13 +751,8 @@ unsafe extern "system" fn window_proc(
                     ptr::null(),
                 );
                 DestroyMenu(menu);
-                match command {
-                    1 => emit(TrayEvent::Show),
-                    2 if !selected.game_id.is_empty() => {
-                        emit(TrayEvent::Play(selected.game_id, selected.action))
-                    }
-                    3 => emit(TrayEvent::Exit),
-                    _ => {}
+                if let Some(event) = selected.command(command as u32) {
+                    emit(event);
                 }
                 PostMessageW(hwnd, WM_NULL, 0, 0);
                 return 0;
@@ -527,14 +823,7 @@ impl Drop for Tray {
 pub(super) fn create_tray(ui: &AppWindow, state: &State) -> Result<Tray, String> {
     let (tx, rx) = mpsc::channel();
     EVENTS.set(tx).map_err(|_| "Значок уже создан")?;
-    let shell = Arc::new(ShellBridge {
-        hwnd: AtomicUsize::new(0),
-        pending: Mutex::new(PendingShell {
-            menu: MenuSelection::default(),
-            tip: "Chill Hub".into(),
-            notifications: VecDeque::new(),
-        }),
-    });
+    let shell = Arc::new(ShellBridge::new());
     SHELL.set(shell.clone()).map_err(|_| "Значок уже создан")?;
     let (ready_tx, ready_rx) = mpsc::channel();
     let native_shell = shell.clone();
@@ -635,7 +924,9 @@ pub(super) fn create_tray(ui: &AppWindow, state: &State) -> Result<Tray, String>
                 ACTIVE_STATE.with(|slot| {
                     let state = slot.borrow().as_ref().cloned();
                     match event {
-                        TrayEvent::Show => show(&ui),
+                        TrayEvent::Show => {
+                            let _ = show(&ui);
+                        }
                         TrayEvent::Menu(x, y) => {
                             let selection = state
                                 .as_ref()
@@ -670,7 +961,7 @@ pub(super) fn create_tray(ui: &AppWindow, state: &State) -> Result<Tray, String>
                         }
                         TrayEvent::Play(id, shown_action) => {
                             let Some(state) = state else {
-                                show(&ui);
+                                let _ = show(&ui);
                                 return;
                             };
                             let ready = {
@@ -683,18 +974,18 @@ pub(super) fn create_tray(ui: &AppWindow, state: &State) -> Result<Tray, String>
                                     s.option.as_ref().map(|o| &o.action),
                                 )
                             };
-                            show(&ui);
+                            let _ = show(&ui);
                             if ready {
                                 controller::play(&ui, &state);
                             }
                         }
                         TrayEvent::Exit => {
                             if ui.get_operation_busy() {
-                                show(&ui);
+                                let _ = show(&ui);
                                 return;
                             }
                             if let Some(state) = state {
-                                show(&ui);
+                                let _ = show(&ui);
                                 controller::request_exit(&ui, &state);
                             } else {
                                 let _ = slint::quit_event_loop();
@@ -713,7 +1004,7 @@ pub(super) fn create_tray(ui: &AppWindow, state: &State) -> Result<Tray, String>
     let weak_state = Rc::downgrade(state);
     ui.window().on_close_requested(move||{
         if let(Some(ui),Some(state))=(weak.upgrade(),weak_state.upgrade()){
-            if ui.get_operation_busy(){show(&ui);return slint::CloseRequestResponse::KeepWindowShown;}controller::save_window(&ui,&state);
+            if ui.get_operation_busy(){let _=show(&ui);return slint::CloseRequestResponse::KeepWindowShown;}controller::save_window(&ui,&state);
             if state.borrow().prefs.minimize_to_tray{
                 // Only media is closed here. Settings keep their unsaved draft
                 // while hidden, and the same close path releases both players.
