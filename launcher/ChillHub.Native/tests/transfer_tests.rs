@@ -12,7 +12,7 @@ use std::{
     io::{self, Read},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
@@ -76,6 +76,9 @@ fn forced_game_verification_bypasses_persisted_hash_cache() {
 #[derive(Clone, Copy, PartialEq)]
 enum Behavior {
     Normal,
+    ManifestUnavailableOnce,
+    ManifestUnavailable,
+    ManifestNotFound,
     IgnoreRange,
     WrongRange,
     Range416Once,
@@ -89,6 +92,7 @@ struct Server {
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
     ranges: Arc<Mutex<Vec<Option<String>>>>,
+    manifest_requests: Arc<AtomicUsize>,
 }
 impl Server {
     fn start(manifest: Manifest, data: Vec<u8>, behavior: Behavior) -> Self {
@@ -98,16 +102,26 @@ impl Server {
         let stopped = stop.clone();
         let ranges = Arc::new(Mutex::new(Vec::new()));
         let seen = ranges.clone();
+        let manifest_requests = Arc::new(AtomicUsize::new(0));
+        let seen_manifests = manifest_requests.clone();
         let worker = thread::spawn(move || {
             let mut content_requests = 0;
             while !stopped.load(Ordering::Relaxed) {
                 let Some(request) = server.recv_timeout(Duration::from_millis(20)).unwrap() else {
                     continue;
                 };
-                if request.url() == "/manifest" {
-                    let _ = request.respond(tiny_http::Response::from_data(
-                        serde_json::to_vec(&manifest).unwrap(),
-                    ));
+                if request.url().split('?').next() == Some("/manifest") {
+                    let previous = seen_manifests.fetch_add(1, Ordering::Relaxed);
+                    let status = match behavior {
+                        Behavior::ManifestUnavailableOnce if previous == 0 => 503,
+                        Behavior::ManifestUnavailable => 503,
+                        Behavior::ManifestNotFound => 404,
+                        _ => 200,
+                    };
+                    let response =
+                        tiny_http::Response::from_data(serde_json::to_vec(&manifest).unwrap())
+                            .with_status_code(status);
+                    let _ = request.respond(response);
                     continue;
                 }
                 let range = request
@@ -181,6 +195,7 @@ impl Server {
             stop,
             thread: Some(worker),
             ranges,
+            manifest_requests,
         }
     }
     fn request(&self, root: &TempDir) -> TransferRequest {
@@ -264,6 +279,117 @@ fn data(size: usize) -> Vec<u8> {
 }
 fn prepare(root: &TempDir) {
     fs::create_dir_all(root.path().join("game")).unwrap();
+}
+
+#[test]
+fn manifest_http_retries_transient_status_once_and_never_retries_not_found() {
+    let engine = TransferEngine::new().unwrap();
+    let control = TransferControl::default();
+    for (behavior, expected_requests, expected_version) in [
+        (Behavior::ManifestUnavailableOnce, 2, Some("2")),
+        (Behavior::ManifestUnavailable, 2, None),
+        (Behavior::ManifestNotFound, 1, None),
+    ] {
+        let server = Server::start(manifest(b"game"), b"game".to_vec(), behavior);
+        let result = engine.fetch_manifest(&format!("{}/manifest", server.base), &control);
+        match expected_version {
+            Some(version) => assert_eq!(result.unwrap().version, version),
+            None => assert!(matches!(result, Err(TransferError::Network(_)))),
+        }
+        assert_eq!(
+            server.manifest_requests.load(Ordering::Relaxed),
+            expected_requests
+        );
+    }
+}
+
+#[test]
+fn manifest_validation_failure_is_not_retried() {
+    let mut invalid = manifest(b"game");
+    invalid.files[0].path = "../game.bin".into();
+    let server = Server::start(invalid, b"game".to_vec(), Behavior::Normal);
+    assert!(matches!(
+        TransferEngine::new().unwrap().fetch_manifest(
+            &format!("{}/manifest", server.base),
+            &TransferControl::default()
+        ),
+        Err(TransferError::InvalidManifest(_))
+    ));
+    assert_eq!(server.manifest_requests.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn manifest_http_diagnostics_log_attempts_and_status_without_the_signed_url() {
+    let signature = "test-secret-manifest-signature-41af";
+    for (behavior, status, retries) in [
+        (Behavior::ManifestUnavailable, 503, &[true, false][..]),
+        (Behavior::ManifestNotFound, 404, &[false][..]),
+    ] {
+        let server = Server::start(manifest(b"game"), b"game".to_vec(), behavior);
+        let temp = TempDir::new().unwrap();
+        let queue = DownloadQueue::new(temp.path().join("queue.json")).unwrap();
+        let mut request = server.request(&temp);
+        request.manifest_url.push_str("?signature=");
+        request.manifest_url.push_str(signature);
+        let signed_url = request.manifest_url.clone();
+        let id = queue.enqueue(request).unwrap();
+        wait_until(|| {
+            queue
+                .snapshot()
+                .iter()
+                .any(|item| item.id == id && item.state == QueueState::Failed)
+        });
+        let report = queue
+            .snapshot()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        queue.shutdown();
+        assert_eq!(report.report.error_code.as_deref(), Some("network"));
+        let expected_error = TransferError::Network(String::new()).to_string();
+        assert_eq!(report.error.as_deref(), Some(expected_error.as_str()));
+        let log = fs::read_to_string(temp.path().join("logs").join("launcher.log")).unwrap();
+        assert!(!log.contains(signature));
+        assert!(!log.contains(&signed_url));
+        assert!(!log.contains(&server.base));
+        let events: Vec<_> = log
+            .lines()
+            .filter_map(|line| line.split_once(" [event] ").map(|(_, value)| value))
+            .map(|value| serde_json::from_str::<serde_json::Value>(value).unwrap())
+            .filter(|value| value["event"] == "download.manifest_http_error")
+            .collect();
+        assert_eq!(events.len(), retries.len());
+        for (index, (event, retry)) in events.iter().zip(retries).enumerate() {
+            assert_eq!(
+                event["fields"],
+                serde_json::json!({
+                    "attempt": index + 1, "cause": "http", "status": status, "retry": retry
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn manifest_retry_respects_cancellation_after_the_first_request() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/manifest", server.server_addr());
+    let engine = TransferEngine::new().unwrap();
+    let control = TransferControl::default();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            control.cancel();
+            request.respond(tiny_http::Response::empty(503)).unwrap();
+        });
+        assert!(matches!(
+            engine.fetch_manifest(&url, &control),
+            Err(TransferError::Cancelled)
+        ));
+    });
 }
 
 #[test]

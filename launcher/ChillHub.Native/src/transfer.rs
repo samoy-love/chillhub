@@ -310,6 +310,7 @@ impl TransferControl {
 pub struct TransferEngine {
     client: Client,
     hash_cache_dir: Option<PathBuf>,
+    diagnostic_dir: Option<PathBuf>,
 }
 impl TransferEngine {
     pub fn new() -> Result<Self> {
@@ -342,6 +343,7 @@ impl TransferEngine {
         Ok(Self {
             client,
             hash_cache_dir: None,
+            diagnostic_dir: None,
         })
     }
     /// Only game synchronization enables this cache; update executables are always rehashed.
@@ -349,15 +351,47 @@ impl TransferEngine {
         self.hash_cache_dir = Some(directory.into());
         self
     }
+    pub(crate) fn with_diagnostics(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.diagnostic_dir = Some(directory.into());
+        self
+    }
     pub fn fetch_manifest(&self, address: &str, control: &TransferControl) -> Result<Manifest> {
         control.checkpoint()?;
         checked_url(address)?;
-        let response = self
-            .client
-            .get(address)
-            .header(ACCEPT_ENCODING, "identity")
-            .send()?
-            .error_for_status()?;
+        let send = || {
+            self.client
+                .get(address)
+                .header(ACCEPT_ENCODING, "identity")
+                .send()
+                .and_then(|response| response.error_for_status())
+        };
+        let response = match send() {
+            Ok(response) => response,
+            Err(error) => {
+                let retry = match error.status() {
+                    Some(
+                        StatusCode::REQUEST_TIMEOUT
+                        | StatusCode::INTERNAL_SERVER_ERROR
+                        | StatusCode::BAD_GATEWAY
+                        | StatusCode::SERVICE_UNAVAILABLE
+                        | StatusCode::GATEWAY_TIMEOUT,
+                    ) => true,
+                    Some(_) => false,
+                    None => {
+                        !error.is_redirect()
+                            && (error.is_timeout() || error.is_connect() || error.is_request())
+                    }
+                };
+                self.log_manifest_http_error(&error, 1, retry);
+                if !retry {
+                    return Err(error.into());
+                }
+                control.delay(Duration::from_millis(250))?;
+                send().inspect_err(|error| {
+                    self.log_manifest_http_error(error, 2, false);
+                })?
+            }
+        };
         if response.content_length().is_some_and(|n| n > MAX_MANIFEST) {
             return Err(TransferError::InvalidManifest("manifest too large".into()));
         }
@@ -371,6 +405,31 @@ impl TransferEngine {
             .map_err(|e| TransferError::InvalidManifest(e.to_string()))?;
         manifest::validate_manifest(&manifest).map_err(TransferError::InvalidManifest)?;
         Ok(manifest)
+    }
+    fn log_manifest_http_error(&self, error: &reqwest::Error, attempt: u8, retry: bool) {
+        let Some(directory) = &self.diagnostic_dir else {
+            return;
+        };
+        let status = error.status().map(|status| status.as_u16());
+        let cause = if status.is_some() {
+            "http"
+        } else if error.is_timeout() {
+            "timeout"
+        } else if error.is_redirect() {
+            "redirect"
+        } else if error.is_connect() {
+            "connect"
+        } else if error.is_request() {
+            "request"
+        } else {
+            "other"
+        };
+        // The request address and reqwest error chain can contain signed URLs.
+        crate::diagnostics::event(
+            directory,
+            "download.manifest_http_error",
+            serde_json::json!({"attempt": attempt, "cause": cause, "status": status, "retry": retry}),
+        );
     }
     pub fn plan(
         &self,

@@ -201,7 +201,9 @@ impl DownloadQueue {
         });
         let mut engine = TransferEngine::new()?;
         if let Some(directory) = shared.path.parent() {
-            engine = engine.with_hash_cache_dir(directory.join("hashcache"));
+            engine = engine
+                .with_hash_cache_dir(directory.join("hashcache"))
+                .with_diagnostics(directory);
         }
         let worker_shared = shared.clone();
         let worker = thread::Builder::new()
