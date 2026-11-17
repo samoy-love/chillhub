@@ -5,7 +5,7 @@ use crate::{
 };
 use std::{
     fs,
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -260,68 +260,106 @@ fn create_at(
     if !exe.is_file() || !launcher.is_file() {
         return Err("Файл игры или лаунчера не найден".into());
     }
-    let name = filename(&request.title);
-    let output = desktop.join(&name);
-    // Existing user links are never overwritten, even if their name matches.
-    if output.exists() {
-        link_bytes(&output)?;
-        let links = read_links(std::slice::from_ref(&output))?;
-        if links.iter().any(|link| {
-            link.path == output
-                && path_key(&link.target)
-                    .zip(path_key(launcher))
-                    .is_some_and(|(a, b)| a == b)
-                && arguments(&link.arguments)
-                    .and_then(|args| ShortcutRequest::parse_args(&args).ok().flatten())
-                    .is_some_and(|stored| {
-                        stored.game_id == request.game_id
-                            && stored
-                                .exe_path
-                                .as_ref()
-                                .and_then(|p| path_key(p))
-                                .zip(path_key(exe))
-                                .is_some_and(|(a, b)| a == b)
-                    })
-        }) {
-            return Ok(output);
-        }
-        return Err("Одноимённый ярлык уже существует; он сохранён без изменений".into());
+    let output = desktop.join(filename(&request.title));
+    publish(&output, launcher, &request.arguments(), &request.title, exe)?;
+    Ok(output)
+}
+
+/// Publish only a complete Shell Link, without replacing any existing file.
+#[cfg(windows)]
+fn publish_move(temporary: &Path, output: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    let from: Vec<_> = temporary.as_os_str().encode_wide().chain([0]).collect();
+    let to: Vec<_> = output.as_os_str().encode_wide().chain([0]).collect();
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    let temporary = desktop.join(format!(".chillhub-{}.lnk", uuid::Uuid::new_v4()));
-    let args = request
-        .arguments()
+    Ok(())
+}
+
+pub(crate) fn publish(
+    output: &Path,
+    launcher: &Path,
+    argv: &[String],
+    title: &str,
+    icon: &Path,
+) -> Result<(), String> {
+    let directory = output.parent().ok_or("Не найдена папка ярлыка")?;
+    let _guard = DirectoryGuard::acquire(directory, false).map_err(|e| e.to_string())?;
+    crate::manifest::check_no_links(launcher).map_err(|e| e.to_string())?;
+    let existing = || -> Result<(), String> {
+        link_bytes(output)?;
+        let links = read_links(&[output.to_path_buf()])?;
+        if links.iter().any(|link| {
+            path_key(&link.target)
+                .zip(path_key(launcher))
+                .is_some_and(|(a, b)| a == b)
+                && arguments(&link.arguments).is_some_and(|stored| same_arguments(&stored, argv))
+        }) {
+            Ok(())
+        } else {
+            Err("Одноимённый ярлык уже существует; он сохранён без изменений".into())
+        }
+    };
+    if output.symlink_metadata().is_ok() {
+        return existing();
+    }
+    let temporary = directory.join(format!(".chillhub-{}.lnk", uuid::Uuid::new_v4()));
+    let args = argv
         .iter()
         .map(|v| crate::launch::quote_windows_argument(v))
         .collect::<Vec<_>>()
         .join(" ");
     let result = (|| {
         #[cfg(windows)]
-        native::write(
-            &temporary,
-            launcher,
-            &args,
-            launcher.parent().ok_or("Не найдена папка лаунчера")?,
-            &request.title,
-            exe,
-        )?;
-        #[cfg(not(windows))]
-        return Err("Ярлыки доступны только в Windows".into());
-        let bytes = link_bytes(&temporary)?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(windows)]
         {
-            use std::os::windows::fs::OpenOptionsExt;
-            options.share_mode(1);
+            native::write(
+                &temporary,
+                launcher,
+                &args,
+                launcher.parent().ok_or("Не найдена папка лаунчера")?,
+                title,
+                icon,
+            )?;
+            // Validate the finished temporary before making it visible under its final name.
+            link_bytes(&temporary)?;
+            match publish_move(&temporary, output) {
+                Ok(()) => Ok(()),
+                Err(error) if output.symlink_metadata().is_ok() => existing().map_err(|_| {
+                    format!("Одноимённый ярлык уже существует; он сохранён без изменений: {error}")
+                }),
+                Err(error) => Err(error.to_string()),
+            }
         }
-        let mut file = options.open(&output).map_err(|e| e.to_string())?;
-        file.write_all(&bytes)
-            .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
-        Ok(output.clone())
+        #[cfg(not(windows))]
+        {
+            let _ = (&args, title, icon);
+            Err("Ярлыки доступны только в Windows".into())
+        }
     })();
     let _ = fs::remove_file(&temporary);
     result
+}
+
+fn same_arguments(stored: &[String], expected: &[String]) -> bool {
+    if stored.len() != expected.len() {
+        return false;
+    }
+    stored
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .all(|(index, (a, b))| {
+            // File aliases are equivalent, while target/profile and every other argument
+            // must retain their exact meaning and ordering.
+            a == b
+                || (index > 0
+                    && expected[index - 1] == "--exe"
+                    && path_key(Path::new(a))
+                        .zip(path_key(Path::new(b)))
+                        .is_some_and(|(a, b)| a == b))
+        })
 }
 
 fn path_key(path: &Path) -> Option<String> {

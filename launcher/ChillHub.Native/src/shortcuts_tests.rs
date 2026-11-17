@@ -232,24 +232,127 @@ fn manually_created_game_shortcut_roundtrips_unicode_paths_and_launch_arguments(
     let game = directory.join("Игра с пробелами.exe");
     fs::write(&launcher, b"temporary fixture").unwrap();
     fs::write(&game, b"temporary fixture").unwrap();
-    let output = directory.join("Играть ' с модами.lnk");
+    let preview = directory.join("Проверка профиля 🎮");
     let request = ShortcutRequest {
         game_id: "peak".into(),
-        title: "Пик 'кавычки' и \"вершина\"\\ ".trim_end().into(),
-        exe_path: Some(game),
+        title: "Пик 'кавычки' и \"вершина\"".into(),
+        exe_path: Some(game.clone()),
         target: Some(crate::config::LaunchTarget::LocalModded),
     };
-    crate::launch::create_game_shortcut(&launcher, &output, &request).unwrap();
+    for profile in [None, Some(preview.as_path())] {
+        let output = directory.join(crate::launch::game_shortcut_filename(
+            &request.title,
+            request.target.unwrap(),
+            profile.is_some(),
+        ));
+        crate::launch::create_game_shortcut(&launcher, &output, &request, profile).unwrap();
+        let links = read_links(std::slice::from_ref(&output)).unwrap();
+        assert_eq!(links.len(), 1);
+        let link = &links[0];
+        assert_eq!(path_key(&link.target), path_key(&launcher));
+        let (working, icon, index) = native::details(&output).unwrap();
+        assert_eq!(path_key(&working), path_key(&directory));
+        assert_eq!(path_key(&icon), path_key(&game));
+        assert_eq!(index, 0);
+        let argv = arguments(&link.arguments).unwrap();
+        let mut expected = request.arguments();
+        if let Some(profile) = profile {
+            expected.extend([
+                "--preview-directory".into(),
+                profile.to_str().unwrap().into(),
+            ]);
+        }
+        assert_eq!(argv, expected);
+        let original = fs::read(&output).unwrap();
+        crate::launch::create_game_shortcut(&launcher, &output, &request, profile).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), original);
+        let other_profile = directory.join("Другой профиль");
+        assert!(
+            crate::launch::create_game_shortcut(&launcher, &output, &request, Some(&other_profile))
+                .is_err()
+        );
+        let other_target = ShortcutRequest {
+            target: Some(crate::config::LaunchTarget::LocalVanilla),
+            ..request.clone()
+        };
+        assert!(
+            crate::launch::create_game_shortcut(&launcher, &output, &other_target, profile)
+                .is_err()
+        );
+        assert_eq!(fs::read(&output).unwrap(), original);
+        assert_eq!(
+            ShortcutRequest::parse_args(&argv).unwrap(),
+            Some(request.clone())
+        );
+    }
+}
 
-    let links = read_links(std::slice::from_ref(&output)).unwrap();
-    assert_eq!(links.len(), 1);
-    let link = &links[0];
-    assert_eq!(path_key(&link.target), path_key(&launcher));
-    assert_eq!(
-        path_key(&native::details(&output).unwrap().0),
-        path_key(&directory)
-    );
-    let argv = arguments(&link.arguments).unwrap();
-    assert_eq!(argv, request.arguments());
-    assert_eq!(ShortcutRequest::parse_args(&argv).unwrap(), Some(request));
+#[cfg(windows)]
+#[test]
+fn manual_game_shortcut_falls_back_to_launcher_icon_without_a_valid_game_exe() {
+    let temp = tempfile::tempdir().unwrap();
+    let launcher = temp.path().join("ChillHub.exe");
+    fs::write(&launcher, b"fixture only").unwrap();
+    let text = temp.path().join("readme.txt");
+    fs::write(&text, b"fixture only").unwrap();
+    for (index, exe_path) in [
+        None,
+        Some(temp.path().join("missing.exe")),
+        Some(PathBuf::from("relative.exe")),
+        Some(text),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let output = temp.path().join(format!("fallback-{index}.lnk"));
+        let request = ShortcutRequest {
+            game_id: "how-to-fish".into(),
+            exe_path,
+            ..Default::default()
+        };
+        crate::launch::create_game_shortcut(&launcher, &output, &request, None).unwrap();
+        let (_, icon, icon_index) = native::details(&output).unwrap();
+        assert_eq!(path_key(&icon), path_key(&launcher));
+        assert_eq!(icon_index, 0);
+        assert_eq!(
+            path_key(&read_links(&[output]).unwrap()[0].target),
+            path_key(&launcher)
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn shortcut_publication_preserves_foreign_files_and_competing_creation() {
+    let temp = tempfile::tempdir().unwrap();
+    let launcher = temp.path().join("ChillHub.exe");
+    fs::write(&launcher, b"fixture").unwrap();
+    let output = temp.path().join("Existing.lnk");
+    let foreign = b"foreign shortcut bytes";
+    fs::write(&output, foreign).unwrap();
+    let request = ShortcutRequest {
+        game_id: "peak".into(),
+        ..Default::default()
+    };
+    assert!(crate::launch::create_game_shortcut(&launcher, &output, &request, None).is_err());
+    assert_eq!(fs::read(&output).unwrap(), foreign);
+    // The destination appears after preparation, before the atomic publication.
+    let temporary = temp.path().join("ready.lnk");
+    native::write(
+        &temporary,
+        &launcher,
+        "--game peak",
+        temp.path(),
+        "Fixture",
+        &launcher,
+    )
+    .unwrap();
+    let complete = fs::read(&temporary).unwrap();
+    assert!(publish_move(&temporary, &output).is_err());
+    assert_eq!(fs::read(&output).unwrap(), foreign);
+    assert_eq!(fs::read(&temporary).unwrap(), complete);
+    fs::remove_file(&output).unwrap();
+    publish_move(&temporary, &output).unwrap();
+    assert_eq!(fs::read(&output).unwrap(), complete);
+    assert!(!temporary.exists());
 }

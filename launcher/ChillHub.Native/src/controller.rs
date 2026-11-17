@@ -1967,15 +1967,12 @@ fn action(ui: &AppWindow, state: &State, requested: UiAction) {
                             .unwrap_or_default(),
                     )
                     .ok();
-                    let filename = game
-                        .title
-                        .chars()
-                        .map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
-                        .collect::<String>();
-                    let output = service::desktop_path()?.join(format!(
-                        "{} · {}.lnk",
-                        filename.trim_end_matches(['.', ' ']),
-                        target.as_str()
+                    let args = std::env::args().collect::<Vec<_>>();
+                    let preview = preview_directory(&args)?;
+                    let output = service::desktop_path()?.join(launch::game_shortcut_filename(
+                        &game.title,
+                        target,
+                        preview.is_some(),
                     ));
                     launch::create_game_shortcut(
                         &std::env::current_exe().map_err(|e| e.to_string())?,
@@ -1986,6 +1983,7 @@ fn action(ui: &AppWindow, state: &State, requested: UiAction) {
                             exe_path: exe,
                             target: Some(target),
                         },
+                        preview,
                     )?;
                     Ok("Ярлык создан на рабочем столе".into())
                 });

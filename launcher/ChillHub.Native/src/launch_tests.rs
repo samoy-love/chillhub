@@ -1012,18 +1012,151 @@ fn game_shortcut_rejects_bad_paths_or_game_identity_without_writing() {
         game_id: "peak".into(),
         ..Default::default()
     };
-    assert!(create_game_shortcut(&launcher, &output, &request).is_err());
+    assert!(create_game_shortcut(&launcher, &output, &request, None).is_err());
 
     fs::write(&launcher, b"fixture").unwrap();
     fs::write(&wrong_format, b"fixture").unwrap();
-    assert!(create_game_shortcut(&wrong_format, &output, &request).is_err());
-    assert!(create_game_shortcut(&launcher, &temp.path().join("output.txt"), &request).is_err());
+    assert!(create_game_shortcut(&wrong_format, &output, &request, None).is_err());
+    assert!(
+        create_game_shortcut(&launcher, &temp.path().join("output.txt"), &request, None).is_err()
+    );
+    assert!(
+        create_game_shortcut(
+            &launcher,
+            &output,
+            &request,
+            Some(Path::new("relative-preview"))
+        )
+        .is_err()
+    );
     let invalid = ShortcutRequest {
         game_id: "../peak".into(),
         ..request
     };
-    assert!(create_game_shortcut(&launcher, &output, &invalid).is_err());
+    assert!(create_game_shortcut(&launcher, &output, &invalid, None).is_err());
     assert!(!output.exists());
+}
+
+#[test]
+fn game_shortcut_preserves_production_arguments_and_requires_explicit_preview_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let preview = temp.path().join("Проверочная копия ' и 🎮");
+    let request = ShortcutRequest {
+        game_id: "how-to-fish".into(),
+        title: "How to Fish \"тест\"".into(),
+        target: Some(LaunchTarget::SteamVanilla),
+        ..Default::default()
+    };
+    assert_eq!(
+        game_shortcut_arguments(&request, None, false).unwrap(),
+        request.arguments()
+    );
+    let args = game_shortcut_arguments(&request, Some(&preview), true).unwrap();
+    let mut expected = request.arguments();
+    expected.extend([
+        "--preview-directory".into(),
+        preview.to_str().unwrap().into(),
+    ]);
+    assert_eq!(args, expected);
+    assert_eq!(
+        ShortcutRequest::parse_args(&args).unwrap(),
+        Some(request.clone())
+    );
+    assert!(game_shortcut_arguments(&request, None, true).is_err());
+    assert!(game_shortcut_arguments(&request, Some(Path::new("relative")), true).is_err());
+}
+
+#[test]
+fn game_shortcut_filename_keeps_production_names_and_separates_previews() {
+    assert_eq!(
+        game_shortcut_filename("How to Fish", LaunchTarget::SteamVanilla, false),
+        "How to Fish · SteamVanilla.lnk"
+    );
+    for target in [
+        LaunchTarget::SteamVanilla,
+        LaunchTarget::SteamModded,
+        LaunchTarget::LocalVanilla,
+        LaunchTarget::LocalModded,
+    ] {
+        let production = game_shortcut_filename("Игра: тест. ", target, false);
+        let preview = game_shortcut_filename("Игра: тест. ", target, true);
+        assert_eq!(production, format!("Игра_ тест · {}.lnk", target.as_str()));
+        assert_eq!(
+            preview,
+            format!("Игра_ тест · {} · Проверка.lnk", target.as_str())
+        );
+        assert_ne!(production, preview);
+    }
+}
+
+#[test]
+fn shortcut_titles_preserve_literal_quotes_after_windows_argument_decoding() {
+    for title in [
+        "How to Fish",
+        "How to Fish\"",
+        "\"How to Fish",
+        "\"How to Fish\"",
+        "\"\"How to Fish\"\"",
+        "\"",
+        "\"\"",
+    ] {
+        for argument in [
+            vec!["--title".into(), title.into()],
+            vec![format!("--title={title}")],
+        ] {
+            let mut args = vec!["--game".into(), "how-to-fish".into()];
+            args.extend(argument);
+            assert_eq!(
+                ShortcutRequest::parse_args(&args).unwrap().unwrap().title,
+                title
+            );
+        }
+    }
+}
+
+#[test]
+fn shortcut_legacy_non_title_values_remove_only_one_matching_quote_pair() {
+    let request = ShortcutRequest::parse_args(&[
+        "--game=\"how-to-fish\"".into(),
+        "--target=\"SteamVanilla\"".into(),
+        "--exe=\"C:/Игры/How to Fish/Game.exe\"".into(),
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(request.game_id, "how-to-fish");
+    assert_eq!(request.target, Some(LaunchTarget::SteamVanilla));
+    assert_eq!(
+        request.exe_path,
+        Some(PathBuf::from("C:/Игры/How to Fish/Game.exe"))
+    );
+    for game in ["\"how-to-fish", "how-to-fish\"", "\"\"how-to-fish\"\""] {
+        assert!(
+            ShortcutRequest::parse_args(&["--game".into(), game.into()]).is_err(),
+            "{game}"
+        );
+    }
+    for target in ["\"SteamVanilla", "SteamVanilla\"", "\"\"SteamVanilla\"\""] {
+        assert!(
+            ShortcutRequest::parse_args(&[
+                "--game=how-to-fish".into(),
+                "--target".into(),
+                target.into()
+            ])
+            .is_err(),
+            "{target}"
+        );
+    }
+    for (exe, expected) in [
+        ("\"C:/Games/Game.exe", "\"C:/Games/Game.exe"),
+        ("C:/Games/Game.exe\"", "C:/Games/Game.exe\""),
+        ("\"\"C:/Games/Game.exe\"\"", "\"C:/Games/Game.exe\""),
+    ] {
+        let parsed =
+            ShortcutRequest::parse_args(&["--game=how-to-fish".into(), "--exe".into(), exe.into()])
+                .unwrap()
+                .unwrap();
+        assert_eq!(parsed.exe_path, Some(PathBuf::from(expected)));
+    }
 }
 
 #[test]

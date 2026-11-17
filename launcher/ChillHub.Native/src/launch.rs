@@ -861,7 +861,15 @@ impl ShortcutRequest {
                 index += 1;
                 continue;
             };
-            let value = value.trim().trim_matches('"');
+            let value = value.trim();
+            let value = if key == "--title" {
+                value
+            } else {
+                value
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .unwrap_or(value)
+            };
             match key.as_str() {
                 "--game" => result.game_id = value.into(),
                 "--title" => result.title = value.into(),
@@ -959,10 +967,44 @@ pub fn quote_windows_argument(value: &str) -> String {
     out
 }
 
+pub fn game_shortcut_filename(title: &str, target: LaunchTarget, preview: bool) -> String {
+    let filename = title
+        .chars()
+        .map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
+        .collect::<String>();
+    format!(
+        "{} · {}{}.lnk",
+        filename.trim_end_matches(['.', ' ']),
+        target.as_str(),
+        if preview { " · Проверка" } else { "" }
+    )
+}
+
+fn game_shortcut_arguments(
+    request: &ShortcutRequest,
+    preview_directory: Option<&Path>,
+    isolated: bool,
+) -> Result<Vec<String>, String> {
+    let mut args = request.arguments();
+    if let Some(directory) = preview_directory {
+        if !directory.is_absolute() {
+            return Err("Проверочная папка должна иметь полный путь".into());
+        }
+        let directory = directory
+            .to_str()
+            .ok_or("Не удалось сохранить путь проверочной папки")?;
+        args.extend(["--preview-directory".into(), directory.into()]);
+    } else if isolated {
+        return Err("Откройте проверочную копию через её ярлык и создайте ярлык игры снова".into());
+    }
+    Ok(args)
+}
+
 pub fn create_game_shortcut(
     launcher: &Path,
     output: &Path,
     request: &ShortcutRequest,
+    preview_directory: Option<&Path>,
 ) -> Result<(), String> {
     validate_game_id(&request.game_id)?;
     if !launcher.is_file()
@@ -973,23 +1015,19 @@ pub fn create_game_shortcut(
     {
         return Err("Неверный путь ярлыка или лаунчера".into());
     }
-    let args = request
-        .arguments()
-        .iter()
-        .map(|v| quote_windows_argument(v))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let args = game_shortcut_arguments(
+        request,
+        preview_directory,
+        std::env::var_os("CHILLHUB_DATA_DIR").is_some(),
+    )?;
     #[cfg(windows)]
     {
-        let working_directory = launcher.parent().ok_or("Не найдена папка лаунчера")?;
-        crate::shortcuts::native::write(
-            output,
-            launcher,
-            &args,
-            working_directory,
-            &request.title,
-            launcher,
-        )
+        let icon = request
+            .exe_path
+            .as_deref()
+            .filter(|path| path.is_absolute() && is_exe(path) && path.is_file())
+            .unwrap_or(launcher);
+        crate::shortcuts::publish(output, launcher, &args, &request.title, icon)
     }
     #[cfg(not(windows))]
     {
