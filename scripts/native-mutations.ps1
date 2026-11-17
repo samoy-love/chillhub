@@ -41,11 +41,11 @@ try {
     # Playtime's real 15-second heartbeat runs in normal tests and coverage.
     # It would add nearly 50 minutes to this run on its own, outside the mutation scope.
     $heartbeat = 'playtime::tests::reconciled_live_process_has_one_watcher_and_updates_its_heartbeat'
-    & cargo mutants --dir $snapshot --in-place --no-default-features @files --re $include --cargo-arg=--locked --build-timeout 900 --timeout 60 -- --lib -- --skip $heartbeat
+    # Write each completed scenario outside scratch so interruption retains it.
+    & cargo mutants --dir $snapshot --output $result --in-place --no-default-features @files --re $include --cargo-arg=--locked --build-timeout 900 --timeout 60 --caught --unviable -- --lib -- --skip $heartbeat
     $code = $LASTEXITCODE
-    $outcomes = Join-Path $snapshot 'mutants.out/outcomes.json'
+    $outcomes = Join-Path $result 'mutants.out/outcomes.json'
     if (!(Test-Path -LiteralPath $outcomes)) { throw "Нет результатов мутаций (код $code)." }
-    Copy-Item -LiteralPath (Join-Path $snapshot 'mutants.out') -Destination $result -Recurse
     if ($code -notin @(0,2)) { throw "Мутационный прогон аварийно завершился: $code." }
     $verdict = Test-NativeMutationResults -Results $outcomes -Project $snapshot -Review (Join-Path $repo 'tests/native-mutation-review.json') -PoliciesOnly:$PoliciesOnly
     $verdict | ConvertTo-Json -Depth 8 | Tee-Object -FilePath (Join-Path $result 'verdict.json')

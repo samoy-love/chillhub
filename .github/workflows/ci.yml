@@ -631,9 +631,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.native == 'true'
     runs-on: windows-latest
-    # The complete mutation set rebuilds and tests each case. Leave time to
-    # upload its diagnostic artifacts even when the mutation step times out.
-    timeout-minutes: 90
+    # 206 cases measured about 8s build + 21s tests each (about 100 minutes).
+    # Allow throughput variance and upload diagnostics after a step timeout.
+    timeout-minutes: 130
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -646,7 +646,7 @@ jobs:
         shell: pwsh
         run: ./scripts/ci/ensure-native-quality-tools.ps1 -Component Mutations
       - name: Проверить чувствительность тестов к ошибкам
-        timeout-minutes: 80
+        timeout-minutes: 120
         shell: pwsh
         run: ./scripts/native-mutations.ps1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
