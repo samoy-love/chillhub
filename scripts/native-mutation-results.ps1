@@ -10,7 +10,7 @@ function Get-NativeMutationScope {
         'src/launch/doorstop.rs' = @('enabled_state', 'doorstop_config_valid')
         'src/launch/steam_handoff.rs' = @('same_executable_name')
         'src/security_session.rs' = @('validate_token')
-        'src/security.rs' = @('filter_owned_removals', 'filter_by_ownership', 'prepare_directories')
+        'src/security.rs' = @('filter_by_ownership', 'prepare_directories')
         'src/transfer/cleanup.rs' = @('is_approved')
         'src/transfer/deferred.rs' = @('is_locked')
         'src/update.rs' = @('job_arguments', 'trusted_url', 'interpret_release')
