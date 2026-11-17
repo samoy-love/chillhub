@@ -228,7 +228,7 @@ pub struct DirectoryGuard {
     _handles: Vec<File>,
 }
 
-// Another process may create the same directory after the existence check.
+// Another worker may create the same directory after the first open attempt.
 // Other errors must remain visible; the opened handle is validated below.
 fn create_directory_if_absent(path: &Path) -> io::Result<()> {
     match fs::create_dir(path) {
@@ -242,27 +242,29 @@ impl DirectoryGuard {
         check_no_links(path)?;
         let ancestors: Vec<_> = path.ancestors().collect();
         let mut handles = Vec::new();
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options
+                // Attribute-only handles do not participate in Windows
+                // read/write/delete sharing checks. Request directory read
+                // access as well so omitting FILE_SHARE_DELETE pins identity.
+                .access_mode(0x81)
+                .share_mode(0x1 | 0x2)
+                .custom_flags(0x00200000 | 0x02000000);
+        }
         for dir in ancestors.into_iter().rev() {
-            if create && !dir.exists() {
-                create_directory_if_absent(dir)?;
-            }
-            if !dir.exists() {
-                continue;
-            }
-            let mut options = OpenOptions::new();
-            options.read(true);
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::OpenOptionsExt;
-                options
-                    // Attribute-only handles do not participate in Windows
-                    // read/write/delete sharing checks. Request directory read
-                    // access as well so omitting FILE_SHARE_DELETE pins identity.
-                    .access_mode(0x81)
-                    .share_mode(0x1 | 0x2)
-                    .custom_flags(0x00200000 | 0x02000000);
-            }
-            let file = options.open(dir)?;
+            let file = match options.open(dir) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound && !create => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    create_directory_if_absent(dir)?;
+                    options.open(dir)?
+                }
+                Err(error) => return Err(error),
+            };
             let meta = file.metadata()?;
             if !meta.is_dir() || is_reparse(&meta) {
                 return Err(io::Error::other(format!(

@@ -141,6 +141,8 @@ fn directory_guards_allow_readers_but_reject_files_and_preserve_missing_paths() 
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
     fs::write(dir.join("file"), b"content").unwrap();
     assert!(DirectoryGuard::acquire(&dir.join("file"), false).is_err());
+    assert!(DirectoryGuard::acquire(&dir.join("file"), true).is_err());
+    assert_eq!(fs::read(dir.join("file")).unwrap(), b"content");
     #[cfg(windows)]
     assert!(
         fs::rename(&dir, temp.path().join("moved")).is_err(),
@@ -148,6 +150,49 @@ fn directory_guards_allow_readers_but_reject_files_and_preserve_missing_paths() 
     );
     drop(guard);
     fs::rename(&dir, temp.path().join("moved")).unwrap();
+}
+
+#[test]
+fn directory_guard_creates_missing_ancestors_for_concurrent_workers() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("game").join("assets").join("plugins");
+    drop(DirectoryGuard::acquire(&directory, false).unwrap());
+    assert!(!temp.path().join("game").exists());
+
+    let start = std::sync::Barrier::new(8);
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| {
+                start.wait();
+                let _guard = DirectoryGuard::acquire(&directory, true).unwrap();
+                assert!(directory.is_dir());
+            });
+        }
+    });
+    assert_eq!(fs::read_dir(directory).unwrap().count(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn directory_guard_reports_sharing_errors_in_both_modes() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("locked");
+    fs::create_dir(&directory).unwrap();
+    let held = OpenOptions::new()
+        .access_mode(0x81)
+        .share_mode(0)
+        .custom_flags(0x02000000)
+        .open(&directory)
+        .unwrap();
+    for create in [false, true] {
+        let error = DirectoryGuard::acquire(&directory, create)
+            .err()
+            .expect("an exclusive Windows handle must prevent opening another guard");
+        assert_eq!(error.raw_os_error(), Some(32));
+    }
+    drop(held);
+    assert!(DirectoryGuard::acquire(&directory, false).is_ok());
 }
 
 #[cfg(windows)]
@@ -176,6 +221,8 @@ fn junctions_cannot_redirect_content_access_outside_the_installation() {
     assert!(check_no_links(&link.join("keep")).is_err());
     assert!(safe_join(&root, "junction/keep").is_err());
     assert!(DirectoryGuard::acquire(&link, false).is_err());
+    assert!(DirectoryGuard::acquire(&link.join("new"), true).is_err());
+    assert!(!outside.join("new").exists());
     assert_eq!(fs::read(outside.join("keep")).unwrap(), b"original");
     // Remove only the junction itself; never recursively walk the target.
     fs::remove_dir(&link).unwrap();
