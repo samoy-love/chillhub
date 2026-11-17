@@ -128,10 +128,7 @@ fn higher_priority_activity_controls_both_primary_button_and_status() {
     copy.running = false;
     let queued = present(&option, &copy, &maintenance, false);
     assert_eq!(queued.play_label, "В очереди");
-    assert_eq!(
-        queued.status,
-        "Откройте загрузки, чтобы продолжить или отменить задачу"
-    );
+    assert_eq!(queued.status, "Управляйте задачей в разделе «Загрузки»");
     copy.queued = false;
     let servicing = present(&option, &copy, &maintenance, false);
     assert_eq!(servicing.play_label, "Технические работы");

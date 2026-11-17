@@ -58,10 +58,7 @@ pub(super) fn present<'a>(
     let (play_label, status) = match blocker {
         Some(Blocker::Launching) => ("Запускаем…", "Ожидаем запуска игры"),
         Some(Blocker::Running) => ("Игра запущена", "Игра уже запущена"),
-        Some(Blocker::Queued) => (
-            "В очереди",
-            "Откройте загрузки, чтобы продолжить или отменить задачу",
-        ),
+        Some(Blocker::Queued) => ("В очереди", "Управляйте задачей в разделе «Загрузки»"),
         Some(Blocker::Maintenance) => ("Технические работы", "Ожидаем завершения работ на сервере"),
         None => {
             let label = match option.action {

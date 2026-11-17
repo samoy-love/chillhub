@@ -244,7 +244,7 @@ fn operation(task: &QueueItem) -> &'static str {
     match (task.report.operation, task.request.scope) {
         (Some(TransferOperation::Install), SyncScope::WholeRoot) => "Установка игры",
         (Some(TransferOperation::Install), SyncScope::OwnFilesOnly) => "Установка модпака",
-        (Some(TransferOperation::Update), SyncScope::WholeRoot) => "Обновление игры",
+        (Some(TransferOperation::Update), SyncScope::WholeRoot) => "Обновление файлов игры",
         (Some(TransferOperation::Update), SyncScope::OwnFilesOnly) => "Обновление модпака",
         (Some(TransferOperation::Verify), _) => "Проверка файлов",
         (_, SyncScope::WholeRoot) => "Игра",
