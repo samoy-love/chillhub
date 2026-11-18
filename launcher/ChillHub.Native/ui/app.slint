@@ -1032,10 +1032,7 @@ export component AppWindow inherits Window {
                     }
                     launch-bar := Rectangle {
                         x: 0px; y: root.hero-height; width: parent.width;
-                        // Reserve the two usual metadata lines while the selected copy is checked.
-                        // Longer status messages can still grow the card at high display scales.
-                        height: max(launch-button.y + launch-button.height + 64px,
-                                    install-estimate-hint.y + install-estimate-hint.height + 16px);
+                        height: install-estimate-hint.y + install-estimate-hint.height + 16px;
                         property <length> control-y: max(38px, launch-status.y + launch-status.height + 8px);
                         background: #242328;
                         Rectangle { x: 0px; y: 0px;  width: parent.width; height: 1px; background: #ffffff0c; }
@@ -1058,14 +1055,14 @@ export component AppWindow inherits Window {
                             clicked => { root.play-requested(); }
                         }
                         copy-version := Text {
-                            x: 24px; y: launch-button.y + launch-button.height + (self.text == "" ? 0px : 12px); width: parent.width - 48px;
-                            height: self.text == "" ? 0px : self.preferred-height;
+                            x: 24px; y: launch-button.y + launch-button.height + 12px; width: parent.width - 48px;
+                            height: max(18px, self.preferred-height);
                             text: root.installed-version + (root.installed-version != "" && root.playtime-label != "" ? " · " : "") + root.playtime-label;
                             color: Theme.dim; font-size: 12px; wrap: word-wrap;
                         }
                         install-estimate-hint := Text {
-                            x: 24px; y: copy-version.y + copy-version.height + (self.text == "" ? 0px : 8px); width: parent.width - 48px;
-                            height: self.text == "" ? 0px : self.preferred-height;
+                            x: 24px; y: copy-version.y + copy-version.height + 8px; width: parent.width - 48px;
+                            height: max(18px, self.preferred-height);
                             text: root.shown-install-hint; color: root.show-install-space-warning ? root.install-warning-color : Theme.dim; font-size: 12px; wrap: word-wrap;
                         }
                     }

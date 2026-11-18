@@ -966,6 +966,21 @@ fn real_ui_headless_layout_and_actions() {
         let cover_point = (1110, 155);
         assert_ne!(pixel(&switched, cover_point), pixel(&before, cover_point));
         assert_eq!(pixel(&switched, cover_point), pixel(&settled, cover_point));
+        let media = ElementHandle::find_by_accessible_label(&library.ui, "Медиа")
+            .next()
+            .expect("media heading");
+        library.ui.set_installed_version("".into());
+        library.ui.set_playtime_label("".into());
+        library.ui.set_install_hint("".into());
+        library.ui.window().take_snapshot().unwrap();
+        let pending_y = media.absolute_position().y;
+        library.ui.set_busy(false);
+        library.ui.set_can_play(true);
+        library.ui.set_installed_version("Установлена 1.0".into());
+        library.ui.set_playtime_label("Ещё не играли".into());
+        library.ui.set_install_hint("Свободно 70 ГБ".into());
+        library.ui.window().take_snapshot().unwrap();
+        assert_eq!(media.absolute_position().y, pending_y);
     }
     // Exercise the actual TextInput event path with EN and RU key text, including
     // Slint's clipboard-backed methods and ordinary character entry.

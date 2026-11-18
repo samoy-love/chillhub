@@ -276,6 +276,8 @@ fn select_game(ui: &AppWindow, state: &State, index: usize) {
     };
     if game_changed {
         ui.set_hero(image_loader::card_preview(&game.id, "hero"));
+        ui.set_installed_version("".into());
+        ui.set_playtime_label("".into());
     }
     ui.set_game_title(game.title.clone().into());
     ui.set_description(game.description.clone().into());
