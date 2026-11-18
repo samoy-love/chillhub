@@ -7,6 +7,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod small_packs;
+pub use small_packs::SmallPack;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
@@ -23,6 +26,12 @@ pub struct Manifest {
     pub files: Vec<ManifestFile>,
     #[serde(default, deserialize_with = "empty_directories")]
     pub empty_dirs: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "small_packs::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub small_packs: Vec<SmallPack>,
 }
 
 // Published C# manifests use a trailing separator for empty directories. This is

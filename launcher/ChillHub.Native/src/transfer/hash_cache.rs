@@ -353,7 +353,7 @@ impl FileHashes {
         }
     }
 
-    fn matches(self, expected: &ManifestFile) -> Option<(String, String)> {
+    pub(super) fn matches(self, expected: &ManifestFile) -> Option<(String, String)> {
         let sha256 = self.sha.map(|sha| hex(&sha.finalize())).unwrap_or_default();
         let blake3 = self
             .blake

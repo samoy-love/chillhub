@@ -13,6 +13,7 @@ function Get-NativeMutationScope {
         'src/security.rs' = @('filter_by_ownership', 'prepare_directories')
         'src/transfer/cleanup.rs' = @('is_approved')
         'src/transfer/deferred.rs' = @('is_locked')
+        'src/transfer/small_packs.rs' = @('pack_url')
         'src/update.rs' = @('job_arguments', 'trusted_url', 'interpret_release')
     }
     foreach ($file in $policies.Keys) {

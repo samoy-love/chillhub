@@ -3,6 +3,7 @@ mod cleanup;
 pub use cleanup::CleanupFile;
 mod deferred;
 mod hash_cache;
+mod small_packs;
 use crate::manifest::{self, DirectoryGuard, Manifest, ManifestFile, open_regular, safe_join};
 use base64::Engine as _;
 use fs2::FileExt;
@@ -201,6 +202,7 @@ pub struct TransferPlan {
     pub total_download_bytes: u64,
     pub total_manifest_bytes: u64,
     pub hash_mismatches: usize,
+    pack_order_safe: bool,
     request: TransferRequest,
 }
 
@@ -633,8 +635,11 @@ impl TransferEngine {
             downloads.push(file.clone());
         }
         let total_download_bytes: u64 = downloads.iter().map(|f| f.size).sum();
-        let required_free_bytes =
-            required_transfer_space(&downloads, &allocations, request.max_parallel.clamp(1, 16));
+        let workers = request.max_parallel.clamp(1, 16);
+        let required_free_bytes = required_transfer_space(&downloads, &allocations, workers);
+        // A serial replacement plan may spend the free space released by a
+        // preceding file. Batching may only reorder an order-independent plan.
+        let pack_order_safe = workers > 1 || allocations.iter().all(|&(_, old)| old == 0);
         Ok(TransferPlan {
             manifest,
             downloads,
@@ -643,6 +648,7 @@ impl TransferEngine {
             total_download_bytes,
             total_manifest_bytes: total_bytes,
             hash_mismatches,
+            pack_order_safe,
             request: request.clone(),
         })
     }
@@ -737,35 +743,52 @@ impl TransferEngine {
             request.bytes_per_second,
         );
         stats.emit(TransferStage::Downloading, "", event, true);
-        let schedule = download_order(&plan.downloads);
-        let next = AtomicUsize::new(0);
-        let stopped = AtomicBool::new(false);
+        let schedule = small_packs::WorkQueue::new(plan);
         let error = Mutex::new(None);
         std::thread::scope(|scope| {
-            for _ in 0..request.max_parallel.clamp(1, 16).min(schedule.len()) {
+            for _ in 0..request.max_parallel.clamp(1, 16).min(plan.downloads.len()) {
                 scope.spawn(|| {
+                    let _stop_on_panic = small_packs::StopOnPanic(&schedule);
                     let mut worker = TransferWorker::new();
-                    while !stopped.load(Ordering::Acquire) {
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(&file_index) = schedule.get(index) else {
-                            break;
+                    while let Some(work) = schedule.take() {
+                        let result = match work {
+                            small_packs::Job::File(index) => {
+                                let file = &plan.downloads[index];
+                                self.transfer_file(
+                                    request,
+                                    &plan.manifest,
+                                    file,
+                                    control,
+                                    &stats,
+                                    event,
+                                    &hashes,
+                                    &mut worker,
+                                    None,
+                                )
+                                .map_err(|error| antivirus_error(error, &file.path))
+                            }
+                            small_packs::Job::Pack(pack) => self
+                                .transfer_pack(
+                                    request,
+                                    plan,
+                                    pack,
+                                    control,
+                                    &stats,
+                                    event,
+                                    &hashes,
+                                    &mut worker,
+                                    &schedule,
+                                )
+                                .map(|installed| schedule.finish_pack(pack, installed)),
                         };
-                        let file = &plan.downloads[file_index];
-                        if let Err(e) = self.transfer_file(
-                            request,
-                            &plan.manifest,
-                            file,
-                            control,
-                            &stats,
-                            event,
-                            &hashes,
-                            &mut worker,
-                        ) {
-                            stopped.store(true, Ordering::Release);
+                        if let Err(e) = result {
                             let mut saved = error.lock().unwrap_or_else(|e| e.into_inner());
                             if saved.is_none() {
-                                *saved = Some(antivirus_error(e, &file.path));
+                                *saved = Some(e);
                             }
+                            // Peers can abort a pack in response to this flag.
+                            // Publish the original failure before they do.
+                            schedule.stop();
                             break;
                         }
                     }
@@ -848,6 +871,7 @@ impl TransferEngine {
         event: &(dyn Fn(TransferEvent) + Sync),
         hashes: &Mutex<HashCache>,
         worker: &mut TransferWorker,
+        packed: Option<&[u8]>,
     ) -> Result<()> {
         control.checkpoint()?;
         manifest::validate_relative(&file.path).map_err(TransferError::UnsafePath)?;
@@ -860,7 +884,7 @@ impl TransferEngine {
         let buffer = &mut worker.buffer;
         let part = destination.with_file_name(part_name.rsplit('/').next().unwrap());
         // Both paths have the same validated parent, held through the rename.
-        manifest::reject_link(&destination)
+        let destination_present = manifest::exists_without_links(&destination)
             .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
         let partial_present = manifest::exists_without_links(&part)
             .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
@@ -873,6 +897,23 @@ impl TransferEngine {
         if ready {
             open_regular(&part, true, false, false)?.sync_all()?;
             set_credit(stats, &mut credited, file.size);
+        }
+        if let Some(payload) = packed.filter(|_| !destination_present && !partial_present)
+            && let Some(mut out) = manifest::create_regular_if_absent(&part)?
+        {
+            control.checkpoint()?;
+            let mut digests = FileHashes::new(file);
+            out.write_all(payload)?;
+            digests.update(payload);
+            match digests.seal(out, &part, file, control) {
+                Ok(stamp) => {
+                    verified_stamp = stamp;
+                    set_credit(stats, &mut credited, file.size);
+                    ready = true;
+                }
+                Err(TransferError::Integrity(_)) => remove_regular(&part)?,
+                Err(error) => return Err(error),
+            }
         }
         if !ready {
             for donor in &request.donor_roots {

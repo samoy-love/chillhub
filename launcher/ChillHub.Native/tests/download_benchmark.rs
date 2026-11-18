@@ -3,9 +3,12 @@
 //! Set CHILLHUB_BENCH_SERVE_ONLY to a port (0 chooses a free one) to host the same fixtures
 //! for another client. CHILLHUB_BENCH_BASE runs the benchmark against that server.
 //! CHILLHUB_BENCH_SCHEDULE_ONLY runs only the delayed mixed-size fixture.
+//! CHILLHUB_BENCH_PACKED=1 compares fresh installs of the same 1,200 small
+//! files with and without pack metadata. To use publisher output, place its
+//! manifest.json, files/ and packs/ under CHILLHUB_BENCH_FIXTURES/small-packed/.
 use base64::Engine as _;
 use chillhub_native::{
-    manifest::{Manifest, ManifestFile},
+    manifest::{Manifest, ManifestFile, SmallPack},
     transfer::{TransferControl, TransferEngine, TransferRequest, TransferStage, verify_file},
 };
 use serde_json::json;
@@ -39,14 +42,19 @@ fn payload(size: usize, seed: u32) -> Vec<u8> {
         .collect()
 }
 
-fn make_fixtures(root: &Path, schedule_only: bool) {
+fn make_fixtures(root: &Path, schedule_only: bool, packed: bool) {
     for (case, file_count, size) in [
         ("small", 1200, 4096),
+        ("small-packed", 1200, 4096),
         ("large", 4, 64 * BLOCK),
         ("delta", 2, 48 * BLOCK),
         ("mixed", 49, 4096),
     ] {
-        if schedule_only && case != "mixed" {
+        let pack_fixture = case == "small-packed";
+        if (schedule_only && case != "mixed")
+            || (packed && !matches!(case, "small" | "small-packed"))
+            || (!packed && pack_fixture)
+        {
             continue;
         }
         let directory = root.join(case);
@@ -60,6 +68,7 @@ fn make_fixtures(root: &Path, schedule_only: bool) {
             block_size: if case == "delta" { BLOCK as u64 } else { 0 },
             ..Default::default()
         };
+        let mut pack_bytes = Vec::new();
         for index in 0..file_count {
             let archive = case == "mixed" && index + 1 == file_count;
             let size = if archive { 16 * BLOCK } else { size };
@@ -69,9 +78,25 @@ fn make_fixtures(root: &Path, schedule_only: bool) {
             } else {
                 format!("dir-{:03}/file-{index:04}.bin", index / 32)
             };
-            let path = directory.join("content").join(&relative);
+            let path = directory
+                .join(if pack_fixture { "files" } else { "content" })
+                .join(&relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, &data).unwrap();
+            if pack_fixture {
+                pack_bytes.extend_from_slice(&data);
+                if (index + 1) % 128 == 0 || index + 1 == file_count {
+                    let sha256 = format!("{:x}", Sha256::digest(&pack_bytes));
+                    let packs = directory.join("packs");
+                    fs::create_dir_all(&packs).unwrap();
+                    fs::write(packs.join(format!("{sha256}.bin")), &pack_bytes).unwrap();
+                    manifest.small_packs.push(SmallPack {
+                        sha256,
+                        files: (index / 128 * 128..=index).collect(),
+                    });
+                    pack_bytes.clear();
+                }
+            }
             let blocks = (case == "delta").then(|| {
                 let mut old = vec![0x55; 33];
                 old.extend_from_slice(&data[..size - 33]);
@@ -191,11 +216,29 @@ fn serve(server: &Server, fixtures: &Path, stop: &AtomicBool, requests: &Request
 #[ignore = "release timing benchmark with local HTTP and transient installations"]
 fn local_download_benchmark() {
     let schedule_only = std::env::var_os("CHILLHUB_BENCH_SCHEDULE_ONLY").is_some();
+    let packed = std::env::var("CHILLHUB_BENCH_PACKED").as_deref() == Ok("1");
+    assert!(!(schedule_only && packed), "select one benchmark mode");
     let workspace = tempfile::tempdir().unwrap();
     let fixtures = std::env::var_os("CHILLHUB_BENCH_FIXTURES")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| workspace.path().join("fixtures"));
-    make_fixtures(&fixtures, schedule_only);
+    make_fixtures(&fixtures, schedule_only, packed);
+    if packed {
+        let file_list = |case: &str| {
+            let bytes = fs::read(fixtures.join(case).join("manifest.json")).unwrap();
+            serde_json::from_slice::<Manifest>(&bytes)
+                .unwrap()
+                .files
+                .into_iter()
+                .map(|file| (file.path, file.size, file.blake3, file.sha256))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            file_list("small"),
+            file_list("small-packed"),
+            "benchmark inputs differ"
+        );
+    }
     if std::env::var_os("CHILLHUB_BENCH_PREPARE_ONLY").is_some() {
         assert!(std::env::var_os("CHILLHUB_BENCH_FIXTURES").is_some());
         return;
@@ -247,6 +290,8 @@ fn local_download_benchmark() {
         .unwrap_or(1);
     let cases: &[(&str, &str)] = if schedule_only {
         &[("mixed", "mixed")]
+    } else if packed {
+        &[("small", "small"), ("small-packed", "small-packed")]
     } else {
         &[
             ("small", "small"),
@@ -280,7 +325,14 @@ fn local_download_benchmark() {
                 version: manifest.version.clone(),
                 root: root.clone(),
                 manifest_url: format!("{base}/{target}/manifest.json"),
-                content_base_url: format!("{base}/{target}/content/"),
+                content_base_url: format!(
+                    "{base}/{target}/{}/",
+                    if case == "small-packed" {
+                        "files"
+                    } else {
+                        "content"
+                    }
+                ),
                 max_parallel: WORKERS,
                 force_rehash: case == "verify",
                 ..Default::default()
@@ -318,6 +370,18 @@ fn local_download_benchmark() {
                         outcome.reused_bytes + outcome.network_bytes,
                         outcome.total_bytes
                     );
+                }
+                "small-packed" => {
+                    assert!(
+                        !manifest.small_packs.is_empty(),
+                        "expected a packed fixture"
+                    );
+                    let grouped: usize = manifest.small_packs.iter().map(|p| p.files.len()).sum();
+                    assert_eq!(
+                        content,
+                        manifest.files.len() - grouped + manifest.small_packs.len()
+                    );
+                    assert_eq!(range, 0);
                 }
                 _ => assert_eq!(content, manifest.files.len()),
             }

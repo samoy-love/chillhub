@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [ValidateRange(0,100)][double]$MinimumLines = 80,
-    [ValidateRange(0,100)][double]$MinimumBranches = 69
+    [ValidateRange(0,100)][double]$MinimumLines = 82,
+    [ValidateRange(0,100)][double]$MinimumBranches = 70
 )
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../launcher/ChillHub.Native'))
@@ -120,6 +120,7 @@ try {
         'transfer.rs' = @{ Lines = 84; Branches = 64 }
         'transfer/cleanup.rs' = @{ Lines = 75; Branches = 44 }
         'transfer/deferred.rs' = @{ Lines = 85; Branches = 77 }
+        'transfer/small_packs.rs' = @{ Lines = 90; Branches = 75 }
         'update.rs' = @{ Lines = 78; Branches = 69 }
     }
     $failures = foreach ($name in $critical.Keys) {
