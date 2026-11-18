@@ -728,6 +728,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "chrono",
+ "flate2",
  "fs2",
  "hex",
  "i-slint-backend-testing",

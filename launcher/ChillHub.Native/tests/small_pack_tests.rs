@@ -301,6 +301,33 @@ fn pack_unavailable_or_any_digest_mismatch_uses_original_files() {
 }
 
 #[test]
+fn a_partial_file_created_after_the_empty_root_check_is_resumed() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("game");
+    let server = Fixture::new(Body::Good).start(&root);
+    let created = AtomicBool::new(false);
+    let engine = TransferEngine::new().unwrap();
+    let outcome = engine
+        .run(&server.request, &TransferControl::default(), &|event| {
+            if event.stage == TransferStage::Downloading && !created.swap(true, Ordering::SeqCst) {
+                fs::create_dir_all(root.join("dir")).unwrap();
+                fs::write(root.join("dir/0.dat.part"), vec![0; SIZE / 2]).unwrap();
+            }
+        })
+        .unwrap();
+    assert_eq!(server.requests("/build/packs/").len(), 1);
+    assert_eq!(
+        server.requests("/build/files/"),
+        vec![(
+            "/build/files/dir/0.dat".into(),
+            Some(format!("bytes={}-", SIZE / 2))
+        )]
+    );
+    assert_eq!(outcome.network_bytes, (SIZE * COUNT + SIZE / 2) as u64);
+    assert_eq!(fs::read(root.join("dir/0.dat")).unwrap(), vec![0; SIZE]);
+}
+
+#[test]
 fn short_and_oversized_pack_responses_fall_back_with_accurate_traffic() {
     for announced in [false, true] {
         for oversized in [false, true] {

@@ -1,6 +1,29 @@
 use super::*;
 const BLOCK: usize = 64 * 1024;
 
+#[test]
+fn only_the_held_empty_lock_identifies_a_fresh_destination() {
+    let root = tempfile::tempdir().unwrap();
+    let lock = acquire_transfer_lock(root.path()).unwrap();
+    assert!(contains_only_empty_lock(root.path(), &lock));
+    assert!(!contains_only_empty_lock(
+        &root.path().join("missing"),
+        &lock
+    ));
+    for name in ["game.exe", "file.part", ".updating"] {
+        let path = root.path().join(name);
+        fs::write(&path, []).unwrap();
+        assert!(!contains_only_empty_lock(root.path(), &lock));
+        fs::remove_file(path).unwrap();
+    }
+    let subtree = root.path().join("game");
+    fs::create_dir(&subtree).unwrap();
+    assert!(!contains_only_empty_lock(root.path(), &lock));
+    fs::remove_dir(subtree).unwrap();
+    lock.set_len(1).unwrap();
+    assert!(!contains_only_empty_lock(root.path(), &lock));
+}
+
 #[cfg(windows)]
 #[test]
 fn antivirus_evidence_does_not_invent_quarantine_for_permissions_or_busy_files() {

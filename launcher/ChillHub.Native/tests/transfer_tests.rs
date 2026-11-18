@@ -6,10 +6,11 @@ use chillhub_native::{
         SyncScope, TransferControl, TransferEngine, TransferError, TransferRequest, TransferStage,
     },
 };
+use flate2::{Compression, write::GzEncoder};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{self, Read},
+    io::{self, Read, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -76,6 +77,7 @@ fn forced_game_verification_bypasses_persisted_hash_cache() {
 #[derive(Clone, Copy, PartialEq)]
 enum Behavior {
     Normal,
+    ManifestGzip,
     ManifestUnavailableOnce,
     ManifestUnavailable,
     ManifestNotFound,
@@ -106,6 +108,8 @@ impl Server {
         let seen_manifests = manifest_requests.clone();
         let worker = thread::spawn(move || {
             let mut content_requests = 0;
+            let mut manifest_peer = None;
+            let mut previous_install_peer = None;
             while !stopped.load(Ordering::Relaxed) {
                 let Some(request) = server.recv_timeout(Duration::from_millis(20)).unwrap() else {
                     continue;
@@ -118,11 +122,31 @@ impl Server {
                         Behavior::ManifestNotFound => 404,
                         _ => 200,
                     };
-                    let response =
-                        tiny_http::Response::from_data(serde_json::to_vec(&manifest).unwrap())
-                            .with_status_code(status);
+                    let json = serde_json::to_vec(&manifest).unwrap();
+                    let response = if behavior == Behavior::ManifestGzip {
+                        assert_accept_encoding(&request, "gzip");
+                        manifest_peer = request.remote_addr().copied();
+                        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+                        encoder.write_all(&json).unwrap();
+                        tiny_http::Response::from_data(encoder.finish().unwrap())
+                            .with_chunked_threshold(0)
+                            .with_header(
+                                tiny_http::Header::from_bytes("Content-Encoding", "gzip").unwrap(),
+                            )
+                    } else {
+                        tiny_http::Response::from_data(json)
+                    };
+                    let response = response.with_status_code(status);
                     let _ = request.respond(response);
                     continue;
+                }
+                if behavior == Behavior::ManifestGzip {
+                    assert_accept_encoding(&request, "identity");
+                    assert!(manifest_peer.is_some());
+                    let peer = *request.remote_addr().unwrap();
+                    assert_ne!(Some(peer), manifest_peer);
+                    assert_ne!(Some(peer), previous_install_peer);
+                    previous_install_peer = Some(peer);
                 }
                 let range = request
                     .headers()
@@ -211,6 +235,15 @@ impl Server {
         }
     }
 }
+
+fn assert_accept_encoding(request: &tiny_http::Request, expected: &str) {
+    let value = request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("Accept-Encoding"))
+        .map(|header| header.value.as_str());
+    assert_eq!(value, Some(expected));
+}
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -279,6 +312,23 @@ fn data(size: usize) -> Vec<u8> {
 }
 fn prepare(root: &TempDir) {
     fs::create_dir_all(root.path().join("game")).unwrap();
+}
+
+#[test]
+fn gzip_manifests_and_consecutive_installs_use_separate_file_connections() {
+    let data = b"game contents";
+    let server = Server::start(manifest(data), data.to_vec(), Behavior::ManifestGzip);
+    let engine = TransferEngine::new().unwrap();
+    for _ in 0..2 {
+        let temp = TempDir::new().unwrap();
+        let request = server.request(&temp);
+        let outcome = engine
+            .run(&request, &TransferControl::default(), &|_| {})
+            .unwrap();
+        assert_eq!(outcome.downloaded_files, 1);
+        assert_eq!(fs::read(request.root.join("game.bin")).unwrap(), data);
+    }
+    assert_eq!(server.manifest_requests.load(Ordering::Relaxed), 2);
 }
 
 #[test]

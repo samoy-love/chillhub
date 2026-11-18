@@ -291,7 +291,7 @@ impl Drop for PackCredit<'_> {
     }
 }
 
-impl TransferEngine {
+impl DownloadSession {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn transfer_pack(
         &self,
@@ -304,8 +304,11 @@ impl TransferEngine {
         hashes: &Mutex<HashCache>,
         worker: &mut TransferWorker,
         queue: &WorkQueue,
+        initially_empty: bool,
     ) -> Result<bool> {
-        if !pack.fresh(plan, request, control)? {
+        // A file added after this snapshot still goes through transfer_file's
+        // guarded create/resume path before any bytes are written.
+        if !initially_empty && !pack.fresh(plan, request, control)? {
             return Ok(false);
         }
         let mut credit = PackCredit { stats, bytes: 0 };

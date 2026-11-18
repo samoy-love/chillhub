@@ -3,6 +3,8 @@ mod cleanup;
 pub use cleanup::CleanupFile;
 mod deferred;
 mod hash_cache;
+mod http_client;
+mod manifest_body;
 mod small_packs;
 use crate::manifest::{self, DirectoryGuard, Manifest, ManifestFile, open_regular, safe_join};
 use base64::Engine as _;
@@ -310,40 +312,22 @@ impl TransferControl {
 
 #[derive(Clone)]
 pub struct TransferEngine {
-    client: Client,
+    metadata: Client,
+    redirects: http_client::Redirects,
     hash_cache_dir: Option<PathBuf>,
     diagnostic_dir: Option<PathBuf>,
 }
 impl TransferEngine {
     pub fn new() -> Result<Self> {
-        Self::with_redirects(reqwest::redirect::Policy::custom(|attempt| {
-            let target = attempt.url();
-            let allowed = attempt.previous().first().is_some_and(|initial| {
-                initial.origin() == target.origin()
-                    && target.username().is_empty()
-                    && target.password().is_none()
-            });
-            if attempt.previous().len() >= 5 || !allowed {
-                attempt.error("Content redirects must stay on the original trusted origin")
-            } else {
-                attempt.follow()
-            }
-        }))
+        Self::with_redirects(http_client::Redirects::SameOrigin)
     }
     pub fn for_update() -> Result<Self> {
-        Self::with_redirects(reqwest::redirect::Policy::none())
+        Self::with_redirects(http_client::Redirects::Disabled)
     }
-    fn with_redirects(policy: reqwest::redirect::Policy) -> Result<Self> {
-        let builder = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .redirect(policy)
-            .user_agent(concat!("ChillHub/", env!("CARGO_PKG_VERSION")));
-        // Blocking Response::read applies this timeout to each individual read;
-        // a large file therefore has no whole-download deadline. Using the
-        // async client's read_timeout here would require a reactor on the reader.
-        let client = builder.timeout(Duration::from_secs(15)).build()?;
+    fn with_redirects(redirects: http_client::Redirects) -> Result<Self> {
         Ok(Self {
-            client,
+            metadata: redirects.client()?,
+            redirects,
             hash_cache_dir: None,
             diagnostic_dir: None,
         })
@@ -365,10 +349,12 @@ impl TransferEngine {
     fn download_manifest(&self, address: &str, control: &TransferControl) -> Result<Manifest> {
         control.checkpoint()?;
         checked_url(address)?;
+        // Metadata has its own pool, including the retry. File connections are
+        // scoped to an installation and close when its workers have finished.
         let send = || {
-            self.client
+            self.metadata
                 .get(address)
-                .header(ACCEPT_ENCODING, "identity")
+                .header(ACCEPT_ENCODING, "gzip")
                 .send()
                 .and_then(|response| response.error_for_status())
         };
@@ -399,16 +385,7 @@ impl TransferEngine {
                 })?
             }
         };
-        if response.content_length().is_some_and(|n| n > MAX_MANIFEST) {
-            return Err(TransferError::InvalidManifest("manifest too large".into()));
-        }
-        let mut bytes = Vec::new();
-        response.take(MAX_MANIFEST + 1).read_to_end(&mut bytes)?;
-        control.checkpoint()?;
-        if bytes.len() as u64 > MAX_MANIFEST {
-            return Err(TransferError::InvalidManifest("manifest too large".into()));
-        }
-        serde_json::from_slice(&bytes).map_err(|e| TransferError::InvalidManifest(e.to_string()))
+        manifest_body::read(response, control)
     }
     fn log_manifest_http_error(&self, error: &reqwest::Error, attempt: u8, retry: bool) {
         let Some(directory) = &self.diagnostic_dir else {
@@ -711,8 +688,11 @@ impl TransferEngine {
         control.checkpoint()?;
         let _guard = DirectoryGuard::acquire(&request.root, true)
             .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
-        let _lock = acquire_transfer_lock(&request.root)?;
-        ensure_not_running(&request.root)?;
+        let lock = acquire_transfer_lock(&request.root)?;
+        let initially_empty = contains_only_empty_lock(&request.root, &lock);
+        if !initially_empty {
+            ensure_not_running(&request.root)?;
+        }
         let mut hashes = HashCache::load(self.hash_cache_dir.as_deref(), &request.root);
         // Drop old fingerprints before touching files, including failed/interrupted updates.
         for file in &plan.downloads {
@@ -745,56 +725,64 @@ impl TransferEngine {
         stats.emit(TransferStage::Downloading, "", event, true);
         let schedule = small_packs::WorkQueue::new(plan);
         let error = Mutex::new(None);
-        std::thread::scope(|scope| {
-            for _ in 0..request.max_parallel.clamp(1, 16).min(plan.downloads.len()) {
-                scope.spawn(|| {
-                    let _stop_on_panic = small_packs::StopOnPanic(&schedule);
-                    let mut worker = TransferWorker::new();
-                    while let Some(work) = schedule.take() {
-                        let result = match work {
-                            small_packs::Job::File(index) => {
-                                let file = &plan.downloads[index];
-                                self.transfer_file(
-                                    request,
-                                    &plan.manifest,
-                                    file,
-                                    control,
-                                    &stats,
-                                    event,
-                                    &hashes,
-                                    &mut worker,
-                                    None,
-                                )
-                                .map_err(|error| antivirus_error(error, &file.path))
+        if !plan.downloads.is_empty() {
+            let session = DownloadSession {
+                client: self.redirects.client()?,
+                remember_hashes: self.hash_cache_dir.is_some(),
+            };
+            std::thread::scope(|scope| {
+                for _ in 0..request.max_parallel.clamp(1, 16).min(plan.downloads.len()) {
+                    scope.spawn(|| {
+                        let _stop_on_panic = small_packs::StopOnPanic(&schedule);
+                        let mut worker = TransferWorker::new();
+                        while let Some(work) = schedule.take() {
+                            let result = match work {
+                                small_packs::Job::File(index) => {
+                                    let file = &plan.downloads[index];
+                                    session
+                                        .transfer_file(
+                                            request,
+                                            &plan.manifest,
+                                            file,
+                                            control,
+                                            &stats,
+                                            event,
+                                            &hashes,
+                                            &mut worker,
+                                            None,
+                                        )
+                                        .map_err(|error| antivirus_error(error, &file.path))
+                                }
+                                small_packs::Job::Pack(pack) => session
+                                    .transfer_pack(
+                                        request,
+                                        plan,
+                                        pack,
+                                        control,
+                                        &stats,
+                                        event,
+                                        &hashes,
+                                        &mut worker,
+                                        &schedule,
+                                        initially_empty,
+                                    )
+                                    .map(|installed| schedule.finish_pack(pack, installed)),
+                            };
+                            if let Err(e) = result {
+                                let mut saved = error.lock().unwrap_or_else(|e| e.into_inner());
+                                if saved.is_none() {
+                                    *saved = Some(e);
+                                }
+                                // Peers can abort a pack in response to this flag.
+                                // Publish the original failure before they do.
+                                schedule.stop();
+                                break;
                             }
-                            small_packs::Job::Pack(pack) => self
-                                .transfer_pack(
-                                    request,
-                                    plan,
-                                    pack,
-                                    control,
-                                    &stats,
-                                    event,
-                                    &hashes,
-                                    &mut worker,
-                                    &schedule,
-                                )
-                                .map(|installed| schedule.finish_pack(pack, installed)),
-                        };
-                        if let Err(e) = result {
-                            let mut saved = error.lock().unwrap_or_else(|e| e.into_inner());
-                            if saved.is_none() {
-                                *saved = Some(e);
-                            }
-                            // Peers can abort a pack in response to this flag.
-                            // Publish the original failure before they do.
-                            schedule.stop();
-                            break;
                         }
-                    }
-                });
-            }
-        });
+                    });
+                }
+            });
+        }
         hashes.lock().unwrap_or_else(|e| e.into_inner()).save();
         if let Some(error) = error.into_inner().unwrap_or_else(|e| e.into_inner()) {
             // A short failed response may never hit the normal 100 ms progress interval.
@@ -859,7 +847,16 @@ impl TransferEngine {
             total_bytes: plan.total_download_bytes,
         })
     }
+}
 
+/// File workers reuse a single pool within this installation. A subsequent
+/// job starts with fresh sockets, including after a job with many tiny files.
+struct DownloadSession {
+    client: Client,
+    remember_hashes: bool,
+}
+
+impl DownloadSession {
     #[allow(clippy::too_many_arguments)]
     fn transfer_file(
         &self,
@@ -1038,7 +1035,7 @@ impl TransferEngine {
             }
             return Err(error);
         }
-        if self.hash_cache_dir.is_some() {
+        if self.remember_hashes {
             HashCache::remember_verified(hashes, &destination, file, verified_stamp);
         }
         #[cfg(unix)]
@@ -1700,6 +1697,18 @@ fn acquire_transfer_lock(root: &Path) -> Result<fs::File> {
     })?;
     Ok(lock)
 }
+/// Under the directory guard and exclusive transfer lock, an otherwise empty
+/// destination contains neither a game executable nor a resumable part.
+fn contains_only_empty_lock(root: &Path, lock: &fs::File) -> bool {
+    if !lock.metadata().is_ok_and(|info| info.len() == 0) {
+        return false;
+    }
+    fs::read_dir(root).is_ok_and(|mut entries| {
+        matches!(entries.next(), Some(Ok(entry)) if entry.file_name() == ".chillhub.lock")
+            && entries.next().is_none()
+    })
+}
+
 fn ensure_not_running(root: &Path) -> Result<()> {
     #[cfg(windows)]
     {

@@ -49,6 +49,7 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 fs2 = "0.4"
+flate2 = "1"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 winreg = "0.55"
