@@ -21,16 +21,72 @@ func TestSmallFileGroupsRespectLimitsAndKeepOriginalIndices(t *testing.T) {
 		files = append(files, manifestFile{Size: 1})
 	}
 	groups := smallFileGroups(files)
-	if len(groups) != 3 || len(groups[0]) != 8 || len(groups[1]) != 128 || len(groups[2]) != 9 {
-		t.Fatalf("unexpected groups: %v", groups)
-	}
-	for i, index := range append(append(groups[0], groups[1]...), groups[2]...) {
-		if index != i+2 {
-			t.Fatalf("lost manifest order at %d: %d", i, index)
+	requirePackCounts(t, groups, []int{8, 20, 20, 20, 20, 19, 19, 19})
+	next := 2
+	for _, group := range groups {
+		var size int64
+		for _, index := range group {
+			if index != next {
+				t.Fatalf("lost manifest order at %d: %d", next, index)
+			}
+			next++
+			size += files[index].Size
+		}
+		if size > maxPackBytes {
+			t.Fatalf("pack size = %d, limit %d", size, maxPackBytes)
 		}
 	}
 	if got := smallFileGroups(files[:9]); len(got) != 0 {
 		t.Fatalf("a group of seven is too small: %v", got)
+	}
+}
+
+func TestSmallFileGroupsAdaptToCatalogSize(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		size  int64
+		want  []int
+	}{
+		{name: "one small pack", count: 15, size: 4096, want: []int{15}},
+		{name: "two minimum packs", count: 16, size: 4096, want: []int{8, 8}},
+		{name: "does not leave a tiny tail", count: 17, size: 4096, want: []int{9, 8}},
+		{name: "eight balanced packs", count: 240, size: 4096, want: []int{30, 30, 30, 30, 30, 30, 30, 30}},
+		{name: "enough packs for a large tree", count: 1200, size: 4096, want: []int{120, 120, 120, 120, 120, 120, 120, 120, 120, 120}},
+		{name: "byte-constrained last group", count: 73, size: maxSmallFileBytes, want: []int{8, 8, 8, 8, 8, 8, 8, 8, 8}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := make([]manifestFile, tc.count)
+			for i := range files {
+				files[i].Size = tc.size
+			}
+			requirePackCounts(t, smallFileGroups(files), tc.want)
+		})
+	}
+}
+
+func TestSmallFileGroupsUseEarlierSpaceForAShortTail(t *testing.T) {
+	files := make([]manifestFile, 18)
+	for i := range files {
+		files[i].Size = maxSmallFileBytes
+		if i < 9 {
+			files[i].Size = 1
+		}
+	}
+	want := [][]int{{0, 1, 2, 3, 4, 5, 6, 7, 8, 17}, {9, 10, 11, 12, 13, 14, 15, 16}}
+	if got := smallFileGroups(files); !reflect.DeepEqual(got, want) {
+		t.Fatalf("groups = %v, want %v", got, want)
+	}
+}
+
+func requirePackCounts(t *testing.T, groups [][]int, want []int) {
+	t.Helper()
+	got := make([]int, len(groups))
+	for i, group := range groups {
+		got[i] = len(group)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pack sizes = %v, want %v", got, want)
 	}
 }
 
@@ -55,26 +111,11 @@ func TestPublishedPacksMatchTheWireManifestAndOriginalFiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			var m manifest
-			if err = json.Unmarshal(raw, &m); err != nil || len(m.SmallPacks) != 1 || len(m.SmallPacks[0].Files) != 128 {
-				t.Fatalf("unexpected packs %v (error %v)", m.SmallPacks, err)
+			if err = json.Unmarshal(raw, &m); err != nil {
+				t.Fatal(err)
 			}
 			version := filepath.Join(h.ContentDirFor(namespace, "demo"), "1.0")
-			var want []byte
-			for _, index := range m.SmallPacks[0].Files {
-				data, err := os.ReadFile(filepath.Join(version, "files", filepath.FromSlash(m.Files[index].Path)))
-				if err != nil {
-					t.Fatal(err)
-				}
-				want = append(want, data...)
-			}
-			hash := sha256.Sum256(want)
-			if m.SmallPacks[0].SHA256 != hex.EncodeToString(hash[:]) {
-				t.Fatal("wire digest differs from published member bytes")
-			}
-			got, err := os.ReadFile(filepath.Join(version, "packs", m.SmallPacks[0].SHA256+".bin"))
-			if err != nil || !bytes.Equal(got, want) {
-				t.Fatalf("packed bytes differ: %v", err)
-			}
+			requirePublishedPacksMatchFiles(t, version, m)
 			repeated, err := writeSmallPacks(version, m)
 			if err != nil || !reflect.DeepEqual(repeated, m.SmallPacks) {
 				t.Fatalf("regeneration changed the manifest: %v", err)
@@ -90,6 +131,31 @@ func TestPublishedPacksMatchTheWireManifestAndOriginalFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func requirePublishedPacksMatchFiles(t *testing.T, version string, m manifest) {
+	t.Helper()
+	var groups [][]int
+	for _, pack := range m.SmallPacks {
+		groups = append(groups, pack.Files)
+		var want []byte
+		for _, index := range pack.Files {
+			data, err := os.ReadFile(filepath.Join(version, "files", filepath.FromSlash(m.Files[index].Path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want = append(want, data...)
+		}
+		hash := sha256.Sum256(want)
+		if pack.SHA256 != hex.EncodeToString(hash[:]) {
+			t.Fatal("wire digest differs from published member bytes")
+		}
+		got, err := os.ReadFile(filepath.Join(version, "packs", pack.SHA256+".bin"))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("packed bytes differ: %v", err)
+		}
+	}
+	requirePackCounts(t, groups, []int{17, 17, 17, 17, 17, 17, 16, 16})
 }
 
 func TestPackFailureKeepsPreviouslyPublishedVersion(t *testing.T) {

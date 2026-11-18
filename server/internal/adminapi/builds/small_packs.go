@@ -27,28 +27,73 @@ const (
 	maxPackBytes      = 512 << 10
 	maxPackFiles      = 128
 	minPackFiles      = 8
+	targetPackCount   = 8
 )
 
 func smallFileGroups(files []manifestFile) [][]int {
-	var groups [][]int
-	var group []int
-	var size int64
+	var eligible []int
+	var total int64
 	for i, file := range files {
 		if file.Size <= 0 || file.Size > maxSmallFileBytes {
 			continue
 		}
-		if len(group) == maxPackFiles || size+file.Size > maxPackBytes {
-			groups = append(groups, group)
-			group = nil
-			size = 0
-		}
-		group = append(group, i)
-		size += file.Size
+		eligible = append(eligible, i)
+		total += file.Size
 	}
-	if len(group) >= minPackFiles {
-		groups = append(groups, group)
+	if len(eligible) < minPackFiles {
+		return nil
+	}
+
+	// Aim to keep the usual eight download workers busy. Further groups may
+	// be needed to stay within the byte or file limit. Small catalogs use as
+	// many groups as they can fill without creating tiny requests.
+	fileGroups := (len(eligible) + maxPackFiles - 1) / maxPackFiles
+	byteGroups := int((total + maxPackBytes - 1) / maxPackBytes)
+	remainingGroups := min(len(eligible)/minPackFiles, max(targetPackCount, fileGroups, byteGroups))
+	groups := make([][]int, 0, remainingGroups)
+	sizes := make([]int64, 0, remainingGroups)
+	for len(eligible) >= minPackFiles {
+		count, size := nextSmallFileGroup(files, eligible, remainingGroups)
+		groups = append(groups, eligible[:count:count])
+		sizes = append(sizes, size)
+		eligible = eligible[count:]
+		remainingGroups = max(1, remainingGroups-1)
+	}
+
+	// A few large members can force a short tail despite the balanced
+	// counts. Reuse any space in earlier packs before leaving files separate.
+	for _, index := range eligible {
+		for group := len(groups) - 1; group >= 0; group-- {
+			if len(groups[group]) < maxPackFiles && sizes[group]+files[index].Size <= maxPackBytes {
+				groups[group] = append(groups[group], index)
+				sizes[group] += files[index].Size
+				break
+			}
+		}
 	}
 	return groups
+}
+
+func nextSmallFileGroup(files []manifestFile, eligible []int, remainingGroups int) (int, int64) {
+	target := min(maxPackFiles, max(minPackFiles, (len(eligible)+remainingGroups-1)/remainingGroups))
+	var count int
+	var size int64
+	for count < target {
+		next := files[eligible[count]].Size
+		if size+next > maxPackBytes {
+			break
+		}
+		size += next
+		count++
+	}
+	if left := len(eligible) - count; left > 0 && left < minPackFiles && len(eligible) >= 2*minPackFiles {
+		// Both groups can contain eight files, which always fit individually.
+		for count > len(eligible)-minPackFiles {
+			count--
+			size -= files[eligible[count]].Size
+		}
+	}
+	return count, size
 }
 
 // Call before promoting the version: a published manifest must never refer to
