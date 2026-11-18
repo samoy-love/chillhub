@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,6 +55,55 @@ func TestBackfillCommandReportsEveryVersionAndExitCode(t *testing.T) {
 	out.Reset()
 	if code := runBackfill(h, []string{"-version", "2.0.0"}, &out); code != 1 || !strings.Contains(out.String(), "FAILED") {
 		t.Fatalf("mismatch: exit %d, output:\n%s", code, out.String())
+	}
+}
+
+func TestBackfillCommandOnlyAddsSmallPacksWithTheFlag(t *testing.T) {
+	root := t.TempDir()
+	var files []map[string]any
+	for i := range 8 {
+		path := fmt.Sprintf("cfg-%d.ini", i)
+		data := []byte(path)
+		sum := sha256.Sum256(data)
+		mustWrite(t, filepath.Join(root, "content", "_mods", "g", "1.0.0", "files", path), data)
+		files = append(files, map[string]any{"path": path, "size": len(data), "sha256": hex.EncodeToString(sum[:])})
+	}
+	directory := filepath.Join(root, "manifests", "_mods", "g")
+	path := filepath.Join(directory, "1.0.0.json")
+	m, err := json.Marshal(map[string]any{"version": "1.0.0", "gameId": "g", "files": files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, path, m)
+	latest := []byte("{ \"version\": \"1.1.0\" }\n")
+	mustWrite(t, filepath.Join(directory, "1.1.0.json"), []byte(strings.Replace(string(m), "1.0.0", "1.1.0", 1)))
+	mustWrite(t, filepath.Join(directory, "latest.json"), latest)
+	h := builds.New(root)
+
+	var output bytes.Buffer
+	if code := runBackfill(h, []string{"-game", "g", "-version", "1.0.0"}, &output); code != 0 ||
+		!strings.Contains(output.String(), "skipped: nothing to add") {
+		t.Fatalf("block mode: exit %d, output %s", code, output.String())
+	}
+	if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, m) {
+		t.Fatalf("block mode changed the small-file manifest: %v, %v", data, err)
+	}
+
+	args := []string{"--small-packs", "-game", "g", "-version", "1.0.0"}
+	output.Reset()
+	if code := runBackfill(h, args, &output); code != 0 ||
+		!strings.Contains(output.String(), "_mods/g/1.0.0: 1 small pack(s), 8 file(s), manifest updated") {
+		t.Fatalf("small packs mode: exit %d, output %s", code, output.String())
+	}
+	if data, err := os.ReadFile(path); err != nil || !bytes.Contains(data, []byte(`"smallPacks"`)) {
+		t.Fatalf("pack metadata absent: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(directory, "latest.json")); err != nil || !bytes.Equal(data, latest) {
+		t.Fatalf("small packs mode changed latest: %v, %v", data, err)
+	}
+	output.Reset()
+	if code := runBackfill(h, args, &output); code != 0 || !strings.Contains(output.String(), "manifest unchanged") {
+		t.Fatalf("repeated small packs mode: exit %d, output %s", code, output.String())
 	}
 }
 

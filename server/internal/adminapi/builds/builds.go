@@ -62,9 +62,10 @@ type manifest struct {
 	// BlockSize — размер блока, по которому посчитаны "blocks" файлов (см.
 	// blocks.go). Ноль — у манифеста хешей блоков нет, лаунчер качает файлы
 	// целиком, как до их появления.
-	BlockSize int64          `json:"blockSize,omitempty"`
-	Files     []manifestFile `json:"files"`
-	EmptyDirs []string       `json:"emptyDirs"`
+	BlockSize  int64           `json:"blockSize,omitempty"`
+	Files      []manifestFile  `json:"files"`
+	EmptyDirs  []string        `json:"emptyDirs"`
+	SmallPacks []smallFilePack `json:"smallPacks,omitempty"`
 }
 
 type manifestFile struct {
@@ -143,6 +144,11 @@ func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 // afterwards, with the backup already gone.
 func (h *Handlers) publishTree(
 	stageDir, finalDir, manifestDir string, m manifest, updateLatest bool) (string, []byte, error) {
+	packs, err := writeSmallPacks(stageDir, m)
+	if err != nil {
+		return "", nil, fmt.Errorf("preparing small file packs: %w", err)
+	}
+	m.SmallPacks = packs
 	prom, err := beginPromote(stageDir, finalDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: %w", errPromoteFailed, err)

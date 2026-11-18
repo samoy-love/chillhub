@@ -161,6 +161,13 @@ func (h *Handlers) writeIfUnchanged(manDir, manPath string, before []byte, m man
 	if err != nil {
 		return err
 	}
+	if err := requireUnchangedManifest(manPath, before); err != nil {
+		return err
+	}
+	return adminutil.WriteFileAtomic(filepath.Join(manDir, m.Version+".json"), out, contentFilePerm)
+}
+
+func requireUnchangedManifest(manPath string, before []byte) error {
 	now, err := os.ReadFile(manPath)
 	if err != nil {
 		return err
@@ -168,7 +175,7 @@ func (h *Handlers) writeIfUnchanged(manDir, manPath string, before []byte, m man
 	if !bytes.Equal(before, now) {
 		return ErrManifestChanged
 	}
-	return adminutil.WriteFileAtomic(filepath.Join(manDir, m.Version+".json"), out, contentFilePerm)
+	return nil
 }
 
 // BackfillTarget — одна версия, которой можно дописать хеши блоков.
