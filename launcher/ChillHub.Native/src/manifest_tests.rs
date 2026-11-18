@@ -20,8 +20,35 @@ fn opened_write_handle_accepts_regular_file_and_rejects_hard_link_before_truncat
     file.write_all(b"new content").unwrap();
     drop(file);
     fs::hard_link(&target, &alias).unwrap();
+    assert!(create_regular_if_absent(&alias).unwrap().is_none());
     assert!(open_regular(&alias, true, false, true).is_err());
+    let alias = open_regular(&alias, false, false, false).unwrap();
+    assert!(reject_hard_links(&alias).is_err());
     assert_eq!(fs::read(&target).unwrap(), b"new content");
+}
+
+#[test]
+fn exclusive_file_creation_leaves_existing_bytes_and_propagates_other_errors() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("fresh.bin.part");
+    assert!(!exists_without_links(&path).unwrap());
+    assert!(metadata_without_links(&path).unwrap().is_none());
+    let mut file = create_regular_if_absent(&path).unwrap().unwrap();
+    file.write_all(b"kept partial").unwrap();
+    drop(file);
+    assert!(exists_without_links(&path).unwrap());
+    assert_eq!(metadata_without_links(&path).unwrap().unwrap().len(), 12);
+    assert!(create_regular_if_absent(&path).unwrap().is_none());
+    assert_eq!(fs::read(&path).unwrap(), b"kept partial");
+    let missing_parent = temp.path().join("missing/file");
+    assert_eq!(
+        create_regular_if_absent(&missing_parent)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(metadata_without_links(&temp.path().join("invalid\0name")).is_err());
 }
 #[test]
 fn directory_normalization_is_idempotent_for_programmatic_manifests() {
@@ -115,6 +142,59 @@ fn filesystem_errors_and_parent_components_are_not_accepted_as_missing_paths() {
     assert!(check_no_links(&temp.path().join("../outside")).is_err());
     assert!(check_no_links(Path::new("relative")).is_err());
     check_no_links(&temp.path().join("missing/child")).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_attribute_fast_path_leaves_ambiguous_directory_names_to_std() {
+    use std::os::windows::ffi::OsStrExt;
+    let temp = tempfile::tempdir().unwrap();
+    let windows_dir = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+    let volume_root = windows_dir.ancestors().last().unwrap();
+    assert_eq!(
+        windows_exists_without_links(volume_root).unwrap(),
+        Some(true)
+    );
+    let ordinary = volume_root.join(format!("chillhub-missing-{}", uuid::Uuid::new_v4()));
+    assert_eq!(
+        windows_exists_without_links(&ordinary).unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        windows_exists_without_links(Path::new(r"C:relative")).unwrap(),
+        None
+    );
+    assert_eq!(
+        windows_exists_without_links(&temp.path().join("invalid\0name")).unwrap(),
+        None
+    );
+    for component in ["directory.", "directory "] {
+        let child = temp.path().join(component).join("file");
+        assert_eq!(windows_exists_without_links(&child).unwrap(), None);
+        assert!(reject_link(&child).is_ok());
+    }
+    let verbatim = fs::canonicalize(temp.path()).unwrap();
+    assert_eq!(windows_exists_without_links(&verbatim).unwrap(), None);
+    assert!(reject_link(&verbatim).is_ok());
+    let prefix_len = volume_root.as_os_str().encode_wide().count();
+    let short = volume_root.join("x".repeat(246 - prefix_len));
+    let extended = volume_root.join("x".repeat(247 - prefix_len));
+    assert_eq!(windows_exists_without_links(&short).unwrap(), Some(false));
+    assert_eq!(windows_exists_without_links(&extended).unwrap(), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_write_handle_validation_rejects_directory_metadata() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(temp.path())
+        .unwrap();
+    assert!(validate_regular_handle(&directory, true).is_err());
 }
 
 #[test]
@@ -248,10 +328,17 @@ fn junctions_cannot_redirect_content_access_outside_the_installation() {
     );
     assert!(is_reparse(&fs::symlink_metadata(&link).unwrap()));
     assert!(reject_link(&link).is_err());
+    assert!(metadata_without_links(&link).is_err());
     assert!(check_no_links(&link.join("keep")).is_err());
     assert!(safe_join(&root, "junction/keep").is_err());
     assert!(DirectoryGuard::acquire(&link, false).is_err());
     assert!(DirectoryGuard::acquire(&link.join("new"), true).is_err());
+    let payload = outside.join("payload.part");
+    fs::write(&payload, b"replacement").unwrap();
+    assert!(
+        crate::transfer::atomic_replace(&link.join("payload.part"), &link.join("keep")).is_err()
+    );
+    assert_eq!(fs::read(payload).unwrap(), b"replacement");
     assert!(!outside.join("new").exists());
     assert_eq!(fs::read(outside.join("keep")).unwrap(), b"original");
     // Remove only the junction itself; never recursively walk the target.

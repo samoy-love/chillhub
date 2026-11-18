@@ -186,10 +186,7 @@ fn cache_write_is_bounded_and_changed_promoted_file_is_not_recorded() {
         .set_times(FileTimes::new().set_modified(before + std::time::Duration::from_secs(1)))
         .unwrap();
     let cache = Mutex::new(HashCache::load(Some(&directory), &root));
-    cache
-        .lock()
-        .unwrap()
-        .remember_verified(&path, &expected, verified);
+    HashCache::remember_verified(&cache, &path, &expected, verified);
     assert!(cache.lock().unwrap().document.entries.is_empty());
     let mut output = Bounded(Vec::new());
     output.write_all(&vec![0; MAX_BYTES]).unwrap();

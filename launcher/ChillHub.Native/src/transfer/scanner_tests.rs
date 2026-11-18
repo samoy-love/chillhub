@@ -148,6 +148,24 @@ fn sparse_or_shared_old_files_do_not_promise_disk_space() {
 
 #[cfg(windows)]
 #[test]
+fn a_worker_pins_the_current_directory_and_releases_it_when_switching() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let moved = temp.path().join("moved");
+    let mut worker = TransferWorker::new();
+    worker.guard_directory(&first).unwrap();
+    worker.guard_directory(&first).unwrap();
+    assert!(fs::rename(&first, &moved).is_err());
+    worker.guard_directory(&second).unwrap();
+    fs::rename(&first, &moved).unwrap();
+    assert!(fs::rename(&second, &first).is_err());
+    drop(worker);
+    fs::rename(&second, &first).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
 fn readonly_replacement_is_atomic_and_failed_replacement_preserves_permissions() {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};

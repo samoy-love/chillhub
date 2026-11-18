@@ -186,7 +186,7 @@ impl HashCache {
 
     // Called only after the complete .part file passed hashes and was atomically promoted.
     pub(super) fn remember_verified(
-        &mut self,
+        cache: &Mutex<Self>,
         path: &Path,
         expected: &ManifestFile,
         verified: Option<VerifiedStamp>,
@@ -194,10 +194,16 @@ impl HashCache {
         let Some(verified) = verified else {
             return;
         };
-        if self.path.is_none() || !verified.still_matches(path) {
+        // Query the destination before taking the shared cache lock so one
+        // worker's filesystem IO does not serialize the whole batch.
+        if !verified.still_matches(path) {
             return;
         }
-        self.document.entries.insert(
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.path.is_none() {
+            return;
+        }
+        cache.document.entries.insert(
             expected.path.to_lowercase(),
             Entry {
                 stamp: verified.0,
@@ -206,7 +212,7 @@ impl HashCache {
                 used: nanos(SystemTime::now()).unwrap_or(0),
             },
         );
-        self.dirty = true;
+        cache.dirty = true;
     }
 
     pub(super) fn save(&mut self) {

@@ -160,9 +160,10 @@ fn check_spelling(path: &str, names: &mut HashMap<String, String>) -> Result<(),
             prefix.push('/');
         }
         prefix.push_str(part);
-        if let Some(old) = names.insert(prefix.to_lowercase(), prefix.clone())
-            && old != prefix
-        {
+        let old = names
+            .entry(prefix.to_lowercase())
+            .or_insert_with(|| prefix.clone());
+        if old != &prefix {
             return Err(format!("Разный регистр одного пути: {old} / {prefix}"));
         }
     }
@@ -195,13 +196,70 @@ pub fn is_reparse(meta: &fs::Metadata) -> bool {
 }
 
 pub(crate) fn reject_link(path: &Path) -> io::Result<()> {
+    exists_without_links(path).map(|_| ())
+}
+
+pub(crate) fn exists_without_links(path: &Path) -> io::Result<bool> {
+    #[cfg(windows)]
+    if let Some(exists) = windows_exists_without_links(path)? {
+        return Ok(exists);
+    }
+    metadata_without_links(path).map(|metadata| metadata.is_some())
+}
+
+#[cfg(windows)]
+fn windows_exists_without_links(path: &Path) -> io::Result<Option<bool>> {
+    use std::{os::windows::ffi::OsStrExt, path::Prefix};
+    use windows_sys::Win32::{
+        Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND},
+        Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+        },
+    };
+
+    // Leave namespace conversion and uncommon errors to std. On ordinary
+    // drive paths Windows reports the last component's own reparse attribute.
+    if !path.is_absolute()
+        || !matches!(
+            path.components().next(),
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+        )
+        || path
+            .as_os_str()
+            .as_encoded_bytes()
+            .split(|&byte| matches!(byte, b'/' | b'\\'))
+            .any(|part| part.ends_with(b" ") || part.ends_with(b"."))
+    {
+        return Ok(None);
+    }
+    let mut wide: Vec<_> = path.as_os_str().encode_wide().collect();
+    if wide.len() + 1 >= 248 || wide.contains(&0) {
+        return Ok(None);
+    }
+    wide.push(0);
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        let error = io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32;
+        return Ok(matches!(error, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND).then_some(false));
+    }
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(link_error(path));
+    }
+    Ok(Some(true))
+}
+
+fn link_error(path: &Path) -> io::Error {
+    io::Error::other(format!(
+        "Ссылка или точка повторной обработки: {}",
+        path.display()
+    ))
+}
+
+pub(crate) fn metadata_without_links(path: &Path) -> io::Result<Option<fs::Metadata>> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if is_reparse(&meta) => Err(io::Error::other(format!(
-            "Ссылка или точка повторной обработки: {}",
-            path.display()
-        ))),
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(meta) if is_reparse(&meta) => Err(link_error(path)),
+        Ok(meta) => Ok(Some(meta)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -291,46 +349,87 @@ fn validate_regular_metadata(meta: &fs::Metadata) -> io::Result<()> {
 
 pub fn open_regular(path: &Path, write: bool, create: bool, truncate: bool) -> io::Result<File> {
     reject_link(path)?;
-    let mut options = OpenOptions::new();
     // Inspect the opened handle before truncation: a planted hard link must not
     // turn a temporary download into a write outside the installation.
-    options.read(true).write(write).create(create);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(0x00200000).share_mode(0x1);
-    }
-    let file = options.open(path)?;
-    let meta = file.metadata()?;
-    validate_regular_metadata(&meta)?;
-    if write {
-        reject_hard_links(&file)?;
-    }
+    let file = regular_open_options(write).create(create).open(path)?;
+    validate_regular_handle(&file, write)?;
     if truncate {
         file.set_len(0)?;
     }
     Ok(file)
 }
 
+pub(crate) fn create_regular_if_absent(path: &Path) -> io::Result<Option<File>> {
+    match regular_open_options(true).create_new(true).open(path) {
+        Ok(file) => {
+            validate_regular_handle(&file, true)?;
+            Ok(Some(file))
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn regular_open_options(write: bool) -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true).write(write);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x00200000).share_mode(0x1);
+    }
+    options
+}
+
+fn validate_regular_handle(file: &File, write: bool) -> io::Result<()> {
+    #[cfg(windows)]
+    if write {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        };
+        // The same Windows metadata query supplies both the type and link count.
+        let info = windows_file_information(file)?;
+        if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0
+            || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        {
+            return Err(io::Error::other("Ожидался обычный файл"));
+        }
+        return validate_link_count(u64::from(info.nNumberOfLinks));
+    }
+    validate_regular_metadata(&file.metadata()?)?;
+    if write {
+        reject_hard_links(file)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_file_information(
+    file: &File,
+) -> io::Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut information) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(information)
+}
+
 pub(crate) fn reject_hard_links(file: &File) -> io::Result<()> {
     #[cfg(windows)]
-    let links = {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{
-            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-        };
-        let mut information = BY_HANDLE_FILE_INFORMATION::default();
-        if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut information) } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        information.nNumberOfLinks
-    };
+    let links = u64::from(windows_file_information(file)?.nNumberOfLinks);
     #[cfg(unix)]
     let links = {
         use std::os::unix::fs::MetadataExt;
         file.metadata()?.nlink()
     };
+    validate_link_count(links)
+}
+
+fn validate_link_count(links: u64) -> io::Result<()> {
     if links > 1 {
         return Err(io::Error::other("Ожидался файл без жёстких ссылок"));
     }

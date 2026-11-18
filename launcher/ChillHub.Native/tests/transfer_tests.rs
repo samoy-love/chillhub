@@ -835,6 +835,29 @@ fn queue_reports_install_update_and_verify_with_real_plan_and_network_totals() {
 }
 
 #[test]
+fn empty_file_is_downloaded_when_missing_and_reuses_a_complete_partial() {
+    let server = Server::start(manifest(&[]), Vec::new(), Behavior::Normal);
+    let engine = TransferEngine::new().unwrap();
+    for already_partial in [false, true] {
+        let root = TempDir::new().unwrap();
+        let request = server.request(&root);
+        if already_partial {
+            prepare(&root);
+            fs::write(request.root.join("game.bin.part"), []).unwrap();
+        }
+        let before = server.ranges.lock().unwrap().len();
+        engine
+            .run(&request, &TransferControl::default(), &|_| {})
+            .unwrap();
+        assert!(fs::read(request.root.join("game.bin")).unwrap().is_empty());
+        assert_eq!(
+            server.ranges.lock().unwrap().len() - before,
+            usize::from(!already_partial)
+        );
+    }
+}
+
+#[test]
 fn resumes_partial_on_206_and_restarts_safely_on_200_or_416() {
     for behavior in [
         Behavior::Normal,

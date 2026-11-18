@@ -356,6 +356,11 @@ impl TransferEngine {
         self
     }
     pub fn fetch_manifest(&self, address: &str, control: &TransferControl) -> Result<Manifest> {
+        let manifest = self.download_manifest(address, control)?;
+        manifest::validate_manifest(&manifest).map_err(TransferError::InvalidManifest)?;
+        Ok(manifest)
+    }
+    fn download_manifest(&self, address: &str, control: &TransferControl) -> Result<Manifest> {
         control.checkpoint()?;
         checked_url(address)?;
         let send = || {
@@ -401,10 +406,7 @@ impl TransferEngine {
         if bytes.len() as u64 > MAX_MANIFEST {
             return Err(TransferError::InvalidManifest("manifest too large".into()));
         }
-        let manifest: Manifest = serde_json::from_slice(&bytes)
-            .map_err(|e| TransferError::InvalidManifest(e.to_string()))?;
-        manifest::validate_manifest(&manifest).map_err(TransferError::InvalidManifest)?;
-        Ok(manifest)
+        serde_json::from_slice(&bytes).map_err(|e| TransferError::InvalidManifest(e.to_string()))
     }
     fn log_manifest_http_error(&self, error: &reqwest::Error, attempt: u8, retry: bool) {
         let Some(directory) = &self.diagnostic_dir else {
@@ -438,7 +440,7 @@ impl TransferEngine {
         event: &(dyn Fn(TransferEvent) + Sync),
     ) -> Result<TransferPlan> {
         validate_request(request)?;
-        let manifest = self.fetch_manifest(&request.manifest_url, control)?;
+        let manifest = self.download_manifest(&request.manifest_url, control)?;
         self.plan_manifest(request, manifest, control, event)
     }
     pub fn plan_manifest(
@@ -742,7 +744,7 @@ impl TransferEngine {
         std::thread::scope(|scope| {
             for _ in 0..request.max_parallel.clamp(1, 16).min(schedule.len()) {
                 scope.spawn(|| {
-                    let mut buffer = vec![0; BUFFER];
+                    let mut worker = TransferWorker::new();
                     while !stopped.load(Ordering::Acquire) {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(&file_index) = schedule.get(index) else {
@@ -757,7 +759,7 @@ impl TransferEngine {
                             &stats,
                             event,
                             &hashes,
-                            &mut buffer,
+                            &mut worker,
                         ) {
                             stopped.store(true, Ordering::Release);
                             let mut saved = error.lock().unwrap_or_else(|e| e.into_inner());
@@ -845,7 +847,7 @@ impl TransferEngine {
         stats: &Progress,
         event: &(dyn Fn(TransferEvent) + Sync),
         hashes: &Mutex<HashCache>,
-        buffer: &mut [u8],
+        worker: &mut TransferWorker,
     ) -> Result<()> {
         control.checkpoint()?;
         manifest::validate_relative(&file.path).map_err(TransferError::UnsafePath)?;
@@ -854,14 +856,19 @@ impl TransferEngine {
         let mut destination = request.root.clone();
         destination.extend(file.path.split('/'));
         let parent = destination.parent().unwrap();
-        let _guard = DirectoryGuard::acquire(parent, true)?;
+        worker.guard_directory(parent)?;
+        let buffer = &mut worker.buffer;
         let part = destination.with_file_name(part_name.rsplit('/').next().unwrap());
         // Both paths have the same validated parent, held through the rename.
         manifest::reject_link(&destination)
             .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
-        manifest::reject_link(&part).map_err(|e| TransferError::UnsafePath(e.to_string()))?;
-        let (mut ready, mut verified_stamp) =
-            hash_cache::verify_for_promotion(&part, file, control)?;
+        let partial_present = manifest::exists_without_links(&part)
+            .map_err(|e| TransferError::UnsafePath(e.to_string()))?;
+        let (mut ready, mut verified_stamp) = if partial_present {
+            hash_cache::verify_for_promotion(&part, file, control)?
+        } else {
+            (false, None)
+        };
         let mut credited = 0u64;
         if ready {
             open_regular(&part, true, false, false)?.sync_all()?;
@@ -911,6 +918,8 @@ impl TransferEngine {
         }
         let url = file_url(&request.content_base_url, &file.path)?;
         if !ready
+            && file.size > manifest.block_size
+            && file.blocks.is_some()
             && destination.is_file()
             && let Some(blocks) = Blocks::parse(manifest.block_size, file)
         {
@@ -988,10 +997,9 @@ impl TransferEngine {
             }
             return Err(error);
         }
-        hashes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remember_verified(&destination, file, verified_stamp);
+        if self.hash_cache_dir.is_some() {
+            HashCache::remember_verified(hashes, &destination, file, verified_stamp);
+        }
         #[cfg(unix)]
         if file.executable {
             use std::os::unix::fs::PermissionsExt;
@@ -1016,8 +1024,9 @@ impl TransferEngine {
         event: &(dyn Fn(TransferEvent) + Sync),
         buffer: &mut [u8],
     ) -> Result<Option<VerifiedStamp>> {
-        let mut offset = fs::metadata(part).map(|m| m.len()).unwrap_or(0);
-        if offset >= file.size && part.exists() {
+        let partial = manifest::metadata_without_links(part)?;
+        let mut offset = partial.as_ref().map_or(0, fs::Metadata::len);
+        if partial.is_some() && offset >= file.size {
             if offset == file.size {
                 let verified = hash_cache::verify_for_promotion(part, file, control)?;
                 if verified.0 {
@@ -1041,7 +1050,7 @@ impl TransferEngine {
         let mut response = request.send()?;
         if response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
             // The manifest is authoritative; a stale partial must not loop on 416.
-            if part.exists() {
+            if manifest::exists_without_links(part)? {
                 open_regular(part, true, false, true)?;
             }
             set_credit(stats, credited, 0);
@@ -1063,8 +1072,20 @@ impl TransferEngine {
                 response.status()
             )));
         }
-        let mut output = open_regular(part, true, true, offset == 0)?;
-        output.set_len(offset)?;
+        // CREATE_NEW leaves an empty file without a separate truncate and
+        // never opens a competing entry. If one appeared, validate it normally.
+        let created = if partial.is_none() {
+            manifest::create_regular_if_absent(part)?
+        } else {
+            None
+        };
+        let mut output = match created {
+            Some(output) => output,
+            None => open_regular(part, true, true, offset == 0)?,
+        };
+        if offset != 0 {
+            output.set_len(offset)?;
+        }
         let mut digests = FileHashes::new(file);
         let mut prefix = offset;
         while prefix != 0 {
@@ -1235,6 +1256,35 @@ impl TransferEngine {
             }
         }
         digests.seal(output, part, file, control)
+    }
+}
+
+struct TransferWorker {
+    buffer: Vec<u8>,
+    directory: Option<(PathBuf, DirectoryGuard)>,
+}
+
+impl TransferWorker {
+    fn new() -> Self {
+        Self {
+            buffer: vec![0; BUFFER],
+            directory: None,
+        }
+    }
+
+    fn guard_directory(&mut self, path: &Path) -> io::Result<()> {
+        if cfg!(windows)
+            && self
+                .directory
+                .as_ref()
+                .is_some_and(|(held, _)| held == path)
+        {
+            // Sharing rules pin directory names but still permit reparse-point
+            // attribute changes. Check the path again before each file.
+            return manifest::check_no_links(path);
+        }
+        self.directory = Some((path.to_path_buf(), DirectoryGuard::acquire(path, true)?));
+        Ok(())
     }
 }
 
@@ -1675,7 +1725,7 @@ pub fn verify_file(
     hash_cache::verify_uncached(path, expected, control)
 }
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    hex::encode(bytes)
 }
 
 fn collect_files(root: &Path) -> Result<Vec<String>> {
@@ -1728,8 +1778,21 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 }
 
 pub fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
-    manifest::check_no_links(source).map_err(|e| TransferError::UnsafePath(e.to_string()))?;
-    manifest::check_no_links(destination).map_err(|e| TransferError::UnsafePath(e.to_string()))?;
+    let check_paths = || {
+        if let Some(parent) = source.parent()
+            && destination.parent() == Some(parent)
+            && source.file_name().is_some()
+            && destination.file_name().is_some()
+        {
+            manifest::reject_link(source)?;
+            manifest::reject_link(destination)?;
+            manifest::check_no_links(parent)
+        } else {
+            manifest::check_no_links(source)?;
+            manifest::check_no_links(destination)
+        }
+    };
+    check_paths().map_err(|e| TransferError::UnsafePath(e.to_string()))?;
     #[cfg(windows)]
     {
         use windows_sys::Win32::Storage::FileSystem::{
