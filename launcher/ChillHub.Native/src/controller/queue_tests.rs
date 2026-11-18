@@ -112,17 +112,17 @@ fn library_shows_running_base_before_its_waiting_modpack_and_clears_old_failure(
     mods.id = "mods".into();
     mods.request.depends_on = Some("base".into());
     let mut tasks = vec![base, mods];
-    assert_eq!(library_queue_task(&tasks, "fixture").unwrap().id, "base");
+    assert_eq!(library_task(&tasks, "fixture").unwrap().id, "base");
     tasks[0].state = QueueState::Completed;
-    assert_eq!(library_queue_task(&tasks, "fixture").unwrap().id, "mods");
+    assert_eq!(library_task(&tasks, "fixture").unwrap().id, "mods");
     tasks[1].state = QueueState::Failed;
     assert_eq!(
-        library_queue_task(&tasks, "fixture").unwrap().state,
+        library_task(&tasks, "fixture").unwrap().state,
         QueueState::Failed
     );
     tasks.push(task(QueueState::Completed, TransferOperation::Install));
-    assert!(library_queue_task(&tasks, "fixture").is_none());
-    assert!(library_queue_task(&tasks, "other-game").is_none());
+    assert!(library_task(&tasks, "fixture").is_none());
+    assert!(library_task(&tasks, "other-game").is_none());
 }
 
 #[test]
@@ -168,4 +168,59 @@ fn library_status_shapes_follow_queue_state_and_operation() {
         repair.progress = Some(progress(stage, 0, 0));
         assert_eq!(library_queue_kind(&repair), "checking");
     }
+}
+
+#[test]
+fn queue_security_consent_uses_only_the_selected_blocked_download() {
+    use crate::{AppState, controller::bind};
+    use chillhub_native::{paths::AppPaths, service::Services};
+    use std::{cell::RefCell, rc::Rc};
+
+    i_slint_backend_testing::init_no_event_loop();
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let root = paths.games_dir.join("fixture");
+    let (services, prefs) = Services::new(paths).unwrap();
+    let state = Rc::new(RefCell::new(AppState::new(
+        services,
+        prefs,
+        temp.path().into(),
+        temp.path().join("art"),
+        vec![],
+        None,
+    )));
+    let ui = AppWindow::new().unwrap();
+    bind(&ui, &state);
+    ui.set_panel_kind("downloads".into());
+    let mut blocked = task(QueueState::Running, TransferOperation::Install);
+    blocked.request.root = root.clone();
+    blocked.error = Some("test security incident".into());
+    blocked.report.error_code = Some("sync_security_blocked".into());
+    let mut other = blocked.clone();
+    other.id = "other".into();
+    other.state = QueueState::Failed;
+    other.report.error_code = Some("sync_network".into());
+    state.borrow_mut().tasks = vec![blocked, other];
+
+    ui.invoke_queue_action("missing".into(), "security".into());
+    ui.invoke_queue_action("other".into(), "security".into());
+    ui.invoke_queue_action("task".into(), "security".into());
+    assert_eq!(ui.get_panel_kind(), "downloads");
+    assert!(state.borrow().pending.is_none());
+
+    state.borrow_mut().tasks[0].state = QueueState::Failed;
+    ui.invoke_queue_action("task".into(), "security".into());
+    assert_eq!(ui.get_panel_kind(), "confirm");
+    let body = ui.get_panel_body();
+    assert!(body.contains("test security incident"));
+    assert!(body.contains(root.to_string_lossy().as_ref()));
+    assert!(matches!(
+        state.borrow().pending.as_ref(),
+        Some(Confirmation::Security(paths)) if paths.as_slice() == [root]
+    ));
+    ui.invoke_action_requested("cancel-action".into());
+    assert!(!ui.get_operation_busy());
+    assert!(state.borrow().pending.is_none());
+    assert!(state.borrow().services.queue.snapshot().is_empty());
+    state.borrow().services.queue.shutdown();
 }

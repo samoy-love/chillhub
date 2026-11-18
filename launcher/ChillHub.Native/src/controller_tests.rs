@@ -1,11 +1,14 @@
 //! Controller integration tests use the headless testing backend and loopback fixtures.
+#[cfg(windows)]
+#[path = "../tests/common/launch_probe.rs"]
+mod launch_probe;
 #[path = "controller_ui_action_tests.rs"]
 mod ui_action_tests;
 
 use super::*;
 use crate::catalog::Media;
 use chillhub_native::{
-    config::ConfigStore,
+    config::{ConfigStore, LaunchTarget},
     manifest::{Manifest, ManifestFile},
     model::{LibraryResponse, ModsRecord},
     paths::AppPaths,
@@ -59,6 +62,8 @@ struct Loopback {
     manual_feedback: Arc<AtomicBool>,
     hold_content: Arc<AtomicBool>,
     reject_catalog: Arc<AtomicBool>,
+    block_launch: Arc<AtomicBool>,
+    routes: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 impl Loopback {
     fn new() -> Self {
@@ -183,6 +188,10 @@ impl Loopback {
         let held = hold_content.clone();
         let reject_catalog = Arc::new(AtomicBool::new(false));
         let unavailable = reject_catalog.clone();
+        let block_launch = Arc::new(AtomicBool::new(false));
+        let launch_blocked = block_launch.clone();
+        let routes = Arc::new(Mutex::new(routes));
+        let responses = routes.clone();
         let worker = thread::spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
                 if let Some(mut request) = server.recv_timeout(Duration::from_millis(15)).unwrap() {
@@ -201,7 +210,13 @@ impl Loopback {
                             feedback_received.store(true, Ordering::Relaxed);
                         }
                     }
-                    let body = routes.get(&path).cloned();
+                    let body = if path == "/api/maintenance"
+                        && launch_blocked.load(Ordering::Relaxed)
+                    {
+                        Some(br#"{"enabled":true,"message":"fixture blocked launch","blocks":{"install":false,"update":false,"launch":true}}"#.to_vec())
+                    } else {
+                        responses.lock().unwrap().get(&path).cloned()
+                    };
                     let status = if path == "/api/games" && unavailable.load(Ordering::Relaxed) {
                         503
                     } else if body.is_some() {
@@ -230,7 +245,34 @@ impl Loopback {
             manual_feedback,
             hold_content,
             reject_catalog,
+            block_launch,
+            routes,
         }
+    }
+
+    #[cfg(windows)]
+    fn publish_launch_probe(&self, temp: &Path) {
+        let executable = temp.join("launcher-probe.exe");
+        launch_probe::compile(&temp.join("launcher-probe.rs"), &executable);
+        let bytes = fs::read(executable).unwrap();
+        let manifest = Manifest {
+            game_id: "plain".into(),
+            version: "1.0.0".into(),
+            files: vec![ManifestFile {
+                path: "Plain.exe".into(),
+                size: bytes.len() as u64,
+                blake3: blake3::hash(&bytes).to_hex().to_string(),
+                sha256: Some(hex::encode(Sha256::digest(&bytes))),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut routes = self.routes.lock().unwrap();
+        routes.insert(
+            "/manifests/plain/1.0.0.json".into(),
+            serde_json::to_vec(&manifest).unwrap(),
+        );
+        routes.insert("/content/plain/1.0.0/files/Plain.exe".into(), bytes);
     }
 }
 impl Drop for Loopback {
@@ -262,6 +304,8 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         "unset CHILLHUB_GAMES_DIR for isolated controller tests"
     );
     i_slint_backend_testing::init_integration_test_with_system_time();
+    #[cfg(windows)]
+    crate::desktop::tests::activation_shows_a_hidden_window_before_acknowledging_its_request();
     let temporary = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temporary.path());
     let server = Loopback::new();
@@ -373,6 +417,9 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
         .to_string_lossy()
         .into_owned();
     tick.start(TimerMode::Repeated, Duration::from_millis(25), move || {
+        if captured_outcome.borrow().is_some() {
+            return;
+        }
         let ui = weak.upgrade().unwrap();
         let result = (|| -> Result<bool, String> {
             if Instant::now() >= deadline {
@@ -996,13 +1043,26 @@ fn controller_installs_real_queue_preserves_draft_and_saves_isolated_settings() 
     });
     let loop_result = slint::run_event_loop_until_quit();
     tick.stop();
-    drop(cleanup);
     loop_result.unwrap();
     outcome
         .borrow_mut()
         .take()
         .expect("event loop exited without outcome")
         .unwrap();
+    // Installation remains available while the launch recheck must reject Play.
+    replacement_server
+        .block_launch
+        .store(true, Ordering::Relaxed);
+    controller::shortcut_install::tests::check_install_from_shortcut(&ui, &state);
+    #[cfg(windows)]
+    {
+        replacement_server
+            .block_launch
+            .store(false, Ordering::Relaxed);
+        replacement_server.publish_launch_probe(temporary.path());
+        controller::shortcut_install::tests::check_auto_launch(&ui, &state);
+    }
+    drop(cleanup);
     let game = paths.game_root("fixture").unwrap();
     assert_eq!(
         fs::read(game.join("Game.exe")).unwrap(),

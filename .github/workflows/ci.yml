@@ -631,9 +631,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.native == 'true'
     runs-on: windows-latest
-    # Recent hosted runners completed 57 of 200 cases in 34 minutes.
-    # Budget for slower runners and leave time for uploading partial results.
-    timeout-minutes: 165
+    # A hosted run needed 114 minutes for 200 cases. Windows file handling
+    # now adds 36 more cases. Leave room for slower disks and artifact upload.
+    timeout-minutes: 180
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -646,7 +646,7 @@ jobs:
         shell: pwsh
         run: ./scripts/ci/ensure-native-quality-tools.ps1 -Component Mutations
       - name: Проверить чувствительность тестов к ошибкам
-        timeout-minutes: 150
+        timeout-minutes: 165
         shell: pwsh
         run: ./scripts/native-mutations.ps1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

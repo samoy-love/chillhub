@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [ValidateRange(0,100)][double]$MinimumLines = 76,
-    [ValidateRange(0,100)][double]$MinimumBranches = 64
+    [ValidateRange(0,100)][double]$MinimumLines = 80,
+    [ValidateRange(0,100)][double]$MinimumBranches = 69
 )
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../launcher/ChillHub.Native'))
@@ -77,10 +77,32 @@ try {
         }
         $files[$relative] = $file.summary
     }
+    # Keep the former controller's gate after splitting its implementation.
+    # Add the raw counters so a tiny module cannot outweigh a larger one.
+    $controllerFiles = @(
+        'actions', 'background', 'bindings', 'catalog', 'choice', 'confirmation',
+        'downloads', 'game_management', 'library', 'lifecycle', 'play',
+        'security_panel', 'shortcuts', 'updates'
+    ) | ForEach-Object { "controller/$_.rs" }
+    if ($files.ContainsKey('controller.rs')) { $controllerFiles += 'controller.rs' }
+    $controller = @{}
+    foreach ($kind in 'lines', 'branches') {
+        $count = 0
+        $covered = 0
+        foreach ($source in $controllerFiles) {
+            if (!$files.ContainsKey($source)) { throw "Нет файла в отчёте покрытия: $source." }
+            $count += $files[$source].$kind.count
+            $covered += $files[$source].$kind.covered
+        }
+        if (!$count) { throw "Нет измерений контроллера: $kind." }
+        $controller[$kind] = @{ count = $count; percent = 100.0 * $covered / $count }
+    }
+    $files['controller (combined)'] = $controller
     # Keep critical components visible when the overall total improves.
     $critical = [ordered]@{
         'main.rs' = @{ Lines = 64; Branches = 51 }
-        'controller.rs' = @{ Lines = 64; Branches = 50 }
+        'controller (combined)' = @{ Lines = 66; Branches = 53 }
+        'controller/shortcut_install.rs' = @{ Lines = 78; Branches = 59 }
         'controller/settings.rs' = @{ Lines = 92; Branches = 79 }
         'desktop.rs' = @{ Lines = 49; Branches = 41 }
         'controller/launch_presentation.rs' = @{ Lines = 95; Branches = 90 }

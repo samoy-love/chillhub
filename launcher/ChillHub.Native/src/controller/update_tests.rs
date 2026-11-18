@@ -1,4 +1,6 @@
-use super::*;
+use super::{AppWindow, State, UpdateRelease, offer_automatic_update};
+use crate::close_panel;
+use chillhub_native::launch::ShortcutRequest;
 
 pub(crate) fn start_automatic_update(ui: &AppWindow, state: &State) -> Result<(), String> {
     // Staging rejects this origin before downloading or installing anything.

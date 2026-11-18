@@ -1,4 +1,8 @@
-use super::{ACTIVE_STATE, AppWindow, PANIC_CONTEXT, State, toast};
+use super::{
+    choice::refresh_choice,
+    shortcuts::{offer_shortcut, take_catalog_shortcut},
+};
+use crate::{ACTIVE_STATE, AppWindow, PANIC_CONTEXT, State, desktop, toast};
 use slint::ComponentHandle;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -92,8 +96,8 @@ fn failed(ui: &AppWindow, state: &State, activity: Activity, current: bool, erro
                 ui.set_load_error(
                     "Не удалось загрузить библиотеку. Попробуйте обновить её.".into(),
                 );
-                if let Some(request) = super::take_catalog_shortcut(ui, state) {
-                    super::offer_shortcut(ui, state, request);
+                if let Some(request) = take_catalog_shortcut(ui, state) {
+                    offer_shortcut(ui, state, request);
                 }
             }
             Activity::Operation => ui.set_operation_busy(false),
@@ -107,4 +111,34 @@ fn failed(ui: &AppWindow, state: &State, activity: Activity, current: bool, erro
         state,
         "Действие не завершилось из-за внутренней ошибки. Подробности сохранены в журнале.",
     );
+}
+
+pub(super) fn operation(
+    ui: &AppWindow,
+    work: impl FnOnce() -> Result<String, String> + Send + 'static,
+) {
+    ui.set_operation_busy(true);
+    background_for(ui, Activity::Operation, work, |ui, state, result| {
+        ui.set_operation_busy(false);
+        match result {
+            Ok(message) => toast(ui, state, &message),
+            Err(error) => report_failure(ui, state, "operation", &error),
+        }
+        refresh_choice(ui, state);
+    });
+}
+
+pub(super) fn report_failure(ui: &AppWindow, state: &State, kind: &str, error: &str) {
+    let services = state.borrow().services.clone();
+    chillhub_native::diagnostics::log(&services.paths.data_dir, kind, error);
+    chillhub_native::diagnostics::report_error(
+        &services.api,
+        &services.paths.data_dir,
+        kind,
+        error,
+    );
+    toast(ui, state, error);
+    if !ui.window().is_visible() {
+        desktop::notify("Chill Hub", error, true);
+    }
 }

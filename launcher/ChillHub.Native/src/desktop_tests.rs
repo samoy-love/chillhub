@@ -546,6 +546,72 @@ fn capped_shortcut_batch_indicates_when_to_wake_for_remaining_requests() {
 }
 
 #[test]
+fn shortcut_listener_rearms_itself_when_the_startup_batch_reaches_its_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = seed_capped_shortcut_batch(temp.path(), SystemTime::now());
+    let mut primary = Instance::acquire_for_profile(temp.path(), &[], true).unwrap();
+    assert!(primary.primary);
+    let (dispatch, batches) = mpsc::channel();
+    primary
+        .listen_with(move |_, requests, accepted| {
+            dispatch.send(requests).is_ok() && accepted.send(true).is_ok()
+        })
+        .unwrap();
+    let first = batches.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(first.len(), 32);
+    assert_eq!(first[0], ["--game", "game-00"]);
+    assert_eq!(first[31], ["--game", "game-31"]);
+    let remainder = batches.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(remainder, [["--game", "game-32"]]);
+    assert_eq!(
+        unsafe { WaitForSingleObject(primary.events.acknowledged.as_raw_handle(), 5000) },
+        WAIT_OBJECT_0
+    );
+    assert!(std::fs::read_dir(directory).unwrap().next().is_none());
+}
+
+pub(crate) fn activation_shows_a_hidden_window_before_acknowledging_its_request() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut primary = Instance::acquire_for_profile(temp.path(), &[], true).unwrap();
+    assert!(primary.primary);
+    let ui = AppWindow::new().unwrap();
+    assert!(!ui.window().is_visible());
+    primary.listen(ui.as_weak()).unwrap();
+    let request = publish_request(temp.path(), &["--game".into(), "peak".into()]).unwrap();
+    unsafe { SetEvent(primary.events.requested.as_raw_handle()) };
+
+    let acknowledged = std::rc::Rc::new(std::cell::Cell::new(None));
+    let received = acknowledged.clone();
+    let event = primary.events.clone();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(10),
+        move || {
+            if received.get().is_some() {
+                return;
+            }
+            let signaled = unsafe { WaitForSingleObject(event.acknowledged.as_raw_handle(), 0) }
+                == WAIT_OBJECT_0;
+            if signaled || std::time::Instant::now() >= deadline {
+                received.set(Some(signaled));
+                let _ = slint::quit_event_loop();
+            }
+        },
+    );
+    slint::run_event_loop_until_quit().unwrap();
+    timer.stop();
+    assert!(
+        acknowledged.get() == Some(true),
+        "the desktop listener did not acknowledge activation"
+    );
+    assert!(ui.window().is_visible());
+    assert!(!request.exists());
+    ui.hide().unwrap();
+}
+
+#[test]
 fn failing_to_show_window_preserves_shortcuts_for_the_next_activation() {
     let temp = tempfile::tempdir().unwrap();
     let args = vec!["--game".into(), "peak".into()];

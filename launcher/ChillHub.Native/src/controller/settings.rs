@@ -1,9 +1,15 @@
 use super::{
-    Activity, AppConfig, AppWindow, Path, PathBuf, State, background, background_for, close_panel,
-    open_panel, refresh_disk, reload, save_window, settings_ui, toast,
+    background::{Activity, background, background_for},
+    catalog::reload,
+    library::refresh_disk,
+    lifecycle::save_window,
 };
-use chillhub_native::feedback::FeedbackService;
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::{AppWindow, State, close_panel, open_panel, settings_ui, toast};
+use chillhub_native::{config::AppConfig, feedback::FeedbackService};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 static LIVE_SETTINGS_EPOCH: AtomicU64 = AtomicU64::new(0);
 const SAVING_LIVE: &str = "Сохраняем…";

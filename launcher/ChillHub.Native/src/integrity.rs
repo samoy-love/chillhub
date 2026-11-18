@@ -12,7 +12,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    fs,
+    fs::{self, File},
     io::Read,
     path::Path,
     sync::{Mutex, OnceLock},
@@ -82,8 +82,9 @@ impl Drop for Checking {
 /// Blocking; call only from a background worker. Network failures leave the previous result intact.
 pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<bool, String> {
     let root = paths.game_root(&game.game_id)?;
-    let config = ConfigStore::new(paths.clone()).load_readonly()?;
-    let version = config
+    let config = ConfigStore::new(paths.clone());
+    let prefs = config.load_readonly()?;
+    let version = prefs
         .selected_version(&game.game_id)
         .unwrap_or(&game.latest_version)
         .to_owned();
@@ -103,16 +104,8 @@ pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<boo
         }
     }
     let _checking = Checking(root_key.clone());
-    // Do not race a game or the installer. Holding this handle blocks a launch through Chill Hub.
-    let _lock = if root.join(".chillhub.lock").exists() {
-        let file = manifest::open_regular(&root.join(".chillhub.lock"), false, false, false)
-            .map_err(|e| e.to_string())?;
-        if file.try_lock_exclusive().is_err() {
-            return Ok(prior);
-        }
-        Some(file)
-    } else {
-        None
+    let Some(mut _lock) = lock_for_check(&root)? else {
+        return Ok(prior);
     };
     if !crate::playtime::processes_in(&root)?.is_empty() {
         return Ok(prior);
@@ -160,9 +153,34 @@ pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<boo
     let control = TransferControl::default();
     let manifest = match stored {
         Some(stored) => stored.manifest,
-        None => engine
-            .fetch_manifest(manifest_url.as_str(), &control)
-            .map_err(|e| e.to_string())?,
+        None => {
+            // The manifest request is independent of the installed files. Let
+            // games launch and installations progress while it is in flight.
+            drop(_lock);
+            let manifest = engine
+                .fetch_manifest(manifest_url.as_str(), &control)
+                .map_err(|e| e.to_string())?;
+            let Some(reacquired) = lock_for_check(&root)? else {
+                return Ok(prior);
+            };
+            _lock = reacquired;
+            let current = config.load_readonly()?;
+            if key(&root).as_deref() != Some(root_key.as_str())
+                || current.games_path != prefs.games_path
+                || current.api_base_url != prefs.api_base_url
+                || current
+                    .selected_version(&game.game_id)
+                    .unwrap_or(&game.latest_version)
+                    != version
+                || launch::read_marker(&root, ".version") != version
+                || root.join(".updating").exists()
+                || !crate::playtime::processes_in(&root)?.is_empty()
+                || self::fingerprint(&root)? != fingerprint
+            {
+                return Ok(prior);
+            }
+            manifest
+        }
     };
     let request = TransferRequest {
         game_id: game.game_id.clone(),
@@ -210,6 +228,28 @@ pub fn check(game: &GameRecord, paths: &AppPaths, api: &ApiClient) -> Result<boo
     }
     Ok(answer)
 }
+struct CheckLock(Option<File>);
+
+impl Drop for CheckLock {
+    fn drop(&mut self) {
+        if let Some(file) = &self.0 {
+            let _ = FileExt::unlock(file);
+        }
+    }
+}
+
+fn lock_for_check(root: &Path) -> Result<Option<CheckLock>, String> {
+    let lock = root.join(".chillhub.lock");
+    if !lock.exists() {
+        return Ok(Some(CheckLock(None)));
+    }
+    let file = manifest::open_regular(&lock, false, false, false).map_err(|e| e.to_string())?;
+    if file.try_lock_exclusive().is_err() {
+        return Ok(None);
+    }
+    Ok(Some(CheckLock(Some(file))))
+}
+
 fn remember(root: &str, status: Status) {
     let mut memory = memory().lock().unwrap_or_else(|e| e.into_inner());
     if memory.states.len() >= 256 && !memory.states.contains_key(root) {
@@ -304,3 +344,7 @@ impl std::io::Write for Bounded {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "integrity_tests.rs"]
+mod tests;

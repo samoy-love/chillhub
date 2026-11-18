@@ -21,9 +21,9 @@ mod security_offers;
 mod settings_ui;
 mod video;
 mod window_geometry;
-use catalog::{Game, default_choice, filtered_indices, switching_source, valid_choice};
+use catalog::{Game, default_choice, filtered_indices, switching_source};
 use chillhub_native::{
-    config::{AppConfig, LaunchTarget},
+    config::AppConfig,
     launch::{LaunchOption, ShortcutRequest},
     model::GameRecord,
     queue::QueueItem,

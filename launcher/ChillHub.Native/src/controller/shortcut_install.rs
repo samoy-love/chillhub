@@ -1,10 +1,71 @@
 //! Explicit install-and-play requests survive queue reordering, never application restarts.
-use super::*;
+use super::{
+    background::{Activity, background, background_for, report_failure},
+    choice::{refresh_choice, selected},
+    confirmation::{Confirmation, confirm},
+    play::{record_catalog_game_launch, show_game_started},
+};
+use crate::{AppWindow, State, install_ui, open_panel, toast};
+use chillhub_native::{
+    config::LaunchTarget,
+    launch::{LaunchAction, LaunchOutcome, ShortcutRequest},
+    model::GameRecord,
+    queue::{QueueItem, QueueState},
+};
+use slint::{ComponentHandle, Timer};
+use std::{
+    rc::Rc,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 #[derive(Default)]
 pub(crate) struct Pending {
     jobs: Vec<Job>,
     scheduled: bool,
+    pub(super) launching: LaunchReservations,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct LaunchReservations(Arc<Mutex<Vec<String>>>);
+
+impl LaunchReservations {
+    fn hold(&self, game_id: String) -> LaunchReservation {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(game_id.clone());
+        LaunchReservation {
+            reservations: self.clone(),
+            game_id,
+        }
+    }
+
+    pub(super) fn contains(&self, game_id: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .any(|id| id == game_id)
+    }
+}
+
+struct LaunchReservation {
+    reservations: LaunchReservations,
+    game_id: String,
+}
+
+impl Drop for LaunchReservation {
+    fn drop(&mut self) {
+        let mut reservations = self
+            .reservations
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(index) = reservations.iter().position(|id| *id == self.game_id) {
+            reservations.swap_remove(index);
+        }
+    }
 }
 struct Job {
     game: GameRecord,
@@ -12,6 +73,7 @@ struct Job {
     root: String,
     tasks: Vec<String>,
     completed: std::collections::HashSet<String>,
+    _reservation: LaunchReservation,
 }
 
 impl Job {
@@ -127,6 +189,13 @@ pub(super) fn install(ui: &AppWindow, state: &State, game: GameRecord, target: L
     }
     let services = state.borrow().services.clone();
     let captured = game.clone();
+    // Reserve before publishing the tasks, including when a cached install can
+    // complete before its UI callback. The job holds this through launch.
+    let reservation = state
+        .borrow()
+        .shortcut_installs
+        .launching
+        .hold(game.game_id.clone());
     ui.set_operation_busy(true);
     background_for(
         ui,
@@ -168,6 +237,7 @@ pub(super) fn install(ui: &AppWindow, state: &State, game: GameRecord, target: L
                         root,
                         tasks,
                         completed: completion,
+                        _reservation: reservation,
                     });
                     open_panel(ui, state, "downloads");
                     pump(ui, state);
@@ -242,4 +312,4 @@ pub(super) fn pump(ui: &AppWindow, state: &State) {
 
 #[cfg(test)]
 #[path = "shortcut_install_tests.rs"]
-mod tests;
+pub(crate) mod tests;

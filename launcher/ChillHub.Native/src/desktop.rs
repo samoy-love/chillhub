@@ -1035,4 +1035,4 @@ pub(super) fn create_tray(ui: &AppWindow, state: &State) -> Result<Tray, String>
 
 #[cfg(test)]
 #[path = "desktop_tests.rs"]
-mod tests;
+pub(crate) mod tests;

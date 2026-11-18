@@ -1,3 +1,7 @@
+#[cfg(windows)]
+#[path = "common/launch_probe.rs"]
+mod launch_probe;
+
 use chillhub_native::{
     config::{AppConfig, ConfigStore, LaunchTarget},
     feedback::{FeedbackDraft, FeedbackService, SendResult},
@@ -23,6 +27,11 @@ use std::{
 
 type RecordedRequests = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 type Routes = Arc<Mutex<HashMap<String, (u16, Vec<u8>)>>>;
+
+#[cfg(all(windows, feature = "launcher-ui"))]
+#[path = "application_flow_tests/desktop_startup.rs"]
+mod desktop_startup;
+
 struct Fixture {
     base: String,
     stop: Arc<AtomicBool>,
@@ -869,7 +878,6 @@ fn legacy_shortcut_launches_nested_fixture_and_tracks_exact_process_identity() {
         launch::{LaunchService, ShortcutRequest},
         playtime::{PlaytimeStore, ProcessIdentity},
     };
-    use std::process::Command;
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temp.path());
     let game_root = paths.game_root("fixture").unwrap();
@@ -877,37 +885,7 @@ fn legacy_shortcut_launches_nested_fixture_and_tracks_exact_process_identity() {
     fs::create_dir_all(&nested).unwrap();
     let source = temp.path().join("fixture.rs");
     let executable = nested.join("Fixture.exe");
-    fs::write(&source,r##"#![windows_subsystem="windows"]
-fn main(){std::fs::write("started.txt",std::env::current_dir().unwrap().to_string_lossy().as_bytes()).unwrap();let end=std::time::Instant::now()+std::time::Duration::from_secs(10);while !std::path::Path::new("stop").exists()&&std::time::Instant::now()<end{std::thread::sleep(std::time::Duration::from_millis(20));}}"##).unwrap();
-    let mut compiler = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
-    compiler
-        .arg(&source)
-        .arg("--crate-name=launch_fixture")
-        .arg("-o")
-        .arg(&executable);
-    // A GNU override is irrelevant to MSVC, even if inherited from the shell.
-    #[cfg(target_env = "gnu")]
-    if let Some(linker) = std::env::var_os("CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER")
-        .filter(|value| !value.is_empty())
-    {
-        compiler
-            .arg("-C")
-            .arg(format!("linker={}", linker.to_string_lossy()))
-            .args(["-C", "linker-flavor=ld", "-C", "link-self-contained=yes"]);
-        let dlltool = std::path::Path::new(&linker)
-            .parent()
-            .expect("GNU fixture linker must include its toolchain directory")
-            .join("llvm-dlltool.exe");
-        compiler
-            .arg("-C")
-            .arg(format!("dlltool={}", dlltool.display()));
-    }
-    let output = compiler.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    launch_probe::compile(&source, &executable);
     struct StopFixture(std::path::PathBuf);
     impl Drop for StopFixture {
         fn drop(&mut self) {
