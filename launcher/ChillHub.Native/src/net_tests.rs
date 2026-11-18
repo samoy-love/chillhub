@@ -80,3 +80,189 @@ fn partial_catalog_preserves_visible_games_without_marking_entries_complete() {
             .1
     );
 }
+
+fn with_http_responses(
+    responses: Vec<(&'static str, tiny_http::Response<std::io::Cursor<Vec<u8>>>)>,
+    check: impl FnOnce(&ApiClient),
+) {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let api = ApiClient::new(&base).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            for (path, response) in responses {
+                let request = server
+                    .recv_timeout(Duration::from_secs(8))
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("expected request for {path}"));
+                assert_eq!(request.url(), path);
+                let id = request
+                    .headers()
+                    .iter()
+                    .find(|header| header.field.equiv("X-Request-ID"))
+                    .unwrap();
+                assert!(uuid::Uuid::parse_str(id.value.as_str()).is_ok());
+                let _ = request.respond(response);
+            }
+        });
+        check(&api);
+    });
+}
+
+#[test]
+fn invalid_maintenance_responses_keep_the_last_confirmed_service_status() {
+    let route = "/api/maintenance";
+    with_http_responses(
+        vec![
+            (
+                route,
+                tiny_http::Response::from_string(
+                    r#"{"enabled":true,"reason":"Плановые работы!","blocks":{"launch":true}}"#,
+                ),
+            ),
+            (
+                route,
+                tiny_http::Response::from_string(r#"{"enabled":"false"}"#),
+            ),
+            (
+                route,
+                tiny_http::Response::from_string(r#"{"enabled":false,"blocks":{"launch":"no"}}"#),
+            ),
+            (
+                route,
+                tiny_http::Response::from_string(r#"{"enabled":false,"blocks":"wrong"}"#),
+            ),
+            (
+                route,
+                tiny_http::Response::from_string(r#"{"enabled":false}"#),
+            ),
+        ],
+        |api| {
+            assert!(api.confirmed_maintenance().is_none());
+            let state = api.maintenance().unwrap();
+            assert!(state.enabled && state.blocks.launch);
+            assert_eq!(state.banner(), "Плановые работы!");
+            for expected in [
+                "неполный статус",
+                "повреждённый статус",
+                "повреждённый статус",
+            ] {
+                let error = api.maintenance().unwrap_err();
+                assert!(
+                    matches!(&error, ApiError::Invalid(text) if text.contains(expected)),
+                    "{error:?}"
+                );
+                let last = api.confirmed_maintenance().unwrap();
+                assert!(last.enabled && last.blocks.launch);
+            }
+            assert!(!api.maintenance().unwrap().enabled);
+            assert!(!api.confirmed_maintenance().unwrap().enabled);
+        },
+    );
+}
+
+#[test]
+fn json_api_bounds_response_and_keeps_server_details_out_of_player_errors() {
+    let route = "/api/probe";
+    with_http_responses(
+        vec![
+            (
+                route,
+                tiny_http::Response::from_string("server diagnostic".repeat(60))
+                    .with_status_code(429),
+            ),
+            (route, tiny_http::Response::from_string("not JSON")),
+            (
+                route,
+                tiny_http::Response::from_data(vec![b' '; MAX_JSON as usize + 1]),
+            ),
+        ],
+        |api| {
+            let busy = api.json::<serde_json::Value>(route).unwrap_err();
+            assert!(matches!(&busy, ApiError::Http(429, detail) if detail.len() == 512));
+            assert_eq!(
+                busy.to_string(),
+                "Слишком много запросов. Попробуйте чуть позже."
+            );
+            let damaged = api.json::<serde_json::Value>(route).unwrap_err();
+            assert!(
+                matches!(&damaged, ApiError::Invalid(text) if text.contains("повреждённые данные"))
+            );
+            let oversized = api.json::<serde_json::Value>(route).unwrap_err();
+            assert!(
+                matches!(&oversized, ApiError::Invalid(text) if text.contains("слишком большой"))
+            );
+        },
+    );
+}
+
+#[test]
+fn api_follows_same_origin_redirects_with_a_finite_budget() {
+    fn redirect(to: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+        tiny_http::Response::from_data(Vec::new())
+            .with_status_code(302)
+            .with_header(tiny_http::Header::from_bytes("Location", to).unwrap())
+    }
+
+    with_http_responses(
+        vec![
+            ("/start", redirect("/json")),
+            ("/json", tiny_http::Response::from_string("42")),
+            ("/loop", redirect("/loop")),
+            ("/loop", redirect("/loop")),
+            ("/loop", redirect("/loop")),
+            ("/loop", redirect("/loop")),
+        ],
+        |api| {
+            assert_eq!(api.json::<u32>("/start").unwrap(), 42);
+            let error = api.json::<u32>("/loop").unwrap_err();
+            assert!(
+                matches!(&error, ApiError::Network(detail) if detail.contains("Слишком много перенаправлений"))
+            );
+            assert_eq!(
+                error.to_string(),
+                "Не удалось связаться с сервером. Попробуйте ещё раз."
+            );
+        },
+    );
+}
+
+#[test]
+fn api_rejects_redirects_to_another_origin_and_to_urls_with_credentials() {
+    let other = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let host = server.server_addr();
+    let api = ApiClient::new(&format!("http://{host}")).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for location in [
+                format!("http://{}/outside", other.server_addr()),
+                format!("http://username:password@{host}/private"),
+            ] {
+                let request = server
+                    .recv_timeout(Duration::from_secs(8))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(request.url(), "/redirect");
+                request
+                    .respond(
+                        tiny_http::Response::empty(302).with_header(
+                            tiny_http::Header::from_bytes("Location", location).unwrap(),
+                        ),
+                    )
+                    .unwrap();
+            }
+        });
+        for _ in 0..2 {
+            let error = api
+                .json_with_timeout::<u32>("/redirect", Duration::from_secs(5))
+                .unwrap_err();
+            assert!(
+                matches!(&error, ApiError::Network(detail) if detail.contains("на другой адрес") && !detail.contains("password")),
+                "{error:?}"
+            );
+        }
+    });
+    assert!(other.try_recv().unwrap().is_none());
+    assert!(server.try_recv().unwrap().is_none());
+}

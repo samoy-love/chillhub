@@ -708,6 +708,109 @@ fn unavailable_modpack_or_unsafe_url_never_enqueues_partial_base_install() {
 }
 
 #[test]
+fn mismatched_modpack_manifest_cannot_start_a_bundle_or_offer_a_size() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let (server, game) = fixture_game();
+    let services = services(&paths, &server.base);
+    let mods = game.mods.as_ref().unwrap();
+    for (id, version) in [("another-game", mods.version.as_str()), ("fixture", "old")] {
+        let wrong = Manifest {
+            game_id: id.into(),
+            version: version.into(),
+            files: vec![file("plugin.dll", b"test fixture")],
+            ..Default::default()
+        };
+        server.routes.lock().unwrap().insert(
+            mods.manifest_url.clone(),
+            (200, serde_json::to_vec(&wrong).unwrap()),
+        );
+        assert!(
+            services
+                .estimate_download(&game, LaunchTarget::LocalModded)
+                .is_err()
+        );
+        assert!(
+            services
+                .enqueue_game(&game, LaunchTarget::LocalModded, None, false, false)
+                .unwrap_err()
+                .contains("не соответствует")
+        );
+        assert!(services.queue.snapshot().is_empty());
+        assert!(!paths.game_root(&game.game_id).unwrap().exists());
+    }
+    assert!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(url, _)| !url.starts_with("/content/"))
+    );
+    services.queue.shutdown();
+}
+
+#[test]
+fn rejected_build_choice_preserves_the_previous_pin_and_existing_installation() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let (server, game) = fixture_game();
+    let services = services(&paths, &server.base);
+    let root = paths.game_root(&game.game_id).unwrap();
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join(".version"), "0.9.0").unwrap();
+    fs::write(root.join("Game.exe"), b"installed fixture").unwrap();
+    services
+        .config
+        .update(|cfg| cfg.select_version("fixture", "0.9.0", "1.0.0"))
+        .unwrap();
+    server.routes.lock().unwrap().insert(
+        "/api/games/fixture/builds".into(),
+        (200, br#"{"items":["1.0.0","0.9.0"]}"#.to_vec()),
+    );
+    for (candidate, expected) in [
+        ("../invalid", "Не указана доступная версия"),
+        ("0.8.0", "больше не опубликована"),
+    ] {
+        let error = services
+            .enqueue_game(
+                &game,
+                LaunchTarget::LocalVanilla,
+                Some(candidate),
+                false,
+                false,
+            )
+            .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(
+            services.config.load().unwrap().selected_version("fixture"),
+            Some("0.9.0")
+        );
+        assert_eq!(launch::read_marker(&root, ".version"), "0.9.0");
+        assert_eq!(
+            fs::read(root.join("Game.exe")).unwrap(),
+            b"installed fixture"
+        );
+        assert!(services.queue.snapshot().is_empty());
+    }
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(url, _)| url.ends_with("/builds"))
+            .count(),
+        1
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|(url, _)| !url.starts_with("/content/"))
+    );
+    drop(requests);
+    services.queue.shutdown();
+}
+
+#[test]
 fn first_modpack_install_obeys_update_block_for_an_existing_game() {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(temp.path());

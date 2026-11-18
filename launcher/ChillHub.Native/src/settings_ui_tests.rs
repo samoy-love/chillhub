@@ -77,3 +77,52 @@ fn absent_or_regular_file_paths_have_no_tree_to_measure() {
     );
     assert!(validate_path_override("D:/Fresh Games", None).is_ok());
 }
+
+#[test]
+fn rooted_and_unc_folder_input_preserve_the_windows_path_prefix() {
+    assert_eq!(
+        normalize_games_path(" /Games//Current/ "),
+        PathBuf::from(r"\Games\Current")
+    );
+    assert_eq!(
+        normalize_games_path("//nas//share/game/"),
+        PathBuf::from(r"\\nas\share\game")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn disk_size_excludes_linked_filesystems_from_the_games_total() {
+    use std::{os::windows::process::CommandExt, process::Command};
+    let temp = tempfile::tempdir().unwrap();
+    let games = temp.path().join("games");
+    let outside = temp.path().join("other-content");
+    let junction = games.join("linked");
+    std::fs::create_dir_all(games.join("title/subfolder")).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(games.join("title/subfolder/content.bin"), [1; 21]).unwrap();
+    std::fs::write(games.join("title/.version"), [1; 3]).unwrap();
+    std::fs::write(outside.join("external.bin"), [1; 100]).unwrap();
+
+    let windows = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+    let output = Command::new(windows.join("System32/WindowsPowerShell/v1.0/powershell.exe"))
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "New-Item -Path $env:FIXTURE_JUNCTION -Target $env:FIXTURE_TARGET -ItemType Junction -ErrorAction Stop",
+        ])
+        .env("FIXTURE_JUNCTION", &junction)
+        .env("FIXTURE_TARGET", &outside)
+        .creation_flags(0x08000000)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(folder_size(&games).unwrap(), 24);
+    assert!(folder_size(&junction).is_err());
+    std::fs::remove_dir(&junction).unwrap();
+    assert_eq!(
+        std::fs::read(outside.join("external.bin")).unwrap(),
+        [1; 100]
+    );
+}

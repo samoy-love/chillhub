@@ -117,6 +117,142 @@ fn cleanup_keeps_unknown_active_and_prepared_sessions() {
 }
 
 #[test]
+fn cleanup_removes_only_finished_sessions_owned_by_this_installation() {
+    let temp = tempfile::tempdir().unwrap();
+    let staged = super::super::tests::package(temp.path());
+    let mut job = UpdateJob {
+        parent_pid: 1,
+        parent_executable: staged.paths.install.join(LAUNCHER_NAME),
+        restart_args: vec![],
+        mode: UpdateMode::Apply,
+        token: uuid::Uuid::new_v4().to_string(),
+        staged: staged.clone(),
+    };
+    let work = prepare_worker(&job).unwrap();
+    let journal_path = staged.session.join("journal.json");
+    let finished = Journal {
+        committed: true,
+        recovered: false,
+        files: vec![],
+    };
+    let unfinished = Journal {
+        committed: false,
+        recovered: false,
+        files: vec![],
+    };
+    let put_journal = |journal: &Journal| {
+        fs::write(&journal_path, serde_json::to_vec(journal).unwrap()).unwrap();
+    };
+    let sibling = staged.paths.staging.join("owned-by-another-install");
+    fs::create_dir(&sibling).unwrap();
+    job.staged.session = sibling.clone();
+    job.staged.paths.install = temp.path().join("other-install");
+    fs::create_dir(&job.staged.paths.install).unwrap();
+    fs::create_dir(sibling.join("work")).unwrap();
+    fs::write(
+        sibling.join("work/job.json"),
+        serde_json::to_vec(&job).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        sibling.join("journal.json"),
+        serde_json::to_vec(&finished).unwrap(),
+    )
+    .unwrap();
+    let loose = staged.paths.staging.join("personal-note.txt");
+    fs::write(&loose, "keep").unwrap();
+
+    assert_eq!(cleanup_completed_sessions(&staged.paths).unwrap(), 0);
+    assert!(
+        work.job_file.is_file(),
+        "prepared session has no journal yet"
+    );
+    put_journal(&unfinished);
+    assert_eq!(cleanup_completed_sessions(&staged.paths).unwrap(), 0);
+    assert!(
+        staged.session.is_dir(),
+        "interrupted session still needs recovery"
+    );
+
+    put_journal(&finished);
+    assert_eq!(cleanup_completed_sessions(&staged.paths).unwrap(), 1);
+    assert!(!staged.session.exists());
+    assert!(sibling.join("work/job.json").is_file());
+    assert_eq!(fs::read(loose).unwrap(), b"keep");
+}
+
+#[test]
+fn corrupt_attempt_history_never_silently_enables_an_update() {
+    let temp = tempfile::tempdir().unwrap();
+    let staged = super::super::tests::package(temp.path());
+    fs::create_dir(&staged.paths.config).unwrap();
+    let attempts = staged.paths.config.join("update-attempts.json");
+    assert_eq!(
+        update_attempt_count(&staged.paths, &staged.version).unwrap(),
+        0
+    );
+    fs::write(&attempts, br#"{"version":"1.8.0","count":3}"#).unwrap();
+    assert_eq!(
+        update_attempt_count(&staged.paths, &staged.version).unwrap(),
+        0
+    );
+
+    for (data, expected) in [
+        (b"{".to_vec(), "История обновления повреждена"),
+        (vec![b' '; 4097], "Не удалось прочитать историю обновления"),
+    ] {
+        fs::write(&attempts, &data).unwrap();
+        let error = ensure_update_allowed(&staged.paths, &staged.version).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(fs::read(&attempts).unwrap(), data);
+    }
+    fs::remove_file(&attempts).unwrap();
+    fs::create_dir(&attempts).unwrap();
+    assert!(ensure_update_allowed(&staged.paths, &staged.version).is_err());
+    assert!(attempts.is_dir());
+}
+
+#[test]
+fn cleanup_removes_known_legacy_artifacts_and_keeps_unpaired_siblings() {
+    let temp = tempfile::tempdir().unwrap();
+    let install = temp.path().join("launcher");
+    fs::create_dir_all(install.join("updater/old")).unwrap();
+    fs::create_dir(install.join("Data")).unwrap();
+    for file in [
+        "filelist.txt",
+        "emptydirs.txt",
+        "deletelist.txt",
+        "apply-update.log",
+        "apply-update.cmd",
+        "updater/old/launcher.exe",
+        "Data/art.png",
+        "Data/art.png.chtmp",
+        "Data/art.png.chbak",
+        "Data/personal.chbak",
+        "Data/filelist.txt",
+    ] {
+        fs::write(install.join(file), file).unwrap();
+    }
+    cleanup_legacy_artifacts(&install);
+
+    for removed in [
+        "filelist.txt",
+        "emptydirs.txt",
+        "deletelist.txt",
+        "apply-update.log",
+        "apply-update.cmd",
+        "updater",
+        "Data/art.png.chtmp",
+        "Data/art.png.chbak",
+    ] {
+        assert!(!install.join(removed).exists(), "{removed}");
+    }
+    for kept in ["Data/art.png", "Data/personal.chbak", "Data/filelist.txt"] {
+        assert_eq!(fs::read_to_string(install.join(kept)).unwrap(), kept);
+    }
+}
+
+#[test]
 fn readonly_replacement_rollback_restores_attributes() {
     let temp = tempfile::tempdir().unwrap();
     let mut staged = super::super::tests::package(temp.path());

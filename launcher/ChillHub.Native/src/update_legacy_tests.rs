@@ -57,3 +57,32 @@ fn native_result_supersedes_existing_legacy_message() {
     assert!(super::super::acknowledge_outcome(&staged.paths, &current).unwrap());
     assert!(super::super::previous_outcome(&staged.paths).is_none());
 }
+
+#[test]
+fn legacy_results_show_default_copy_for_missing_messages_and_preserve_a_trailing_backslash() {
+    let temp = tempfile::tempdir().unwrap();
+    let staged = super::super::tests::package(temp.path());
+    let file = staged.paths.install.join("launcher.update-status");
+    for (raw, success, message) in [
+        (
+            "\u{feff}Outcome=OK\nVersion=1.8.2\n",
+            true,
+            "Обновление установлено",
+        ),
+        (
+            "outcome=copy-errors\nmessage= \n",
+            false,
+            "Предыдущее обновление не завершилось. Проверьте обновления ещё раз.",
+        ),
+        (
+            "outcome=fatal\nmessage=Путь: C:\\\\Games\\",
+            false,
+            "Путь: C:\\Games\\",
+        ),
+    ] {
+        fs::write(&file, raw).unwrap();
+        let state = read(&staged.paths).unwrap();
+        assert_eq!(state.success, success);
+        assert_eq!(state.message, message);
+    }
+}

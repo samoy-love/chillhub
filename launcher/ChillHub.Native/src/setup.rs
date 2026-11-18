@@ -7,7 +7,7 @@ use crate::{
 use slint::ComponentHandle;
 use std::{
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus},
     sync::Arc,
 };
 
@@ -209,12 +209,16 @@ fn engine_command(request: &Request, shortcut: bool, delete_games: bool) -> Comm
     cmd
 }
 
-fn execute(request: &Request, shortcut: bool, delete_games: bool) -> Result<String, String> {
+fn execute(
+    request: &Request,
+    shortcut: bool,
+    delete_games: bool,
+    run_engine: fn(&mut Command) -> std::io::Result<ExitStatus>,
+) -> Result<String, String> {
     if request.preview {
         return Err("Это предпросмотр: файлы и настройки не изменяются.".into());
     }
-    let status = engine_command(request, shortcut, delete_games)
-        .status()
+    let status = run_engine(&mut engine_command(request, shortcut, delete_games))
         .map_err(|e| format!("Не удалось начать операцию: {e}"))?;
     if !status.success() {
         return Err(format!(
@@ -271,12 +275,22 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             },
         );
     }
-    create_window(request, log)?
-        .run()
-        .map_err(|e| e.to_string())
+    create_window(
+        request,
+        log,
+        crate::folder_picker::choose_folder,
+        Command::status,
+    )?
+    .run()
+    .map_err(|e| e.to_string())
 }
 
-fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupWindow, String> {
+fn create_window(
+    request: Arc<Request>,
+    log: Option<HelperLog>,
+    choose_folder: fn(isize, &Path) -> Result<Option<PathBuf>, String>,
+    run_engine: fn(&mut Command) -> std::io::Result<ExitStatus>,
+) -> Result<SetupWindow, String> {
     let ui = SetupWindow::new().map_err(|e| e.to_string())?;
     helper_runtime::style_window(ui.window());
     ui.set_removing(request.removing);
@@ -317,8 +331,7 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
         );
         let weak = ui.as_weak();
         std::thread::spawn(move || {
-            let result =
-                helper_runtime::caught(|| crate::folder_picker::choose_folder(owner, &initial));
+            let result = helper_runtime::caught(|| choose_folder(owner, &initial));
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_busy(false);
                 ui.set_picking(false);
@@ -398,7 +411,8 @@ fn create_window(request: Arc<Request>, log: Option<HelperLog>) -> Result<SetupW
         let weak = ui.as_weak();
         let log = log.clone();
         std::thread::spawn(move || {
-            let result = helper_runtime::caught(|| execute(&request, shortcut, delete_games));
+            let result =
+                helper_runtime::caught(|| execute(&request, shortcut, delete_games, run_engine));
             if let Some(log) = log {
                 let _ = log.record(
                     if result.is_ok() {

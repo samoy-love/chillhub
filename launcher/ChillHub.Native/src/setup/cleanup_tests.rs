@@ -141,3 +141,105 @@ fn linked_library_is_refused_before_any_deletion() {
     assert!(fixture.install.join("ChillHub.exe").exists());
     fs::remove_dir(&junction).unwrap();
 }
+
+#[test]
+fn keeping_a_nested_library_preserves_its_legacy_state() {
+    let fixture = Fixture::new();
+    let games = fixture.legacy.join("Games");
+    fs::create_dir(&games).unwrap();
+    fs::write(games.join("save"), "personal progress").unwrap();
+    fs::remove_file(fixture.install.join(UPDATER)).unwrap();
+
+    fixture.clean(&games, false, &[]).unwrap();
+
+    assert!(!fixture.install.join(UNINSTALLER).exists());
+    assert!(!fixture.roaming.join("config.json").exists());
+    assert_eq!(fs::read(games.join("save")).unwrap(), b"personal progress");
+    assert_eq!(
+        fs::read(fixture.legacy.join("config.json")).unwrap(),
+        b"old settings"
+    );
+}
+
+#[test]
+fn keeping_a_library_under_the_installation_requires_moving_it_first() {
+    let fixture = Fixture::new();
+    let games = fixture.install.join("Games");
+    fs::create_dir(&games).unwrap();
+    fs::write(games.join("save"), "personal progress").unwrap();
+
+    let error = fixture.clean(&games, false, &[]).unwrap_err();
+    assert!(error.contains("Сначала переместите её"), "{error}");
+    assert!(fixture.install.join(UNINSTALLER).is_file());
+    assert!(fixture.roaming.join("config.json").is_file());
+    assert_eq!(fs::read(games.join("save")).unwrap(), b"personal progress");
+}
+
+#[test]
+fn uninstall_refuses_an_unmarked_installation_or_an_overlapping_settings_folder() {
+    let fixture = Fixture::new();
+    let state = fixture.install.join("profile");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("note"), "keep").unwrap();
+    let overlap = clean_installation(
+        &fixture.install,
+        &fixture.games,
+        false,
+        &state,
+        &fixture.legacy,
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        overlap.contains("пересекается с папкой данных"),
+        "{overlap}"
+    );
+    fs::remove_file(fixture.install.join(UNINSTALLER)).unwrap();
+    let missing = fixture.clean(&fixture.games, false, &[]).unwrap_err();
+    assert!(
+        missing.contains("нет установленного Chill Hub"),
+        "{missing}"
+    );
+    assert!(fixture.install.join("ChillHub.exe").is_file());
+    assert!(fixture.roaming.join("config.json").is_file());
+    assert_eq!(fs::read(state.join("note")).unwrap(), b"keep");
+}
+
+#[test]
+fn silent_removal_checks_the_legacy_configuration_when_roaming_is_missing() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.roaming.join("config.json")).unwrap();
+    let legacy_config = fixture.legacy.join("config.json");
+    let moved = fixture.directory.path().join("Previously moved games");
+    fs::create_dir(&moved).unwrap();
+    let contents = serde_json::to_vec(&serde_json::json!({"GamesPath": moved})).unwrap();
+    fs::write(&legacy_config, &contents).unwrap();
+    assert!(require_current_library(&fixture.games, &fixture.roaming, &fixture.legacy).is_err());
+    assert!(require_current_library(&moved, &fixture.roaming, &fixture.legacy).is_ok());
+    assert!(!fixture.roaming.join("config.json").exists());
+    assert_eq!(fs::read(legacy_config).unwrap(), contents);
+}
+
+#[test]
+fn already_missing_game_and_settings_folders_do_not_prevent_uninstall() {
+    let fixture = Fixture::new();
+    let missing_games = fixture.directory.path().join("Missing games");
+    let missing_roaming = fixture.directory.path().join("Missing roaming");
+    let missing_legacy = fixture.directory.path().join("Missing legacy");
+    clean_installation(
+        &fixture.install,
+        &missing_games,
+        true,
+        &missing_roaming,
+        &missing_legacy,
+        &[],
+    )
+    .unwrap();
+    assert!(!fixture.install.join(UNINSTALLER).exists());
+    assert!(!fixture.install.join(UPDATER).exists());
+    assert_eq!(fs::read(fixture.games.join("save")).unwrap(), b"game data");
+    assert!(fixture.roaming.join("config.json").is_file());
+    assert!(!missing_games.exists());
+    assert!(!missing_roaming.exists());
+    assert!(!missing_legacy.exists());
+}

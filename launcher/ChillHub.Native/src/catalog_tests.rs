@@ -211,3 +211,41 @@ fn reordered_media_keeps_its_own_offline_artwork() {
     assert!(game.media[0].fallback_path.is_empty());
     assert_eq!(game.media[0].optimized_index, None);
 }
+
+#[test]
+fn live_icon_replaces_seed_artwork_and_preserves_offline_fallback() {
+    use chillhub_native::model::ModsRecord;
+
+    let seed = actual_catalog();
+    let original = seed.iter().find(|game| game.id == "peak").unwrap();
+    let record = GameRecord {
+        game_id: original.id.clone(),
+        title: original.title.clone(),
+        icon_url: "https://launcher.samoy.love/content/peak/current-icon.png".into(),
+        mods: Some(ModsRecord {
+            has_latest: true,
+            version: "pack.internal".into(),
+            display_version: "Июльское обновление".into(),
+            ..ModsRecord::default()
+        }),
+        ..GameRecord::default()
+    };
+    let game = from_live(std::slice::from_ref(&record), &seed).remove(0);
+    assert_eq!(game.icon, record.icon_url);
+    assert_eq!(game.fallback_icon, original.icon);
+    assert_eq!(game.modpack_version, "Июльское обновление");
+}
+
+#[test]
+fn missing_and_malformed_seed_catalogs_report_distinct_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("catalog.json");
+    let check_error = |expected: &str| {
+        let error = load(&path).err().unwrap();
+        assert!(error.contains(expected), "{error}");
+        assert!(error.contains("catalog.json"), "{error}");
+    };
+    check_error("Не удалось прочитать каталог");
+    std::fs::write(&path, "{").unwrap();
+    check_error("Не удалось разобрать каталог");
+}

@@ -60,6 +60,36 @@ fn only_marked_unpublished_games_are_offered_for_removal() {
         vec!["old"]
     );
 }
+
+#[test]
+fn library_scan_ignores_foreign_entries_and_detects_mods_and_interrupted_installs() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    assert!(orphaned(&paths, &[]).unwrap().is_empty());
+    fs::create_dir_all(&paths.games_dir).unwrap();
+    for (name, marker) in [
+        ("old-mods", ".mods.version"),
+        ("interrupted", ".updating"),
+        ("not a game id", ".version"),
+    ] {
+        let folder = paths.games_dir.join(name);
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join(marker), "1.0").unwrap();
+    }
+    fs::write(paths.games_dir.join("personal-file"), "keep").unwrap();
+    let found = orphaned(&paths, &[]).unwrap();
+    assert_eq!(
+        found
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        ["interrupted", "old-mods"]
+    );
+    assert_eq!(
+        fs::read(paths.games_dir.join("personal-file")).unwrap(),
+        b"keep"
+    );
+}
 #[test]
 fn game_root_cannot_contain_launcher_or_user_state() {
     let temp = tempfile::tempdir().unwrap();

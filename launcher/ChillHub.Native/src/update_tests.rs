@@ -447,6 +447,251 @@ fn transaction_preserves_configuration_and_commits_marker() {
         "1.8.1"
     );
 }
+
+#[test]
+fn transaction_replaces_owned_payload_removes_obsolete_files_and_expires_its_attempts() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut staged = package(temp.path());
+    let install = &staged.paths.install;
+    let config = &staged.paths.config;
+    fs::create_dir(config).unwrap();
+    fs::write(install.join("launcher.version"), &staged.current_version).unwrap();
+    fs::write(install.join("obsolete.dll"), "previous payload").unwrap();
+    fs::write(install.join("personal.txt"), "user file").unwrap();
+    fs::write(config.join("update-attempts.json"), "stale history").unwrap();
+    staged.delete_paths = vec!["obsolete.dll".into(), "already-missing.dll".into()];
+    staged.empty_dirs.push("media/empty".into());
+
+    apply_transaction(&staged, &|_, _| {}).unwrap();
+
+    let inventory: Vec<String> =
+        serde_json::from_slice(&fs::read(config.join("installed-payload.json")).unwrap()).unwrap();
+    assert_eq!(
+        inventory,
+        staged
+            .files
+            .iter()
+            .map(|file| file.target.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(!config.join("update-attempts.json").exists());
+    assert!(!install.join("obsolete.dll").exists());
+    assert!(install.join("media/empty").is_dir());
+    assert_eq!(
+        fs::read(install.join("personal.txt")).unwrap(),
+        b"user file"
+    );
+    assert_eq!(
+        fs::read(staged.session.join("backup/obsolete.dll")).unwrap(),
+        b"previous payload"
+    );
+    assert_eq!(
+        fs::read_to_string(staged.session.join("backup/launcher.version")).unwrap(),
+        staged.current_version
+    );
+    assert_eq!(
+        fs::read_to_string(install.join("launcher.version")).unwrap(),
+        staged.version
+    );
+    assert!(!recover_interrupted(&staged).unwrap());
+    assert!(
+        apply_transaction(&staged, &|_, _| {})
+            .unwrap_err()
+            .contains("повторное применение запрещено")
+    );
+}
+
+#[test]
+fn updater_keeps_an_existing_directory_at_a_payload_file_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let staged = package(temp.path());
+    let collision = staged.paths.install.join(UPDATER_NAME);
+    fs::remove_file(&collision).unwrap();
+    fs::create_dir(&collision).unwrap();
+    fs::write(collision.join("personal.txt"), "keep me").unwrap();
+    let error = apply_transaction(&staged, &|_, _| {}).unwrap_err();
+    assert!(error.contains("На месте файла находится папка"), "{error}");
+    assert!(error.contains(UPDATER_NAME), "{error}");
+    assert_eq!(
+        fs::read(collision.join("personal.txt")).unwrap(),
+        b"keep me"
+    );
+    assert_eq!(
+        fs::read(staged.paths.install.join(LAUNCHER_NAME)).unwrap(),
+        b"old"
+    );
+    assert!(!staged.session.join("journal.json").exists());
+}
+
+#[test]
+fn invalid_staged_metadata_is_rejected_before_changing_the_installation() {
+    let temp = tempfile::tempdir().unwrap();
+    let staged = package(temp.path());
+    let mut duplicate = staged.files.clone();
+    let mut repeated = duplicate[0].clone();
+    repeated.target = repeated.target.to_ascii_lowercase();
+    duplicate.push(repeated);
+    let cases = [
+        (
+            StagedUpdate {
+                version: staged.current_version.clone(),
+                ..staged.clone()
+            },
+            "не повышает версию",
+        ),
+        (
+            StagedUpdate {
+                session: staged.paths.staging.clone(),
+                ..staged.clone()
+            },
+            "вне временной папки",
+        ),
+        (
+            StagedUpdate {
+                files: duplicate,
+                ..staged.clone()
+            },
+            "содержит повтор",
+        ),
+        (
+            StagedUpdate {
+                files: staged.files[..2].to_vec(),
+                ..staged.clone()
+            },
+            "Нет обязательного файла",
+        ),
+        (
+            StagedUpdate {
+                delete_paths: vec!["launcher.version".into()],
+                ..staged.clone()
+            },
+            "Недопустимый список удаляемых файлов",
+        ),
+        (
+            StagedUpdate {
+                empty_dirs: vec!["launcher.version".into()],
+                ..staged.clone()
+            },
+            "Недопустимая папка пакета",
+        ),
+    ];
+
+    for (bad, expected) in cases {
+        let actual = apply_transaction(&bad, &|_, _| {}).unwrap_err();
+        assert!(actual.contains(expected), "{actual}");
+    }
+    assert_eq!(
+        fs::read(staged.paths.install.join(LAUNCHER_NAME)).unwrap(),
+        b"old"
+    );
+    assert!(!staged.session.join("journal.json").exists());
+}
+
+#[test]
+fn updater_rejects_a_wrong_blake3_even_with_correct_size_and_sha256() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut staged = package(temp.path());
+    staged.files[0].manifest.blake3 = "0".repeat(64);
+    let error = apply_transaction(&staged, &|_, _| {}).unwrap_err();
+    assert!(error.contains("Проверка файла не пройдена"), "{error}");
+    assert_eq!(
+        fs::read(staged.paths.install.join(LAUNCHER_NAME)).unwrap(),
+        b"old"
+    );
+    assert!(!staged.session.join("journal.json").exists());
+}
+
+#[test]
+fn interrupted_update_restarts_only_when_original_installation_is_restored() {
+    let temp = tempfile::tempdir().unwrap();
+    let staged = package(temp.path());
+    let journal_path = staged.session.join("journal.json");
+    let backup = staged.session.join("backup");
+    fs::create_dir(&backup).unwrap();
+    assert!(safe_to_restart(&staged));
+    fs::write(&journal_path, "{").unwrap();
+    assert!(!safe_to_restart(&staged));
+
+    let mut journal = Journal {
+        committed: false,
+        recovered: false,
+        files: vec![
+            Backup {
+                target: LAUNCHER_NAME.into(),
+                existed: true,
+                attributes: None,
+            },
+            Backup {
+                target: "fresh.dll".into(),
+                existed: false,
+                attributes: None,
+            },
+        ],
+    };
+    let write_journal = |journal: &Journal| {
+        fs::write(&journal_path, serde_json::to_vec(journal).unwrap()).unwrap();
+    };
+    write_journal(&journal);
+    assert!(!safe_to_restart(&staged), "missing original backup");
+    fs::write(backup.join(LAUNCHER_NAME), "old").unwrap();
+    assert!(safe_to_restart(&staged));
+    fs::write(
+        staged.paths.install.join("fresh.dll"),
+        "partially installed",
+    )
+    .unwrap();
+    assert!(!safe_to_restart(&staged), "new payload file remains");
+    fs::remove_file(staged.paths.install.join("fresh.dll")).unwrap();
+    fs::write(staged.paths.install.join(LAUNCHER_NAME), "inconsistent").unwrap();
+    assert!(
+        !safe_to_restart(&staged),
+        "installed file differs from original"
+    );
+
+    journal.files[0].target = "../outside.exe".into();
+    write_journal(&journal);
+    assert!(!safe_to_restart(&staged));
+    assert!(
+        recover_interrupted(&staged)
+            .unwrap_err()
+            .contains("Журнал восстановления повреждён")
+    );
+}
+
+#[test]
+fn recovery_reports_missing_backups_and_still_restores_unaffected_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let staged = package(temp.path());
+    let backup = staged.session.join("backup");
+    fs::create_dir(&backup).unwrap();
+    fs::write(backup.join(LAUNCHER_NAME), "original launcher").unwrap();
+    let journal = Journal {
+        committed: false,
+        recovered: false,
+        files: [LAUNCHER_NAME, UPDATER_NAME]
+            .into_iter()
+            .map(|target| Backup {
+                target: target.into(),
+                existed: true,
+                attributes: None,
+            })
+            .collect(),
+    };
+    let journal_path = staged.session.join("journal.json");
+    let previous = serde_json::to_vec(&journal).unwrap();
+    fs::write(&journal_path, &previous).unwrap();
+    assert!(
+        recover_interrupted(&staged)
+            .unwrap_err()
+            .contains(UPDATER_NAME)
+    );
+    assert_eq!(
+        fs::read(staged.paths.install.join(LAUNCHER_NAME)).unwrap(),
+        b"original launcher"
+    );
+    assert_eq!(fs::read(&journal_path).unwrap(), previous);
+    assert!(!safe_to_restart(&staged));
+}
 #[test]
 fn corrupted_payload_never_touches_installation() {
     let temp = tempfile::tempdir().unwrap();

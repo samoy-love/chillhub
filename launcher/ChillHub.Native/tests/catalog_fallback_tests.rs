@@ -1,6 +1,8 @@
 use chillhub_native::{
+    library::confirmed_orphans,
     model::{GameRecord, LibraryResponse},
     net::ApiClient,
+    paths::AppPaths,
 };
 use std::{
     collections::HashMap,
@@ -185,4 +187,86 @@ fn build_filename_reserved_url_characters_are_encoded_as_path_data() {
             .fragment()
             .is_none()
     );
+}
+
+#[test]
+fn partial_live_catalog_cannot_authorize_cleanup_or_replace_last_offline_library() {
+    let server = Fixture::new(vec![game("installed", true, "1.0")]);
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(temp.path());
+    let installed = paths.games_dir.join("installed");
+    std::fs::create_dir_all(&installed).unwrap();
+    std::fs::write(installed.join(".version"), "1.0").unwrap();
+    server.api.catalog(temp.path()).unwrap();
+    let cache_path = server.api.cache_path(temp.path(), "catalog");
+    let previous = std::fs::read(&cache_path).unwrap();
+
+    server.routes.lock().unwrap().insert(
+        "/api/games".into(),
+        (
+            200,
+            serde_json::to_vec(&serde_json::json!({
+                "items":[{"gameId":"new","title":"New Game"}, {"title":"Unidentified Game"}]
+            }))
+            .unwrap(),
+        ),
+    );
+    let partial = server.api.catalog(temp.path()).unwrap();
+    assert!(!partial.offline && !partial.all_entries_valid);
+    assert_eq!(partial.library.items.len(), 1);
+    assert_eq!(partial.library.items[0].game_id, "new");
+    assert!(
+        partial
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("неполный каталог")
+    );
+    assert!(confirmed_orphans(&paths, &partial).is_err());
+    assert_eq!(std::fs::read(&cache_path).unwrap(), previous);
+
+    for corrupt in [
+        br#"{"items":[{"title":"Unidentified Game"}]}"#.as_slice(),
+        br#"{"items":[{"gameId":42,"title":"Type mismatch"}]}"#.as_slice(),
+    ] {
+        server
+            .routes
+            .lock()
+            .unwrap()
+            .insert("/api/games".into(), (200, corrupt.to_vec()));
+        let cached = server.api.catalog(temp.path()).unwrap();
+        assert!(cached.offline && !cached.all_entries_valid);
+        assert_eq!(cached.library.items[0].game_id, "installed");
+        assert!(confirmed_orphans(&paths, &cached).is_err());
+        assert_eq!(std::fs::read(&cache_path).unwrap(), previous);
+    }
+}
+
+#[test]
+fn unusable_cache_does_not_hide_live_catalog_or_masquerade_as_an_empty_library() {
+    let server = Fixture::new(vec![game("published", true, "2.0")]);
+    let temp = tempfile::tempdir().unwrap();
+    let data_is_file = temp.path().join("blocked-cache-directory");
+    std::fs::write(&data_is_file, "keep").unwrap();
+
+    let fresh = server.api.catalog(&data_is_file).unwrap();
+    assert!(!fresh.offline && fresh.all_entries_valid);
+    assert_eq!(fresh.library.items[0].game_id, "published");
+    assert!(fresh.warning.unwrap().contains("сохранить"));
+    assert_eq!(std::fs::read_to_string(data_is_file).unwrap(), "keep");
+
+    let cache = server.api.cache_path(temp.path(), "catalog");
+    let oversized = std::fs::File::create(cache).unwrap();
+    oversized.set_len(17 * 1024 * 1024).unwrap();
+    drop(oversized);
+    server
+        .routes
+        .lock()
+        .unwrap()
+        .insert("/api/games".into(), (503, b"unavailable".to_vec()));
+    assert!(server.api.cached_catalog(temp.path()).is_none());
+    assert!(matches!(
+        server.api.catalog(temp.path()),
+        Err(chillhub_native::net::ApiError::Http(503, _))
+    ));
 }

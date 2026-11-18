@@ -17,7 +17,13 @@ fn setup_callbacks_preserve_invalid_input_and_unlock_after_preview_failure() {
         "1.8.4".to_owned(),
     ];
     let log = HelperLog::in_directory(temporary.path(), HelperKind::Setup).unwrap();
-    let ui = create_window(Arc::new(Request::parse(&args).unwrap()), Some(log.clone())).unwrap();
+    let ui = create_window(
+        Arc::new(Request::parse(&args).unwrap()),
+        Some(log.clone()),
+        crate::folder_picker::choose_folder,
+        Command::status,
+    )
+    .unwrap();
     assert!(!ui.get_removing());
     assert_eq!(ui.get_version(), "1.8.4");
     ui.set_install_path("relative".into());
@@ -43,30 +49,9 @@ fn setup_callbacks_preserve_invalid_input_and_unlock_after_preview_failure() {
     assert!(ui.get_busy());
     assert_eq!(ui.get_message(), "Первая операция уже выполняется.");
 
-    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
-    let result = completed.clone();
-    let weak = ui.as_weak();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let timer = slint::Timer::default();
-    timer.start(
-        slint::TimerMode::Repeated,
-        std::time::Duration::from_millis(10),
-        move || {
-            let ui = weak.upgrade().unwrap();
-            if !ui.get_busy() {
-                result.set(
-                    ui.get_error() && !ui.get_done() && ui.get_message().contains("предпросмотр"),
-                );
-                ui.invoke_cancel();
-            } else if std::time::Instant::now() >= deadline {
-                let _ = slint::quit_event_loop();
-            }
-        },
-    );
-    slint::run_event_loop_until_quit().unwrap();
-    timer.stop();
+    drain_setup_worker(&ui);
     assert!(
-        completed.get(),
+        ui.get_error() && !ui.get_done() && ui.get_message().contains("предпросмотр"),
         "preview completion did not unlock the form or explain the failure"
     );
     assert!(!install.exists() && !games.exists());
@@ -76,9 +61,18 @@ fn setup_callbacks_preserve_invalid_input_and_unlock_after_preview_failure() {
             .contains("setup.error")
     );
 
+    removal_window_handles_folder_selection_cancel_and_failure_in_place();
+    completed_removal_unlocks_the_window_and_records_its_outcome();
+
     let mut args = args;
     args[0] = "preview-uninstall".to_owned();
-    let removal = create_window(Arc::new(Request::parse(&args).unwrap()), None).unwrap();
+    let removal = create_window(
+        Arc::new(Request::parse(&args).unwrap()),
+        None,
+        crate::folder_picker::choose_folder,
+        Command::status,
+    )
+    .unwrap();
     assert!(removal.get_removing());
     assert!(!removal.get_delete_games());
     removal.set_done(true);
@@ -253,7 +247,7 @@ fn real_setup_requires_an_existing_absolute_engine_and_passes_removal_options() 
     let keep = engine_command(&request, true, false);
     assert!(!keep.get_args().any(|arg| arg == "/DELETEGAMES"));
     assert!(
-        execute(&request, true, false)
+        execute(&request, true, false, Command::status)
             .unwrap_err()
             .contains("Не удалось начать операцию")
     );
@@ -270,7 +264,7 @@ fn preview_never_runs_the_engine() {
     .map(str::to_owned);
     let request = Request::parse(&args).unwrap();
     assert!(
-        execute(&request, false, true)
+        execute(&request, false, true, Command::status)
             .unwrap_err()
             .contains("предпросмотр")
     );
@@ -318,4 +312,134 @@ fn successful_engine_exit_still_requires_the_requested_result_on_disk() {
             .unwrap()
             .contains("игры удалены")
     );
+}
+
+fn removal_window_handles_folder_selection_cancel_and_failure_in_place() {
+    let temp = tempfile::tempdir().unwrap();
+    let install = temp.path().join("launcher");
+    let games = temp.path().join("previous games");
+    let picked = games.with_file_name("selected games");
+    let request = Request {
+        removing: true,
+        preview: true,
+        engine: PathBuf::new(),
+        install: install.clone(),
+        games: games.clone(),
+        version: String::new(),
+        allow_downgrade: false,
+    };
+    let ui = create_window(
+        Arc::new(request),
+        None,
+        |_, initial| match initial.file_name().unwrap().to_str().unwrap() {
+            "previous games" => Ok(Some(initial.with_file_name("selected games"))),
+            "selected games" => Ok(None),
+            "launcher" => Err("Не удалось открыть выбор папки.".into()),
+            other => panic!("unexpected picker path: {other}"),
+        },
+        |_| panic!("browsing must never run the installer"),
+    )
+    .unwrap();
+
+    ui.invoke_browse(true);
+    assert!(ui.get_picking());
+    drain_setup_worker(&ui);
+    assert!(!ui.get_picking() && !ui.get_error());
+    assert_eq!(ui.get_games_path().as_str(), picked.to_str().unwrap());
+
+    ui.invoke_browse(true);
+    drain_setup_worker(&ui);
+    assert!(!ui.get_picking() && !ui.get_error());
+    assert_eq!(ui.get_games_path().as_str(), picked.to_str().unwrap());
+
+    ui.invoke_browse(false);
+    drain_setup_worker(&ui);
+    assert!(!ui.get_picking() && ui.get_error());
+    assert_eq!(ui.get_install_path().as_str(), install.to_str().unwrap());
+    assert_eq!(ui.get_message(), "Не удалось открыть выбор папки.");
+}
+
+#[test]
+fn installer_engine_exit_status_is_reported_before_checking_the_result() {
+    use std::os::windows::process::ExitStatusExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let install = temp.path().join("launcher");
+    let request = Request {
+        removing: true,
+        preview: false,
+        engine: temp.path().join("engine.exe"),
+        install: install.clone(),
+        games: temp.path().join("games"),
+        version: String::new(),
+        allow_downgrade: false,
+    };
+    let error = execute(&request, true, false, |_| Ok(ExitStatus::from_raw(12))).unwrap_err();
+    assert!(error.contains("код 12"), "{error}");
+    assert!(!install.exists());
+    let result = execute(&request, true, false, |_| Ok(ExitStatus::from_raw(0))).unwrap();
+    assert!(result.contains("Игры остались"), "{result}");
+}
+
+fn completed_removal_unlocks_the_window_and_records_its_outcome() {
+    use std::os::windows::process::ExitStatusExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let install = temp.path().join("launcher");
+    let games = temp.path().join("games");
+    std::fs::create_dir(&games).unwrap();
+    std::fs::write(games.join("save"), "keep").unwrap();
+    let request = Request {
+        removing: true,
+        preview: false,
+        engine: temp.path().join("engine.exe"),
+        install: install.clone(),
+        games: games.clone(),
+        version: String::new(),
+        allow_downgrade: false,
+    };
+    let log = HelperLog::in_directory(temp.path(), HelperKind::Setup).unwrap();
+    let ui = create_window(
+        Arc::new(request),
+        Some(log.clone()),
+        |_, _| panic!("submit must never open the folder picker"),
+        |command| {
+            assert!(command.get_args().any(|arg| arg == "/S"));
+            assert!(!command.get_args().any(|arg| arg == "/DELETEGAMES"));
+            Ok(ExitStatus::from_raw(0))
+        },
+    )
+    .unwrap();
+    ui.invoke_submit();
+    assert!(ui.get_busy() && !ui.get_done());
+    drain_setup_worker(&ui);
+    assert!(ui.get_done() && !ui.get_error());
+    assert!(ui.get_message().contains("Игры остались"));
+    assert_eq!(std::fs::read(games.join("save")).unwrap(), b"keep");
+    assert!(
+        std::fs::read_to_string(log.path())
+            .unwrap()
+            .contains("setup.complete")
+    );
+}
+
+fn drain_setup_worker(ui: &SetupWindow) {
+    let weak = ui.as_weak();
+    let quit_requested = std::cell::Cell::new(false);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(10),
+        move || {
+            let ui = weak.upgrade().unwrap();
+            if !quit_requested.get() && (!ui.get_busy() || std::time::Instant::now() >= deadline) {
+                quit_requested.set(true);
+                ui.invoke_cancel();
+            }
+        },
+    );
+    slint::run_event_loop_until_quit().unwrap();
+    timer.stop();
+    assert!(!ui.get_busy(), "setup worker did not finish");
 }
