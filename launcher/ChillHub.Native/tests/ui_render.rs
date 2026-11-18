@@ -300,7 +300,6 @@ impl Harness {
             hero_source.to_owned()
         };
         self.ui.set_hero(picture(&self.base, &hero_path));
-        self.ui.set_hero_progress(1.0);
         self.ui
             .set_supports_steam(g["SteamSupported"].as_bool().unwrap());
         self.ui
@@ -930,7 +929,7 @@ fn real_ui_headless_layout_and_actions() {
     // The selection marker must identify the clicked game on its first frame,
     // without passing over unrelated games during a long library jump.
     {
-        let library = Harness::new();
+        let mut library = Harness::new();
         resize(library.ui.window(), 1360, 850, 1.0);
         library.ui.set_selected_game(0);
         settle();
@@ -953,6 +952,20 @@ fn real_ui_headless_layout_and_actions() {
         let immediate = library.ui.window().take_snapshot().unwrap();
         assert_eq!(pixel(&immediate, marker_at(last)), selected_color);
         assert_ne!(pixel(&immediate, first_point), selected_color);
+        library.game("repo");
+        let switched = library.ui.window().take_snapshot().unwrap();
+        settle();
+        let settled = library.ui.window().take_snapshot().unwrap();
+        // The logo and search box stay fixed. A sample from the new cover must
+        // have its final colour on the first frame, even with motion enabled.
+        for y in 12..170 {
+            for x in 14..144 {
+                assert_eq!(pixel(&switched, (x, y)), pixel(&before, (x, y)));
+            }
+        }
+        let cover_point = (1110, 155);
+        assert_ne!(pixel(&switched, cover_point), pixel(&before, cover_point));
+        assert_eq!(pixel(&switched, cover_point), pixel(&settled, cover_point));
     }
     // Exercise the actual TextInput event path with EN and RU key text, including
     // Slint's clipboard-backed methods and ordinary character entry.

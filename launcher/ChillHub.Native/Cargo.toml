@@ -1,6 +1,6 @@
 [package]
 name = "chillhub-native"
-version = "1.8.12"
+version = "1.8.13"
 edition = "2024"
 rust-version = "1.92"
 publish = false
@@ -64,6 +64,7 @@ tiny_http = "0.12"
 i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
 
 [build-dependencies]
+image = { version = "0.25", optional = true, default-features = false, features = ["webp", "jpeg"] }
 slint-build = "=1.18.1"
 winresource = "=0.1.34"
 

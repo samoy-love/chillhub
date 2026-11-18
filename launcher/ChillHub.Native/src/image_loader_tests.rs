@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn every_packaged_card_has_first_frame_artwork() {
+    let catalog =
+        crate::catalog::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("Data/games.json"))
+            .unwrap();
+    assert!(!catalog.is_empty());
+    for game in catalog {
+        let size = card_preview(&game.id, "hero").size();
+        assert!(
+            (1..=320).contains(&size.width) && size.height > 0,
+            "{}",
+            game.id
+        );
+        for index in game.media.iter().filter_map(|media| media.optimized_index) {
+            let size = card_preview(&game.id, &format!("tile-{index}")).size();
+            assert!(
+                (1..=120).contains(&size.width) && size.height > 0,
+                "{} tile {index}",
+                game.id
+            );
+        }
+    }
+    assert_eq!(card_preview("unknown-game", "hero").size().width, 0);
+}
+
+#[test]
 fn decoded_images_preserve_opaque_pixels_and_premultiply_transparency() {
     let mut pixels = [255, 80, 40, 255, 200, 100, 50, 128, 240, 10, 20, 0];
     premultiply_image(&mut pixels);

@@ -638,8 +638,6 @@ export component AppWindow inherits Window {
     in property <[ModBenefit]> mod-benefits;
     in property <int> mod-count;
     in property <image> hero;
-    in property <image> hero-previous;
-    in property <float> hero-progress: 1;
     in property <bool> supports-steam: true;
     in property <bool> supports-local: true;
     in property <bool> has-mods: true;
@@ -831,8 +829,6 @@ export component AppWindow inherits Window {
     }
     property <length> modal-x: (root.width - root.modal-width) / 2;
     property <length> modal-y: (root.height - root.modal-height) / 2;
-    property <float> hero-opacity: root.hero-progress;
-    animate hero-opacity { duration: root.reduced-motion || root.hero-progress == 0 ? 0ms : 210ms; easing: ease-out; }
     property <float> panel-opacity: root.panel-kind == "" ? 0 : 1;
     property <bool> feedback-dirty;
     property <bool> feedback-exit-confirm;
@@ -1016,8 +1012,7 @@ export component AppWindow inherits Window {
                     border-radius: 14px; background: #242328;
                     Rectangle { x: 0px; y: 0px;
                         width: parent.width; height: root.hero-height; clip: true;
-                        if root.hero-opacity < 1: Image { x: 0px; y: 0px; source: root.hero-previous; width: parent.width; height: parent.height; image-fit: cover; }
-                        Image { x: 0px; y: 0px;  source: root.hero; width: parent.width; height: parent.height; image-fit: cover; opacity: root.hero-opacity; }
+                        Image { x: 0px; y: 0px;  source: root.hero; width: parent.width; height: parent.height; image-fit: cover; }
                         Rectangle { x: 0px; y: 0px; width: 100%; height: 100%; background: @linear-gradient(90deg, #121117e8, #12111750); }
                         Rectangle { x: 0px; y: 0px; width: 100%; height: 100%; background: @linear-gradient(0deg, #121117c0, #12111700 70%); }
                         ActionButton { x: parent.width - 180px; y: 16px; width: 164px; compact: true; text: "Управление игрой"; icon: "tune"; enabled: root.panel-kind == ""; clicked => { root.panel-requested("manage"); } }
@@ -1037,7 +1032,10 @@ export component AppWindow inherits Window {
                     }
                     launch-bar := Rectangle {
                         x: 0px; y: root.hero-height; width: parent.width;
-                        height: install-estimate-hint.y + install-estimate-hint.height + 16px;
+                        // Reserve the two usual metadata lines while the selected copy is checked.
+                        // Longer status messages can still grow the card at high display scales.
+                        height: max(launch-button.y + launch-button.height + 64px,
+                                    install-estimate-hint.y + install-estimate-hint.height + 16px);
                         property <length> control-y: max(38px, launch-status.y + launch-status.height + 8px);
                         background: #242328;
                         Rectangle { x: 0px; y: 0px;  width: parent.width; height: 1px; background: #ffffff0c; }

@@ -240,7 +240,6 @@ fn library_and_panels(ui: &AppWindow, state: &State) {
     wait_for(ui, |ui| {
         ui.get_hero().size().width == 6
             && ui.get_media().row_data(0).unwrap().poster.size().width == 6
-            && ui.get_hero_progress() == 1.0
     });
 }
 
@@ -306,36 +305,55 @@ fn hero_switch(ui: &AppWindow, state: &State) {
     select_game(ui, state, 1);
     assert_eq!(ui.get_hero().size().width, 6);
 
-    // The previous worker had already queued a decode when the user switched games.
+    // Exercise the actual bundled hero and a reordered poster in the first frame.
+    let mut app = state.borrow_mut();
+    app.catalog[0].id = "peak".into();
+    app.catalog[0].media = vec![Media {
+        kind: "image".into(),
+        path: "art/plain.png".into(),
+        optimized_index: Some(2),
+        ..Default::default()
+    }];
+    drop(app);
     let prior_generation = state.borrow().generation;
     post_hero(
         ui.as_weak(),
         prior_generation,
         SharedPixelBuffer::new(13, 3),
     );
+    post_tile(
+        ui.as_weak(),
+        prior_generation,
+        0,
+        SharedPixelBuffer::new(13, 3),
+    );
     let (send, receive) = std::sync::mpsc::channel();
     ui.as_weak()
         .upgrade_in_event_loop(move |ui| {
             send.send((
-                ui.get_hero().size().width,
-                ui.get_hero_previous().size().width,
+                ui.get_hero().size(),
+                ui.get_media().row_data(0).unwrap().poster.size(),
             ))
             .unwrap();
         })
         .unwrap();
-
     ui.invoke_game_selected(0);
     assert_eq!(ui.get_game_title(), "Обычная игра");
-    assert_eq!(ui.get_hero().size().width, 0);
-    assert_eq!(ui.get_hero_previous().size().width, 0);
+    let hero = ui.get_hero().size();
+    let poster = ui.get_media().row_data(0).unwrap().poster.size();
+    assert!(hero.width > 13 && poster.width > 13);
     wait_for(ui, |ui| ui.get_hero().size().width == 9);
-    assert_eq!(receive.try_recv().unwrap(), (0, 0));
+    assert_eq!(receive.try_recv().unwrap(), (hero, poster));
 
+    // A remote-only game has no seed. Never borrow another game's image.
     ui.invoke_game_selected(1);
     assert_eq!(ui.get_game_title(), "Игра с модами");
     assert_eq!(ui.get_hero().size().width, 0);
-    assert_eq!(ui.get_hero_previous().size().width, 0);
+    ui.invoke_game_selected(0);
+    assert_eq!(ui.get_hero().size(), hero);
+    ui.invoke_game_selected(1);
     wait_for(ui, |ui| ui.get_hero().size().width == 6);
+    state.borrow_mut().catalog[0].id = "plain".into();
 }
 
 fn wait_for(ui: &AppWindow, condition: impl Fn(&AppWindow) -> bool + 'static) {

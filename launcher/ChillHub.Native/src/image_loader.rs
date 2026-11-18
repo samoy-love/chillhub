@@ -8,6 +8,21 @@ use std::sync::{
 static IMAGE_DECODE_LOCK: Mutex<()> = Mutex::new(());
 pub(super) static IMAGE_REQUEST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
+pub(super) fn card_preview(game: &str, name: &str) -> Image {
+    const BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/card-previews.bin"));
+    let jpeg: Option<&[u8]> = include!(concat!(env!("OUT_DIR"), "/card-previews.rs"));
+    jpeg.and_then(|jpeg| image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok())
+        .map(|image| {
+            let rgb = image.into_rgb8();
+            Image::from_rgb8(SharedPixelBuffer::clone_from_slice(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+            ))
+        })
+        .unwrap_or_default()
+}
+
 pub(super) fn image_pixels(
     path: &Path,
     width: u32,

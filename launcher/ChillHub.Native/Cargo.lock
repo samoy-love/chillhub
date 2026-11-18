@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "chillhub-native"
-version = "1.8.12"
+version = "1.8.13"
 dependencies = [
  "base64 0.22.1",
  "blake3",

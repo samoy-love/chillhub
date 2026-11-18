@@ -48,7 +48,6 @@ use video::{VideoAction, VideoPlayer, VideoRect};
 type State = Rc<RefCell<AppState>>;
 static PANIC_CONTEXT: std::sync::OnceLock<(chillhub_native::net::ApiClient, PathBuf)> =
     std::sync::OnceLock::new();
-static HERO_DISPLAY_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 struct AppState {
     catalog: Vec<Game>,
     data_root: PathBuf,
@@ -245,7 +244,7 @@ fn select_game(ui: &AppWindow, state: &State, index: usize) {
     }
     if !matches!(
         ui.get_panel_kind().as_str(),
-        "settings" | "feedback" | "confirm" | "update" | "changelog"
+        "" | "settings" | "feedback" | "confirm" | "update" | "changelog"
     ) {
         close_panel(ui, state);
     }
@@ -276,7 +275,7 @@ fn select_game(ui: &AppWindow, state: &State, index: usize) {
         )
     };
     if game_changed {
-        reset_hero(ui);
+        ui.set_hero(image_loader::card_preview(&game.id, "hero"));
     }
     ui.set_game_title(game.title.clone().into());
     ui.set_description(game.description.clone().into());
@@ -311,7 +310,10 @@ fn select_game(ui: &AppWindow, state: &State, index: usize) {
             game.media
                 .iter()
                 .map(|media| MediaTile {
-                    poster: Image::default(),
+                    poster: media
+                        .optimized_index
+                        .map(|index| image_loader::card_preview(&game.id, &format!("tile-{index}")))
+                        .unwrap_or_default(),
                     caption: media.caption.clone().into(),
                     is_video: media.kind == "video",
                 })
@@ -456,43 +458,7 @@ fn post_hero(
                 {
                     return;
                 }
-                let hero_epoch =
-                    HERO_DISPLAY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                ui.set_hero_previous(ui.get_hero());
-                ui.set_hero_progress(0.0);
                 ui.set_hero(from_pixels(pixels));
-                let weak = ui.as_weak();
-                Timer::single_shot(Duration::from_millis(16), move || {
-                    if let Some(ui) = weak.upgrade() {
-                        ACTIVE_STATE.with(|slot| {
-                            if HERO_DISPLAY_EPOCH.load(std::sync::atomic::Ordering::SeqCst)
-                                == hero_epoch
-                                && slot
-                                    .borrow()
-                                    .as_ref()
-                                    .is_some_and(|s| s.borrow().generation == generation)
-                            {
-                                ui.set_hero_progress(1.0);
-                            }
-                        });
-                    }
-                });
-                let weak = ui.as_weak();
-                Timer::single_shot(Duration::from_millis(250), move || {
-                    if let Some(ui) = weak.upgrade() {
-                        ACTIVE_STATE.with(|slot| {
-                            if HERO_DISPLAY_EPOCH.load(std::sync::atomic::Ordering::SeqCst)
-                                == hero_epoch
-                                && slot
-                                    .borrow()
-                                    .as_ref()
-                                    .is_some_and(|s| s.borrow().generation == generation)
-                            {
-                                ui.set_hero_previous(Image::default());
-                            }
-                        });
-                    }
-                });
             });
         }
     });
@@ -520,14 +486,8 @@ fn toast(ui: &AppWindow, state: &State, text: &str) {
         },
     );
 }
-fn reset_hero(ui: &AppWindow) {
-    ui.set_hero(Image::default());
-    ui.set_hero_previous(Image::default());
-    ui.set_hero_progress(1.0);
-}
 fn clear_game(ui: &AppWindow, state: &State) {
     IMAGE_REQUEST_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    HERO_DISPLAY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     {
         let mut s = state.borrow_mut();
         s.generation += 1;
@@ -545,7 +505,7 @@ fn clear_game(ui: &AppWindow, state: &State) {
     ui.set_game_title("".into());
     ui.set_description("".into());
     ui.set_genre("".into());
-    reset_hero(ui);
+    ui.set_hero(Image::default());
     ui.set_media(ModelRc::default());
     ui.set_mod_benefits(ModelRc::default());
     ui.set_mods(ModelRc::default());
