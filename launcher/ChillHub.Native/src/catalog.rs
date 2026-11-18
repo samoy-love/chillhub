@@ -1,0 +1,257 @@
+use chillhub_native::model::GameRecord;
+use serde::Deserialize;
+use std::path::Path;
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Game {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub genre: String,
+    pub icon: String,
+    #[serde(skip)]
+    pub fallback_icon: String,
+    pub hero: String,
+    #[serde(skip)]
+    pub fallback_hero: String,
+    pub game_version: String,
+    pub steam_app_id: String,
+    pub steam_supported: bool,
+    pub local_supported: bool,
+    pub has_mods: bool,
+    pub modpack_name: String,
+    pub modpack_version: String,
+    pub modpack_revision: String,
+    pub metadata_note: String,
+    #[serde(default)]
+    pub modpack_description: String,
+    pub highlights: Vec<String>,
+    #[serde(default)]
+    pub mod_benefits: Vec<chillhub_native::model::ModBenefit>,
+    pub media: Vec<Media>,
+    pub mods: Vec<ModEntry>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Media {
+    #[serde(default)]
+    pub variants: Vec<chillhub_native::model::VideoVariant>,
+    pub kind: String,
+    pub path: String,
+    #[serde(skip)]
+    pub fallback_path: String,
+    #[serde(skip)]
+    pub optimized_index: Option<usize>,
+    pub caption: String,
+    pub url: String,
+    pub source: String,
+    #[serde(default)]
+    pub provider: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ModEntry {
+    pub name: String,
+    pub russian_name: String,
+    pub description: String,
+    pub category: String,
+    pub version: String,
+}
+
+pub fn load(path: &Path) -> Result<Vec<Game>, String> {
+    let data = std::fs::read(path)
+        .map_err(|error| format!("Не удалось прочитать каталог {}: {error}", path.display()))?;
+    let mut games: Vec<Game> = serde_json::from_slice(&data)
+        .map_err(|error| format!("Не удалось разобрать каталог {}: {error}", path.display()))?;
+    for game in &mut games {
+        for (index, media) in game.media.iter_mut().enumerate() {
+            if media.path.starts_with("Assets/") {
+                media.optimized_index = Some(index);
+            }
+        }
+        game.media
+            .retain(|m| m.kind != "video" || matches!(m.provider.as_str(), "" | "file"));
+    }
+    // Stable sorting keeps the source order of the remaining library entries.
+    games.sort_by_key(|game| match game.id.as_str() {
+        "peak" => 0,
+        "lethal-company" => 1,
+        _ => 2,
+    });
+    Ok(games)
+}
+
+pub fn from_live(records: &[GameRecord], seed: &[Game]) -> Vec<Game> {
+    let curated: std::collections::HashMap<String, chillhub_native::model::Presentation> =
+        serde_json::from_str(include_str!("../Data/presentation-seed.json")).unwrap_or_default();
+    records
+        .iter()
+        .map(|r| {
+            let mut g = seed
+                .iter()
+                .find(|g| g.id == r.game_id)
+                .cloned()
+                .unwrap_or_default();
+            g.id = r.game_id.clone();
+            g.title = r.title.clone();
+            g.game_version = r.latest_version.clone();
+            g.local_supported = r.has_latest && !r.latest_version.is_empty();
+            g.has_mods = r.mods.as_ref().is_some_and(|m| m.has_latest);
+            g.steam_supported = r.mods.as_ref().is_some_and(|m| !m.steam_app_id.is_empty());
+            if !r.icon_url.is_empty() {
+                g.fallback_icon = g.icon.clone();
+                g.icon = r.icon_url.clone();
+            }
+            if let Some(m) = &r.mods {
+                g.steam_app_id = m.steam_app_id.clone();
+                g.modpack_name = m.display_name.clone();
+                g.modpack_version = if m.display_version.is_empty() {
+                    m.version.clone()
+                } else {
+                    m.display_version.clone()
+                };
+                g.modpack_revision = m.revision.clone();
+            }
+            if let Some(p) = r.presentation.as_ref().or_else(|| curated.get(&r.game_id)) {
+                g.description = p.description.clone();
+                g.genre = p.genre.clone();
+                g.fallback_hero = g.hero.clone();
+                g.hero = p.hero_url.clone();
+                g.highlights = p.highlights.clone();
+                g.mod_benefits = p.mod_benefits.clone();
+                g.media = p
+                    .media
+                    .iter()
+                    .filter(|m| m.kind != "video" || matches!(m.provider.as_str(), "" | "file"))
+                    .map(|m| {
+                        let fallback = g.media.iter().find(|seed| {
+                            seed.kind == m.kind
+                                && (seed.url == m.url
+                                    || (!m.source_url.is_empty() && seed.source == m.source_url))
+                        });
+                        Media {
+                            kind: m.kind.clone(),
+                            path: if m.kind == "video" {
+                                m.poster_url.clone()
+                            } else {
+                                m.url.clone()
+                            },
+                            url: m.url.clone(),
+                            fallback_path: fallback
+                                .map(|seed| seed.path.clone())
+                                .unwrap_or_default(),
+                            optimized_index: fallback.and_then(|seed| seed.optimized_index),
+                            caption: m.caption.clone(),
+                            source: m.source_url.clone(),
+                            provider: m.provider.clone(),
+                            variants: m.variants.clone(),
+                        }
+                    })
+                    .collect();
+                g.mods = p
+                    .mods
+                    .iter()
+                    .map(|m| ModEntry {
+                        name: m.name.clone(),
+                        russian_name: m.russian_name.clone(),
+                        description: m.description.clone(),
+                        category: m.category.clone(),
+                        version: m.version.clone(),
+                    })
+                    .collect();
+                g.modpack_description = p.modpack_description.clone();
+                g.metadata_note = p.modpack_description.clone();
+                if r.mods.as_ref().is_some_and(|m| {
+                    p.modpack_version != m.version
+                        || !p.modpack_revision.eq_ignore_ascii_case(&m.revision)
+                }) {
+                    g.mods.clear();
+                    g.mod_benefits.clear();
+                    g.modpack_description =
+                        "Состав для этой версии ещё не подготовлен. Установка и запуск доступны."
+                            .into();
+                    g.metadata_note = g.modpack_description.clone();
+                }
+            } else if g.has_mods {
+                g.metadata_note =
+                    "Состав опубликованной сборки уточняется. Версия модпака указана по серверу."
+                        .into();
+            }
+            if g.description.is_empty() {
+                g.description = "Описание игры пока не добавлено.".into();
+            }
+            g
+        })
+        .collect()
+}
+
+pub fn filtered_indices(games: &[Game], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    games
+        .iter()
+        .enumerate()
+        .filter(|(_, game)| {
+            [
+                game.title.as_str(),
+                game.genre.as_str(),
+                game.modpack_name.as_str(),
+            ]
+            .iter()
+            .any(|value| value.to_lowercase().contains(&query))
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+pub fn default_choice(game: &Game) -> (String, String) {
+    let source = if game.local_supported {
+        "local"
+    } else if game.steam_supported {
+        "steam"
+    } else {
+        return (String::new(), String::new());
+    };
+    let mode = if source == "local" && game.has_mods {
+        "mods"
+    } else {
+        "plain"
+    };
+    (source.into(), mode.into())
+}
+
+pub fn valid_choice(game: &Game, source: &str, mode: &str) -> (String, String) {
+    let (default_source, default_mode) = default_choice(game);
+    if default_source.is_empty() {
+        return (default_source, default_mode);
+    }
+    let requested_source = source.trim().to_ascii_lowercase();
+    let source = match requested_source.as_str() {
+        "steam" if game.steam_supported => "steam".into(),
+        "local" if game.local_supported => "local".into(),
+        _ => default_source,
+    };
+    let mode = match mode.trim().to_ascii_lowercase().as_str() {
+        "plain" => "plain".into(),
+        "mods" if game.has_mods && requested_source == source => "mods".into(),
+        _ if source == "steam" => "plain".into(),
+        _ => default_mode,
+    };
+    (source, mode)
+}
+
+pub fn switching_source(game: &Game, choice: &(String, String), source: &str) -> (String, String) {
+    let (current_source, current_mode) = valid_choice(game, &choice.0, &choice.1);
+    let (source, mode) = valid_choice(game, source, &current_mode);
+    if source == "steam" && current_source != "steam" {
+        // Local mods are the default. Steam mods require an explicit Steam choice.
+        return (source, "plain".into());
+    }
+    (source, mode)
+}
+
+#[cfg(test)]
+#[path = "catalog_tests.rs"]
+mod tests;

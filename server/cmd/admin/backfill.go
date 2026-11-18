@@ -8,15 +8,15 @@ import (
 	"ChillHub/server/internal/adminapi/builds"
 )
 
-// backfillCommand — подкоманда, дописывающая хеши блоков в уже опубликованные
-// манифесты (см. builds.BackfillBlocks). Живёт в том же бинаре, что и админка:
+// backfillCommand — подкоманда, дополняющая уже опубликованные манифесты.
+// Живёт в том же бинаре, что и админка:
 // ей нужен тот же корень контента и тот же код манифестов, а отдельную
 // программу пришлось бы отдельно и выкатывать.
 //
 // Запуск на сервере — от имени владельца контента, с тем же CONTENT_ROOT, что
 // у службы:
 //
-//	chillhub-admin backfill-blocks [-game bodycam] [-version 0.8.12.19193]
+//	chillhub-admin backfill-blocks [--small-packs] [-game bodycam] [-version 0.8.12.19193]
 const backfillCommand = "backfill-blocks"
 
 // runBackfill разбирает аргументы, обходит версии и возвращает код выхода:
@@ -27,6 +27,7 @@ func runBackfill(h *builds.Handlers, args []string, out io.Writer) int {
 	fs.SetOutput(out)
 	game := fs.String("game", "", "only this game id")
 	version := fs.String("version", "", "only this version")
+	smallPacks := fs.Bool("small-packs", false, "backfill small-file packs instead of block hashes")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -47,19 +48,41 @@ func runBackfill(h *builds.Handlers, args []string, out io.Writer) int {
 		if t.NS != builds.NamespaceGame {
 			name = string(t.NS) + "/" + name
 		}
-		res, err := h.BackfillBlocks(t.NS, t.GameID, t.Version)
-		switch {
-		case err != nil:
+		message, err := backfillVersion(h, t, *smallPacks)
+		if err != nil {
 			failed++
 			_, _ = fmt.Fprintf(out, "%s: FAILED: %v\n", name, err)
-		case res.Skipped != "":
-			_, _ = fmt.Fprintf(out, "%s: skipped: %s\n", name, res.Skipped)
-		default:
-			_, _ = fmt.Fprintf(out, "%s: %d file(s), %.2f GB hashed\n", name, res.Files, float64(res.Bytes)/1e9)
+		} else {
+			_, _ = fmt.Fprintf(out, "%s: %s\n", name, message)
 		}
 	}
 	if failed > 0 {
 		return 1
 	}
 	return 0
+}
+
+func backfillVersion(h *builds.Handlers, target builds.BackfillTarget, smallPacks bool) (string, error) {
+	if smallPacks {
+		res, err := h.BackfillSmallPacks(target.NS, target.GameID, target.Version)
+		if err != nil {
+			return "", err
+		}
+		if res.Packs == 0 && !res.ManifestUpdated {
+			return "skipped: no eligible small-file packs", nil
+		}
+		status := "manifest unchanged"
+		if res.ManifestUpdated {
+			status = "manifest updated"
+		}
+		return fmt.Sprintf("%d small pack(s), %d file(s), %s", res.Packs, res.Files, status), nil
+	}
+	res, err := h.BackfillBlocks(target.NS, target.GameID, target.Version)
+	if err != nil {
+		return "", err
+	}
+	if res.Skipped != "" {
+		return "skipped: " + res.Skipped, nil
+	}
+	return fmt.Sprintf("%d file(s), %.2f GB hashed", res.Files, float64(res.Bytes)/1e9), nil
 }

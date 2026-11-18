@@ -102,3 +102,20 @@ func TestCompactionRunsOffTheRequestPath(t *testing.T) {
 		t.Fatalf("журнал пережил компакцию: %v", err)
 	}
 }
+
+func TestCompactionPreservesInboxWithUnreadableJournal(t *testing.T) {
+	h := New(t.TempDir())
+	const saved = `[{"id":"saved","comment":"ещё в работе"}]`
+	if err := adminutil.WriteFileAtomic(h.path(), []byte(saved), inboxFilePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(h.journalPath(), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	h.startCompaction()
+	h.waitCompaction()
+	got, err := os.ReadFile(h.path())
+	if err != nil || string(got) != saved {
+		t.Fatalf("compaction replaced the inbox after a journal read error: %q, %v", got, err)
+	}
+}

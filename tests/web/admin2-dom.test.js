@@ -18,6 +18,29 @@ const { JSDOM } = require('jsdom');
 
 const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui');
 
+test('редактор карточки сохраняет описание, преимущества и трейлер вместе с настройками Steam', async (t) => {
+  const game = { gameId: 'peak', title: 'PEAK', exeRelativePath: '', mods: { enabled: true, steamAppId: '3527290', steamFolder: 'Outer/Inner', exeNames: ['PEAK.exe'] }, presentation: { description: 'Было', highlights: ['Старый пункт'] } };
+  const { window, calls } = await boot({ games: { items: [game] } });
+  t.after(() => window.close());
+  window.location.hash = '#games';
+  await until(() => window.document.querySelector('[data-tab="presentation"]'));
+  window.document.querySelector('[data-tab="presentation"]').click();
+  window.document.querySelector('[data-p-field="description"]').value = 'Стало';
+  window.document.querySelector('[data-p-field="highlights"]').value = 'Совместная игра\nИсследование острова';
+  window.document.querySelector('[data-p-action="add"][data-p-group="media"]').click();
+  window.document.querySelector('[data-p-key="kind"]').value = 'video';
+  window.document.querySelector('[data-p-key="url"]').value = 'https://launcher.samoy.love/assets/trailer.mp4';
+  window.document.querySelector('[data-game-do="save"]').click();
+  assert.ok(await until(() => calls.some((c) => c.method === 'POST' && c.url.endsWith('games/save'))));
+  const sent = calls.find((c) => c.method === 'POST' && c.url.endsWith('games/save')).body.items[0];
+  assert.equal(sent.presentation.description, 'Стало');
+  assert.deepStrictEqual(sent.presentation.highlights, ['Совместная игра', 'Исследование острова']);
+  assert.equal(sent.presentation.media[0].kind, 'video');
+  assert.equal(sent.presentation.media[0].url, 'https://launcher.samoy.love/assets/trailer.mp4');
+  assert.equal(sent.mods.steamFolder, 'Outer/Inner');
+  assert.equal(sent.exeRelativePath, '');
+});
+
 /** Ответы, которыми притворяется сервер. Форма — как у настоящего API. */
 function serverFixtures() {
   return {
@@ -86,9 +109,10 @@ async function boot(overrides, configureWindow) {
     const body = readBody(init);
     calls.push({ method, url: u, body });
 
-    const key = u.replace('/admin/api/', '').split('?')[0];
+    const [key, query] = u.replace('/admin/api/', '').split('?');
     if (Object.prototype.hasOwnProperty.call(fixtures, key)) {
-      const v = fixtures[key];
+      const fixture = fixtures[key];
+      const v = typeof fixture === 'function' ? await fixture(new URLSearchParams(query)) : fixture;
       if (v && v.__fail) {
         return { ok: false, status: v.__fail, text: async () => JSON.stringify({ error: v.error || 'сбой' }) };
       }
@@ -112,6 +136,36 @@ async function boot(overrides, configureWindow) {
   for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 0));
   return { window, calls, dom };
 }
+
+test('поиск по идентификатору открывает нужную карточку, а Escape возвращает фокус', async (t) => {
+  const { window } = await boot({ games: { items: [
+    { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe' },
+    { gameId: 'repo-internal-test', title: 'Кооператив', exeRelativePath: 'REPO.exe' },
+  ] } });
+  t.after(() => window.close());
+  const doc = window.document;
+  const trigger = doc.querySelector('[data-open-palette]');
+  const input = doc.querySelector('[data-palette-input]');
+  const key = (name) => input.dispatchEvent(new window.KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
+  trigger.focus();
+  trigger.click();
+  assert.equal(doc.activeElement, input);
+  assert.equal(doc.querySelector('.app').inert, true);
+  key('Escape');
+  assert.equal(doc.activeElement, trigger);
+  assert.equal(doc.querySelector('.app').inert, false);
+
+  trigger.click();
+  input.value = 'repo-internal-test';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const chosen = doc.getElementById(input.getAttribute('aria-activedescendant'));
+  assert.match(chosen.textContent, /Кооператив/);
+  key('Enter');
+  assert.ok(await until(() => doc.querySelector('[data-pick="repo-internal-test"][aria-current="true"]')));
+  assert.equal(doc.activeElement, doc.querySelector('[data-game-detail]'));
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+  assert.equal(doc.querySelector('.app').inert, false);
+});
 
 test('холодная проверка не прячет сборки и сама показывает готовый результат', async (t) => {
   for (const failed of [false, true]) {
@@ -146,7 +200,7 @@ test('кнопка обновления перечитывает закончи�
   const before = calls.filter((c) => c.url.includes('mods/list')).length;
   window.document.querySelector('[data-refresh]').click();
   assert.ok(await until(() => /3\.0\.0/.test(window.document.body.textContent)), 'панель сохранила старую ошибку');
-  assert.strictEqual(window.document.querySelector('[data-waiting-text]').textContent, '2 ждёт решения');
+  assert.strictEqual(window.document.querySelector('[data-waiting-text]').textContent, 'Решений: 2');
   assert.ok(calls.filter((c) => c.url.includes('mods/list')).length > before, 'нового запроса не было');
 });
 
@@ -195,15 +249,250 @@ test('каждый запрос несёт то, без чего сервер о
   }
 });
 
-test('снимок не ходит в сеть сам', async () => {
-  // Снимок нужен на случай «раздел не загрузился». Ходил он при этом в те
-  // же эндпоинты вторым слоем — девять лишних запросов на запуск, чей
-  // результат не читал никто, и четыре ошибки в консоли из них
-  const { window, calls } = await boot();
-  const before = calls.length;
+test('панель запускается без демо-данных и показывает полученные версии', async (t) => {
+  const { window } = await boot({ list: { latest: '3.19.47', items: [
+    { version: '3.19.47', files: 40, bytes: 6100 },
+    { version: '3.19.48', files: 42, bytes: 6300 },
+  ] } });
+  t.after(() => window.close());
+  assert.equal(window.CHILLHUB_DATA, undefined);
+  assert.equal(window.document.querySelector('[data-main] h1').textContent, 'Что решить');
+  assert.match(window.document.querySelector('[data-main]').textContent, /Игроки получают 3\.19\.47.+Загружена 3\.19\.48/);
+});
 
-  await window.CHILLHUB_DATA.load();
-  assert.strictEqual(calls.length, before, 'снимок сходил в сеть');
+test('обновление сохраняет введённые поля карточки', async (t) => {
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+  const doc = window.document;
+  window.location.hash = '#games';
+  assert.ok(await until(() => doc.querySelector('[name="title"]')));
+  doc.querySelector('[name="title"]').value = 'Неотправленная правка';
+  const refresh = doc.querySelector('[data-refresh]');
+  refresh.click();
+  refresh.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(refresh.disabled, true);
+  assert.equal(refresh.getAttribute('aria-busy'), 'true');
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(doc.querySelector('[name="title"]').value, 'Неотправленная правка');
+  assert.equal(calls.filter((call) => call.url === '/admin/api/summary').length, 2);
+  assert.equal([...doc.querySelectorAll('[data-toasts] .toast')].filter((node) => node.textContent === 'Данные обновлены').length, 1);
+});
+
+test('обновление карточки подставляет свежие поля и блокирует сохранение черновика поверх новой ревизии', async (t) => {
+  const game = { gameId: 'peak', title: 'Имя A', exeRelativePath: 'A.exe', presentation: { description: 'Описание A' } };
+  const games = { registryRevision: 'revision-a', items: [game] };
+  const { window, calls } = await boot({ games });
+  t.after(() => window.close());
+  const doc = window.document;
+  const q = (selector) => doc.querySelector(selector);
+  const refresh = q('[data-refresh]');
+  window.location.hash = '#games';
+  assert.ok(await until(() => q('[name="title"]')));
+
+  Object.assign(game, { title: 'Имя B', exeRelativePath: 'B.exe', unpublished: true, presentation: { description: 'Описание B' } });
+  games.registryRevision = 'revision-b';
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(q('[name="title"]').value, 'Имя B');
+  assert.equal(q('[name="exeRelativePath"]').value, 'B.exe');
+  assert.equal(q('[name="published"]').checked, false);
+  q('[data-tab="presentation"]').click();
+  assert.equal(q('[data-p-field="description"]').value, 'Описание B');
+  q('[data-tab="overview"]').click();
+
+  Object.assign(game, { title: 'Имя C', exeRelativePath: 'C.exe', unpublished: false });
+  games.registryRevision = 'revision-c';
+  refresh.click();
+  q('[name="title"]').value = 'Правка пока шёл запрос';
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(q('[name="title"]').value, 'Правка пока шёл запрос');
+  assert.equal(q('[name="exeRelativePath"]').value, 'C.exe');
+  assert.equal(q('[name="published"]').checked, true);
+  assert.match(q('[data-game-conflict]').textContent, /Реестр изменился/);
+  assert.ok(q('[data-game-do="save"]').disabled);
+  q('[data-game-do="save"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(calls.filter((call) => call.url.endsWith('games/save')).length, 0);
+
+  q('[data-game-do="discard"]').click();
+  q('[data-no]').click();
+  assert.equal(q('[name="title"]').value, 'Правка пока шёл запрос');
+  q('[data-game-do="discard"]').click();
+  q('[data-yes]').click();
+  assert.ok(await until(() => q('[name="title"]').value === 'Имя C'));
+  assert.equal(q('[data-game-conflict]'), null);
+  assert.ok(!q('[data-game-do="save"]').disabled);
+});
+
+test('обновление техработ сохраняет только изменённые поля и блокирует перекрывающийся черновик', async (t) => {
+  const state = { enabled: false, reason: 'Окно A', blocks: { install: true, launch: false } };
+  const { window, calls } = await boot({ 'maintenance/get': { state } });
+  t.after(() => window.close());
+  const doc = window.document;
+  const q = (selector) => doc.querySelector(selector);
+  const refresh = q('[data-refresh]');
+  window.location.hash = '#maint';
+  assert.ok(await until(() => q('[name="reason"]')));
+
+  state.enabled = true;
+  state.reason = 'Окно B';
+  state.blocks.launch = true;
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(q('[name="reason"]').value, 'Окно B');
+  assert.equal(q('[name="launch"]').checked, true);
+
+  q('[name="reason"]').value = 'Локальное описание окна';
+  state.blocks.launch = false;
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(q('[name="reason"]').value, 'Локальное описание окна');
+  assert.equal(q('[name="launch"]').checked, false);
+  assert.ok(q('[data-maint-conflict]').hidden);
+  assert.ok(!q('[data-act="maint.save"]').disabled);
+
+  state.reason = 'Окно C';
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(q('[name="reason"]').value, 'Локальное описание окна');
+  assert.ok(!q('[data-maint-conflict]').hidden);
+  assert.ok(q('[data-act="maint.save"]').disabled);
+  q('[data-act="maint.save"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 0);
+  q('[data-act="maint.discard"]').click();
+  q('[data-yes]').click();
+  assert.ok(await until(() => q('[name="reason"]').value === 'Окно C'));
+  assert.ok(q('[data-maint-conflict]').hidden);
+  assert.ok(!q('[data-act="maint.save"]').disabled);
+});
+
+test('после удаления игры при обновлении черновик остаётся в редакторе до явного отказа', async (t) => {
+  const games = { registryRevision: 'revision-a', items: [
+    { gameId: 'peak', title: 'Удалённая игра', exeRelativePath: 'A.exe' },
+    { gameId: 'repo', title: 'Соседняя игра', exeRelativePath: 'B.exe' },
+  ] };
+  const { window } = await boot({ games });
+  t.after(() => window.close());
+  const doc = window.document;
+  const q = (selector) => doc.querySelector(selector);
+  window.location.hash = '#games';
+  assert.ok(await until(() => q('[name="title"]')));
+  q('[name="title"]').value = 'Черновик удалённой игры';
+  games.items.shift();
+  games.registryRevision = 'revision-b';
+  q('[data-refresh]').click();
+  assert.ok(await until(() => !q('[data-refresh]').disabled));
+  assert.equal(q('[data-pick="peak"]'), null);
+  assert.equal(q('[name="title"]').value, 'Черновик удалённой игры');
+  assert.match(q('[data-game-conflict]').textContent, /Игры больше нет в реестре/);
+  assert.ok(q('[data-game-do="save"]').disabled);
+  assert.equal(q('[data-tab="gallery"]'), null);
+
+  q('[data-game-do="discard"]').click();
+  q('[data-yes]').click();
+  assert.ok(await until(() => q('[name="title"]').value === 'Соседняя игра'));
+  assert.equal(q('[data-game-conflict]'), null);
+});
+
+test('техработы нельзя записать, пока панель дочитывает остальные разделы при обновлении', async (t) => {
+  const state = { enabled: true, reason: 'Окно A', blocks: { install: true, launch: false } };
+  let holdSummary;
+  let readMaintenance = 0;
+  const { window, calls } = await boot({
+    summary: async () => { await holdSummary; return {}; },
+    'maintenance/get': () => { readMaintenance += 1; return { state }; },
+  });
+  t.after(() => window.close());
+  const doc = window.document;
+  const q = (selector) => doc.querySelector(selector);
+  window.location.hash = '#maint';
+  assert.ok(await until(() => q('[data-act="maint.save"]')));
+  const previousReads = readMaintenance;
+  let finishSummary;
+  holdSummary = new Promise((resolve) => { finishSummary = resolve; });
+  state.reason = 'Окно B';
+  state.blocks.launch = true;
+  q('[data-refresh]').click();
+  assert.ok(await until(() => readMaintenance > previousReads));
+  assert.ok(q('[data-refresh]').disabled);
+  q('[name="reason"]').value = 'Причина из открытого черновика';
+  q('[data-act="maint.save"]').click();
+  assert.equal(calls.some((call) => call.method === 'POST'), false);
+  finishSummary();
+  assert.ok(await until(() => !q('[data-refresh]').disabled));
+  assert.ok(!q('[data-maint-conflict]').hidden);
+  assert.equal(q('[name="launch"]').checked, true);
+  q('[data-act="maint.discard"]').click();
+  q('[data-yes]').click();
+  assert.ok(await until(() => q('[name="reason"]').value === 'Окно B'));
+  q('[data-act="maint.save"]').click();
+  assert.ok(await until(() => calls.some((call) => call.method === 'POST' && call.url.includes('maintenance/set'))));
+});
+
+test('сбой одной ленты сохраняет полный снимок новостей до удачного повтора', async (t) => {
+  let gameFeed = { items: [{ slug: 'game-entry', title: 'Новость игры' }] };
+  const { window } = await boot({
+    'news/list': (query) => query.get('scope') === 'game' ? gameFeed : { items: [] },
+  });
+  t.after(() => window.close());
+  const doc = window.document;
+  const main = doc.querySelector('[data-main]');
+  const refresh = doc.querySelector('[data-refresh]');
+  window.location.hash = '#news';
+  assert.ok(await until(() => doc.querySelector('#ns-scope')));
+  const scope = doc.querySelector('#ns-scope');
+  scope.value = 'game';
+  scope.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.ok(await until(() => main.textContent.includes('Новость игры')));
+
+  gameFeed = { __fail: 503 };
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.match(main.querySelector('[data-stale]').textContent, /Последние полученные данные: новости/);
+  assert.match(main.textContent, /Новость игры/);
+  assert.doesNotMatch(main.textContent, /Заметок нет/);
+
+  gameFeed = { items: [] };
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(main.querySelector('[data-stale]'), null);
+  assert.match(main.textContent, /Заметок нет/);
+});
+
+test('частичный отказ помечает устаревшие статусы в шапке до успешного повтора', async (t) => {
+  const maint = { state: { enabled: false } };
+  const builds = { latest: '9.21.1', items: [{ version: '9.21.1' }, { version: '9.21.2' }] };
+  const packs = { active: '1.9.8', items: [{ version: '1.9.8' }, { version: '1.9.7' }] };
+  const { window } = await boot({ list: builds, 'maintenance/get': maint, 'mods/list': packs });
+  t.after(() => window.close());
+  const doc = window.document;
+  const maintStatus = doc.querySelector('[data-maint-text]');
+  const waitingStatus = doc.querySelector('[data-waiting-text]');
+  const refresh = doc.querySelector('[data-refresh]');
+  assert.equal(maintStatus.textContent, 'техработы выключены');
+  assert.equal(waitingStatus.textContent, 'Решений: 1');
+  window.location.hash = '#launcher';
+  assert.ok(await until(() => doc.querySelector('[data-main] h1').textContent === 'Лаунчер'));
+
+  maint.__fail = 503;
+  packs.__fail = 503;
+  builds.latest = '9.21.2';
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.match(doc.querySelector('[data-launcher-version="9.21.2"]').textContent, /у игроков/);
+  assert.match(maintStatus.textContent, /данные устарели/);
+  assert.match(waitingStatus.textContent, /данные устарели/);
+  assert.match(maintStatus.closest('[data-maint]').title, /техработы выключены/);
+  window.location.hash = '#packs';
+  assert.ok(await until(() => doc.querySelector('[data-main] [data-stale]')?.textContent.includes('сборки модов')));
+  assert.match(doc.querySelector('[data-main]').textContent, /1\.9\.8/);
+
+  delete maint.__fail;
+  delete packs.__fail;
+  maint.state.enabled = true;
+  refresh.click();
+  assert.ok(await until(() => !refresh.disabled));
+  assert.equal(maintStatus.textContent, 'техработы включены');
+  assert.equal(waitingStatus.textContent, 'решений нет');
 });
 
 test('первый экран показывает решение, а не сводку цифр', async () => {
@@ -324,7 +613,7 @@ test('молчащий раздел не оставляет панель пус�
   const text = window.document.body.textContent;
   // Остальные разделы обязаны прочитаться
   assert.match(text, /Chill Hub/);
-  assert.match(text, /Не ответили разделы|inbox/);
+  assert.match(text, /Часть данных не обновилась/);
 });
 
 test('все разделы открываются и рисуют заголовок', async () => {

@@ -96,13 +96,13 @@ func TestNewsIndexFiltersUnpublished(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "news", "games", "demo"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"items":[{"slug":"a","published":true},{"slug":"b","published":false},{"slug":"c"}]}`
+	body := `{"items":[{"slug":"a","published":true},{"slug":"b","published":false},{"slug":"c"},{"slug":"bad","published":"false"},null]}`
 	if err := os.WriteFile(filepath.Join(root, "news", "games", "demo", "index.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
 	testRouter().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/news/games/demo/index.json", nil))
-	if strings.Contains(rec.Body.String(), `"b"`) {
+	if strings.Contains(rec.Body.String(), `"b"`) || strings.Contains(rec.Body.String(), `"bad"`) || strings.Contains(rec.Body.String(), "null") {
 		t.Fatalf("unpublished item served: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"a"`) || !strings.Contains(rec.Body.String(), `"c"`) {

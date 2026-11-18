@@ -3,6 +3,8 @@ package media
 import (
 	"bytes"
 	"image"
+	"image/color"
+	"image/gif"
 	"image/jpeg"
 	"os"
 	"path/filepath"
@@ -27,7 +29,7 @@ func readOutput(t *testing.T, base, name string) []byte {
 // storing originals meant multi-megabyte screenshots on the news page.
 func TestPNGIsReEncodedToJPEG(t *testing.T) {
 	base := t.TempDir()
-	name, meta, err := ProcessAndSaveAsset(base, "assets", "снимок", smallPNG(t, 64, 48), ".png", "")
+	name, meta, err := ProcessAndSaveAsset(base, "assets", "снимок", smallPNG(t, 64, 48))
 	if err != nil {
 		t.Fatalf("ProcessAndSaveAsset: %v", err)
 	}
@@ -42,19 +44,23 @@ func TestPNGIsReEncodedToJPEG(t *testing.T) {
 	}
 }
 
-// With no extension hint the Content-Type decides. Browsers do not always send a
-// filename with the part, so this is the normal path for drag-and-drop uploads.
-func TestExtensionIsGuessedFromContentType(t *testing.T) {
+// The detected image format controls the suffix, even with a misleading name.
+func TestExtensionIsGuessedFromImageBytes(t *testing.T) {
 	base := t.TempDir()
-	for _, ct := range []string{"image/png", "image/jpeg", "application/octet-stream", ""} {
-		name, _, err := ProcessAndSaveAsset(base, "assets", "no-ext", smallPNG(t, 8, 8), "", ct)
-		if err != nil {
-			t.Fatalf("Content-Type %q: %v", ct, err)
-		}
-		if !strings.HasSuffix(name, ".jpg") {
-			t.Errorf("Content-Type %q produced %q, want a .jpg", ct, name)
-		}
+	name, _, err := ProcessAndSaveAsset(base, "assets", "image.html", smallPNG(t, 8, 8))
+	if err != nil || !strings.HasSuffix(name, ".jpg") {
+		t.Fatalf("asset = %q, %v; want a .jpg", name, err)
 	}
+}
+
+func smallGIF(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	im := image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.Black, color.White})
+	if err := gif.Encode(&buf, im, nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 // Every non-ASCII rune used to become '_', so any two Cyrillic names of the same
@@ -63,11 +69,11 @@ func TestExtensionIsGuessedFromContentType(t *testing.T) {
 // second one with no error anywhere.
 func TestCyrillicNamesDoNotOverwriteEachOther(t *testing.T) {
 	base := t.TempDir()
-	first, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 64, 48), ".png", "")
+	first, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 64, 48))
 	if err != nil {
 		t.Fatalf("ProcessAndSaveAsset: %v", err)
 	}
-	second, _, err := ProcessAndSaveAsset(base, "assets", "картинка", smallPNG(t, 32, 32), ".png", "")
+	second, _, err := ProcessAndSaveAsset(base, "assets", "картинка", smallPNG(t, 32, 32))
 	if err != nil {
 		t.Fatalf("ProcessAndSaveAsset: %v", err)
 	}
@@ -106,7 +112,7 @@ func isURLSafeASCII(name string) bool {
 func TestStoredNamesAreASCIIAndURLSafe(t *testing.T) {
 	base := t.TempDir()
 	for _, desired := range []string{"скриншот", "Обложка", "文件", "🙂", "ъь"} {
-		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8), ".png", "")
+		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8))
 		if err != nil {
 			t.Fatalf("desired %q: %v", desired, err)
 		}
@@ -124,11 +130,11 @@ func TestStoredNamesAreASCIIAndURLSafe(t *testing.T) {
 // a news post, so a fresh name each time would leave the post on the old file.
 func TestSameNameReplacesTheAsset(t *testing.T) {
 	base := t.TempDir()
-	first, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 64, 48), ".png", "")
+	first, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 64, 48))
 	if err != nil {
 		t.Fatalf("ProcessAndSaveAsset: %v", err)
 	}
-	second, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 32, 32), ".png", "")
+	second, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 32, 32))
 	if err != nil {
 		t.Fatalf("ProcessAndSaveAsset: %v", err)
 	}
@@ -153,7 +159,7 @@ func TestASCIINamesAreStoredUnchanged(t *testing.T) {
 		"cover-1":    "cover-1.jpg",
 		"my_file.2":  "my_file.2.jpg",
 	} {
-		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8), ".png", "")
+		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8))
 		if err != nil {
 			t.Fatalf("desired %q: %v", desired, err)
 		}
@@ -168,7 +174,7 @@ func TestASCIINamesAreStoredUnchanged(t *testing.T) {
 func TestDesiredNameCannotEscapeTheAssetTree(t *testing.T) {
 	base := t.TempDir()
 	for _, desired := range []string{"../escape", "../../etc/passwd", `..\escape`, "a/b/c"} {
-		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8), ".png", "")
+		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8))
 		if err != nil {
 			continue // refused outright is also a correct answer
 		}
@@ -193,7 +199,7 @@ func TestDesiredNameCannotEscapeTheAssetTree(t *testing.T) {
 func TestEmptyDesiredNameStillProducesAFile(t *testing.T) {
 	base := t.TempDir()
 	for _, desired := range []string{"", "   "} {
-		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8), ".png", "")
+		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8))
 		if err != nil {
 			t.Fatalf("desired %q: %v", desired, err)
 		}
@@ -207,7 +213,7 @@ func TestEmptyDesiredNameStillProducesAFile(t *testing.T) {
 // Undecodable bytes must be an error, not a zero-length file in the public tree.
 func TestGarbageBytesAreRefusedWithoutWritingAFile(t *testing.T) {
 	base := t.TempDir()
-	if _, _, err := ProcessAndSaveAsset(base, "assets", "плохой", []byte("это не картинка"), ".png", ""); err == nil {
+	if _, _, err := ProcessAndSaveAsset(base, "assets", "плохой", []byte("это не картинка")); err == nil {
 		t.Fatal("garbage was accepted as an image")
 	}
 	entries, err := os.ReadDir(filepath.Join(base, "assets"))
@@ -228,15 +234,15 @@ func TestAnimatedFallbackKeepsTheOriginalExtension(t *testing.T) {
 	}
 
 	base := t.TempDir()
-	gif := []byte("GIF89a исходные байты")
-	name, meta, err := ProcessAndSaveAsset(base, "assets", "анимация", gif, ".gif", "")
+	data := smallGIF(t)
+	name, meta, err := ProcessAndSaveAsset(base, "assets", "анимация", data)
 	if err != nil {
 		t.Fatalf("ProcessAndSaveAsset: %v", err)
 	}
 	if !strings.HasSuffix(name, ".gif") {
 		t.Fatalf("output is %q; a GIF stored under a .webp name will not render", name)
 	}
-	if !bytes.Equal(readOutput(t, base, name), gif) {
+	if !bytes.Equal(readOutput(t, base, name), data) {
 		t.Error("the original bytes were altered although no transcode ran")
 	}
 	if meta["note"] == "" {
@@ -244,20 +250,15 @@ func TestAnimatedFallbackKeepsTheOriginalExtension(t *testing.T) {
 	}
 }
 
-// The animated extension is derived from the Content-Type when no hint is given.
-func TestAnimatedContentTypeIsRecognisedWithoutAHint(t *testing.T) {
+func TestImageBytesCannotBeStoredAsHTML(t *testing.T) {
 	t.Setenv("FFMPEG_PATH", "")
 	t.Setenv("PATH", "")
 	if HasFFmpeg() {
 		t.Skip("ffmpeg is still resolvable")
 	}
 	base := t.TempDir()
-	name, _, err := ProcessAndSaveAsset(base, "assets", "анимация", []byte("GIF89a"), "", "image/gif")
-	if err != nil {
-		t.Fatalf("ProcessAndSaveAsset: %v", err)
-	}
-	if !strings.HasSuffix(name, ".gif") {
-		t.Fatalf("image/gif produced %q", name)
+	if _, _, err := ProcessAndSaveAsset(base, "assets", "attack.html", []byte("<script>alert(1)</script>")); err == nil {
+		t.Fatal("HTML was accepted as an image")
 	}
 }
 
@@ -270,7 +271,7 @@ func TestFailedTranscodeLeavesNoPartialAsset(t *testing.T) {
 	}
 
 	base := t.TempDir()
-	if _, _, err := ProcessAndSaveAsset(base, "assets", "анимация", []byte("GIF89a"), ".gif", ""); err == nil {
+	if _, _, err := ProcessAndSaveAsset(base, "assets", "анимация", smallGIF(t)); err == nil {
 		t.Fatal("a failed transcode was reported as success")
 	}
 	entries, err := os.ReadDir(filepath.Join(base, "assets"))

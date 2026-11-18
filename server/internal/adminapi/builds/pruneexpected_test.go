@@ -58,12 +58,33 @@ func TestPruneRefusesWhenTheSetMovedSinceTheDialog(t *testing.T) {
 	}
 }
 
+func TestPruneRefusesWhenEmptyConfirmationIsNowStale(t *testing.T) {
+	h := New(t.TempDir())
+	seedPrunable(t, h)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+		"/admin/api/pruneVersions?gameId=game", strings.NewReader("expected="))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.PruneVersions(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("empty confirmation returned %d %s, want 409", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(h.manifestsDir("game"), "1.0.1.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The matching case still works, and the answer names what went.
 func TestPruneRunsWhenTheNamedSetStillMatches(t *testing.T) {
 	h := New(t.TempDir())
 	seedPrunable(t, h)
 
-	w := pruneNaming(t, h, "game", "1.0.1", "1.0.2")
+	form := url.Values{"expected": {"1.0.1", "1.0.2"}}
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+		"/admin/api/pruneVersions?gameId=game", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.PruneVersions(w, r)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("%d %s, want 200", w.Code, w.Body.String())

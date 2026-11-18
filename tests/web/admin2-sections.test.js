@@ -410,16 +410,16 @@ test('в разделе новостей видны и лента лаунчер
   assert.strictEqual(out[1].game, 'repo');
 });
 
-test('упавшая лента одной игры не уносит остальные', async () => {
+test('ошибка одной ленты не выдаёт неполный список за полученные новости', async () => {
+  const unavailable = new Error('лента временно недоступна');
   const api = {
     games: async () => ({ items: [{ gameId: 'a' }, { gameId: 'b' }] }),
     newsList: async (scope, gameId) => {
-      if (gameId === 'a') throw new Error('нет такой ленты');
+      if (gameId === 'a') throw unavailable;
       return { items: [{ slug: 's', title: 'Есть' }] };
     },
   };
-  const out = await S.LOADERS.news(api);
-  assert.strictEqual(out.length, 2, 'потерялись ленты');
+  await assert.rejects(() => S.LOADERS.news(api), (err) => err === unavailable);
 });
 
 /* ---------- Строка сборки ---------- */

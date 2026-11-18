@@ -277,7 +277,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	} else {
 		desired = strings.TrimSuffix(desired, filepath.Ext(desired))
 	}
-	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data, extHint, "")
+	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data)
 	if err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to process the image", "gamegallery", err)
 		return
@@ -311,13 +311,12 @@ func (h *Handlers) UploadByURL(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty url", http.StatusBadRequest)
 		return
 	}
-	data, ct, err := media.DownloadURL(r.Context(), srcURL)
+	data, _, err := media.DownloadURL(r.Context(), srcURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	extHint := strings.ToLower(filepath.Ext(strings.Split(strings.Split(srcURL, "?")[0], "#")[0]))
-	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data, extHint, ct)
+	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data)
 	if err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to process the image", "gamegallery", err)
 		return
@@ -409,7 +408,11 @@ func (h *Handlers) Rename(w http.ResponseWriter, r *http.Request) {
 	}
 	// #nosec G703 -- both ends are SanitizeFilename output joined onto the
 	// gallery, confirmed by EnsureWithin to stay inside it and not to be its root.
-	if err := os.Rename(src, dst); err != nil {
+	if err := media.RenameAsset(src, dst); err != nil {
+		if errors.Is(err, media.ErrAssetExtension) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to rename", "gamegallery", err)
 		return
 	}

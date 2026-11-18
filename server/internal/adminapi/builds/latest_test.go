@@ -3,10 +3,12 @@ package builds
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -336,4 +338,106 @@ func TestPublishFailsWhenLatestCannotBeRepointed(t *testing.T) {
 	if err != nil || !st.IsDir() {
 		t.Fatalf("latest.json was replaced despite the failure: stat=%v", err)
 	}
+}
+
+func TestPublishAndActivateRollsBackManifestAndPacksTogether(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		existing bool
+	}{
+		{name: "first publish"},
+		{name: "replacement", existing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const game, version = "game", "1.2.3"
+			root := t.TempDir()
+			h := New(root)
+			manDir := h.ManifestsDirFor(NamespaceGame, game)
+			manifestPath := filepath.Join(manDir, version+".json")
+			versionDir := filepath.Join(h.ContentDirFor(NamespaceGame, game), version)
+			latest := filepath.Join(manDir, "latest.json")
+
+			publish := func(prefix string, value byte, activate bool) error {
+				stage, err := h.StageTree(NamespaceGame, game, version)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stage.Discard()
+				for i := range minPackFiles {
+					writeFile(t, filepath.Join(stage.FilesRoot, fmt.Sprintf("%s-%d.bin", prefix, i)), []byte{value})
+				}
+				_, err = h.Publish(stage, activate, nil)
+				return err
+			}
+			var previous []byte
+			if tc.existing {
+				if err := publish("old", 'o', false); err != nil {
+					t.Fatal(err)
+				}
+				previous = requirePublishedPack(t, manifestPath, versionDir, "old", 'o')
+			}
+			// The version manifest can be written, but atomic replacement of
+			// latest.json fails when its destination is a directory.
+			mustMkdirAll(t, latest)
+			if err := publish("new", 'n', true); err == nil || !strings.Contains(err.Error(), "latest.json not updated") {
+				t.Fatalf("publication error = %v, want failed latest write", err)
+			}
+			if tc.existing {
+				if after := requirePublishedPack(t, manifestPath, versionDir, "old", 'o'); !bytes.Equal(after, previous) {
+					t.Fatal("failed publication changed the previous manifest")
+				}
+				if _, err := os.Stat(filepath.Join(versionDir, "files", "new-0.bin")); !os.IsNotExist(err) {
+					t.Fatalf("failed replacement left new files: %v", err)
+				}
+			} else {
+				for _, path := range []string{manifestPath, versionDir} {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Fatalf("failed first publication left %s: %v", path, err)
+					}
+				}
+			}
+			if err := os.Remove(latest); err != nil {
+				t.Fatal(err)
+			}
+			if err := publish("new", 'n', true); err != nil {
+				t.Fatalf("retry after resolving the latest write failure: %v", err)
+			}
+			requirePublishedPack(t, manifestPath, versionDir, "new", 'n')
+			if got := latestVersion(t, root, game); got != version {
+				t.Fatalf("latest = %q, want %s", got, version)
+			}
+			assertNoStagingLeftovers(t, filepath.Dir(versionDir))
+			if matches, err := filepath.Glob(filepath.Join(manDir, ".manifest-backup-*")); err != nil || len(matches) != 0 {
+				t.Fatalf("leftover manifest backups: %v (%v)", matches, err)
+			}
+		})
+	}
+}
+
+func requirePublishedPack(t *testing.T, manifestPath, versionDir, prefix string, value byte) []byte {
+	t.Helper()
+	read := func(path string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(path) // #nosec G304 -- built from t.TempDir().
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	raw := read(manifestPath)
+	var m manifest
+	if err := json.Unmarshal(raw, &m); err != nil || len(m.Files) != minPackFiles || len(m.SmallPacks) != 1 {
+		t.Fatalf("unexpected published manifest: %q (%v)", raw, err)
+	}
+	pack := read(filepath.Join(versionDir, "packs", m.SmallPacks[0].SHA256+".bin"))
+	if !bytes.Equal(pack, bytes.Repeat([]byte{value}, minPackFiles)) {
+		t.Fatalf("published pack bytes = %q", pack)
+	}
+	for i := range minPackFiles {
+		member := read(filepath.Join(versionDir, "files", fmt.Sprintf("%s-%d.bin", prefix, i)))
+		if !bytes.Equal(member, []byte{value}) {
+			t.Fatalf("published file %d bytes = %q", i, member)
+		}
+	}
+	return raw
 }

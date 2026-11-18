@@ -63,7 +63,7 @@ func TestBuildsWithCorruptLatestAreNotOffered(t *testing.T) {
 	root := withContentRoot(t)
 	dir := writeManifests(t, root, "demo", "1.0.0", "2.0.0")
 
-	for _, body := range []string{`{"version":`, `{}`, `{"version":""}`, ``} {
+	for _, body := range []string{`{"version":`, `{}`, `{"version":""}`, `{"version":"../escape"}`, `{"version":"latest"}`, ``} {
 		if err := os.WriteFile(filepath.Join(dir, "latest.json"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

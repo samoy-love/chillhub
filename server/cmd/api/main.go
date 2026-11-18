@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"ChillHub/server/internal/adminapi/builds"
 	"ChillHub/server/internal/adminapi/games"
 	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
@@ -69,7 +70,8 @@ type GameInfo struct {
 	// none. The launcher gets everything it needs in this one response and
 	// never picks anything: there is exactly one active pack per game, and
 	// which one it is, is decided in the admin panel.
-	Mods *ModsInfo `json:"mods,omitempty"`
+	Mods         *ModsInfo           `json:"mods,omitempty"`
+	Presentation *games.Presentation `json:"presentation,omitempty"`
 }
 
 // ModsInfo is the active modpack of one game, as the launcher sees it.
@@ -131,7 +133,7 @@ func modsInfoFor(it games.Entry) *ModsInfo {
 	info.Version = meta.Version
 	info.ManifestURL = "/manifests/_mods/" + it.GameID + "/" + meta.Version + ".json"
 	info.ContentBaseURL = "/content/_mods/" + it.GameID + "/" + meta.Version + "/files"
-	info.DisplayName, info.DisplayVersion, info.Revision = modsSource(dir, meta.Version)
+	info.DisplayName, info.DisplayVersion, info.Revision = modsSource(it.GameID, meta.Version)
 	return info
 }
 
@@ -141,10 +143,8 @@ func modsInfoFor(it games.Entry) *ModsInfo {
 // The digest comes from the same record: computing it here would mean parsing
 // a half-megabyte manifest on every /games request, and it is written once per
 // build anyway.
-func modsSource(dir, version string) (name, ver, revision string) {
-	// #nosec G304 -- dir is the content root plus validated components and
-	// version came from latest.json written by this project.
-	b, err := os.ReadFile(filepath.Join(dir, "sources", version+".json"))
+func modsSource(gid, version string) (name, ver, revision string) {
+	b, err := builds.ReadModSource(contentRoot, gid, version)
 	if err != nil {
 		return version, "", ""
 	}
@@ -152,7 +152,10 @@ func modsSource(dir, version string) (name, ver, revision string) {
 		DisplayName string `json:"displayName"`
 		TreeDigest  string `json:"treeDigest"`
 	}
-	if json.Unmarshal(b, &src) != nil || src.DisplayName == "" {
+	if json.Unmarshal(b, &src) != nil {
+		return version, "", ""
+	}
+	if src.DisplayName == "" {
 		return version, "", src.TreeDigest
 	}
 	// "ASTeam-LethalReloaded-2.2.12" -> ("Lethal Reloaded", "2.2.12")
@@ -455,7 +458,7 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 		// not a plausible slug is dropped rather than turned into a path. The
 		// admin save endpoint now refuses such ids outright, so reaching this
 		// line means the file was edited by hand.
-		if !adminutil.IsSafeGameID(it.GameID) {
+		if !adminutil.IsCatalogGameID(it.GameID) {
 			log.Printf("registry: skipping entry with unusable gameId %q", filepath.Base(it.GameID))
 			continue
 		}
@@ -477,7 +480,8 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 		out = append(out, GameInfo{
 			GameID: it.GameID, Title: it.Title,
 			ExeRelativePath: it.ExeRelativePath, IconURL: it.IconURL,
-			Mods: modsInfoFor(it),
+			Mods:         modsInfoFor(it),
+			Presentation: games.PublicPresentation(it.Presentation),
 		})
 	}
 	// An existing registry stays authoritative even when everything in it was
@@ -504,7 +508,7 @@ func loadGamesByScanning() []GameInfo {
 		name := e.Name()
 		// Skip the internal subtrees: the registry and the modpack namespace
 		// are directories under manifests/ that are not games.
-		if strings.EqualFold(name, "_registry") || strings.EqualFold(name, "_mods") {
+		if !adminutil.IsCatalogGameID(name) {
 			continue
 		}
 		items = append(items, GameInfo{GameID: name, Title: name})
@@ -538,10 +542,6 @@ func handleGames(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, GamesResponse{Items: items})
 }
 
-// maxGameIDLen bounds the {gameId} path variable. Real IDs are short slugs;
-// anything longer is either a probe or a mistake and must not reach the disk.
-const maxGameIDLen = 64
-
 // publicGameID validates the {gameId} path variable and answers 404 when it is
 // not a plausible identifier.
 //
@@ -555,7 +555,7 @@ func publicGameID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	gid := mux.Vars(r)["gameId"]
 	// A leading underscore is reserved for internal directories such as
 	// _registry, which loadGamesByScanning already skips.
-	if len(gid) > maxGameIDLen || strings.HasPrefix(gid, "_") || !adminutil.IsSafeGameID(gid) {
+	if !adminutil.IsCatalogGameID(gid) {
 		http.NotFound(w, r)
 		return "", false
 	}
@@ -617,7 +617,7 @@ func readLatest(path string) (latestMeta, bool) {
 		return latestMeta{}, false
 	}
 	var m latestMeta
-	if json.Unmarshal(b, &m) != nil || m.Version == "" {
+	if json.Unmarshal(b, &m) != nil || !adminutil.IsSafeVersion(m.Version) {
 		return latestMeta{}, false
 	}
 	return m, true
@@ -653,16 +653,17 @@ func servePublishedIndex(w http.ResponseWriter, path string) {
 	}
 	out := make([]map[string]any, 0, len(idx.Items))
 	for _, it := range idx.Items {
-		// Include by default if "published" is missing.
-		include := true
+		if it == nil {
+			continue
+		}
+		// Legacy public entries may omit the flag; an explicit value must
+		// be true before the entry can be sent.
 		if v, ok := it["published"]; ok {
-			if bv, ok2 := v.(bool); ok2 {
-				include = bv
+			if published, ok := v.(bool); !ok || !published {
+				continue
 			}
 		}
-		if include {
-			out = append(out, it)
-		}
+		out = append(out, it)
 	}
 	writeJSON(w, map[string]any{"items": out})
 }
@@ -724,9 +725,8 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 		if strings.EqualFold(name, "latest.json") {
 			continue
 		}
-		if strings.HasSuffix(strings.ToLower(name), ".json") {
-			v := strings.TrimSuffix(name, ".json")
-			if adminutil.CompareVersions(v, published.Version) > 0 {
+		if v, ok := strings.CutSuffix(name, ".json"); ok {
+			if !adminutil.IsSafeVersion(v) || adminutil.CompareVersions(v, published.Version) > 0 {
 				continue
 			}
 			versions = append(versions, v)

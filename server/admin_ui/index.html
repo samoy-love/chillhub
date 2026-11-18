@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Админ-панель Chill Hub 2.0</title>
+<title>Админ-панель Chill Hub</title>
 <meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex, nofollow">
 
@@ -22,10 +22,9 @@
     <div class="brand">
       <img src="/admin/ui/favicon.svg?v=b4b872bb19" alt="">
       <span>Chill Hub</span>
-      <span class="badge badge--accent">2.0</span>
     </div>
 
-    <button class="search" type="button" data-open-palette>
+    <button class="search" type="button" data-open-palette aria-label="Поиск по панели" aria-keyshortcuts="Control+K Meta+K">
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" aria-hidden="true">
         <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
         <path d="M16 16l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -47,7 +46,12 @@
       <span class="dot"></span><span data-maint-text>—</span>
     </span>
 
-    <button class="btn btn--text" type="button" data-refresh>Обновить всё</button>
+    <button class="btn btn--text" type="button" data-refresh aria-label="Обновить данные" title="Обновить данные">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 8v-4m0 4h-4m4 0a8 8 0 1 0 .1 8"/>
+      </svg>
+      <span data-refresh-label>Обновить всё</span>
+    </button>
     <button class="btn" type="button" data-logout>Выйти</button>
   </div>
 
@@ -78,8 +82,8 @@
 
 <div class="palette" hidden data-palette>
   <div class="box" role="dialog" aria-modal="true" aria-label="Поиск по панели">
-    <input type="search" placeholder="Раздел, игра, сборка, код ошибки…" data-palette-input aria-label="Поиск">
-    <ul data-palette-list role="listbox"></ul>
+    <input type="search" role="combobox" aria-autocomplete="list" aria-controls="palette-results" aria-expanded="false" placeholder="Раздел, игра, сборка, код ошибки…" data-palette-input aria-label="Поиск по панели">
+    <ul id="palette-results" data-palette-list role="listbox" aria-label="Результаты поиска"></ul>
   </div>
 </div>
 
@@ -99,7 +103,7 @@
      модулей версии 1.0 — здесь только порядок шагов. -->
 <script src="/admin/ui/rate-estimator.js"></script>
 <script src="/admin/ui/ui-throttle.js"></script>
-    <script src="/admin/ui/log-scroll.js"></script>
+<script src="/admin/ui/log-scroll.js"></script>
 <script src="/admin/ui/chunk-upload.js"></script>
 <script src="/admin/ui/ndjson.js"></script>
 <script src="/admin/ui/feedback-logs.js"></script>
@@ -107,6 +111,7 @@
 <script src="/admin/ui/build.js"></script>
 <script src="/admin/ui/registry-diff.js"></script>
 <script src="/admin/ui/registry.js"></script>
+<script src="/admin/ui/presentation.js"></script>
 <script src="/admin/ui/news.js"></script>
 <script src="/admin/ui/gallery.js"></script>
 <script src="/admin/ui/upload-tuning.js"></script>
@@ -117,8 +122,6 @@
 <script src="/admin/ui/views.js"></script>
 <!-- Подписи колонок у ячеек: на телефоне строка таблицы рисуется карточкой. -->
 <script src="/admin/ui/table-labels.js"></script>
-<!-- Снимок ответов: подставляется там, где флоу ещё не подключён. -->
-<script src="/admin/ui/data.js"></script>
 <script src="/admin/ui/admin.js"></script>
 </body>
 </html>

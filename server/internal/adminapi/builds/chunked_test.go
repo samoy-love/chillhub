@@ -2,6 +2,7 @@ package builds
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,35 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestCompleteRecoversFromBadArchiveWithoutReadyState(t *testing.T) {
+	h, _ := adminHandlers(t)
+	payload := []byte("valid content")
+	sum := sha256.Sum256(payload)
+	id, _ := initUpload(t, h, fmt.Sprintf(
+		`{"gameId":"game","version":"1.0.0","totalSize":%d,"expectedSha256":"%x"}`, len(payload), sum))
+	if w := putChunk(t, h, id, 0, bytes.Repeat([]byte{'x'}, len(payload))); w.Code != http.StatusOK {
+		t.Fatalf("chunk: %d %s", w.Code, w.Body)
+	}
+	if err := os.Rename(h.uploadZipPartPath(id), h.uploadZipPath(id)); err != nil {
+		t.Fatal(err)
+	}
+	if w := completeUpload(t, h, id); w.Code != http.StatusBadRequest {
+		t.Fatalf("complete corrupt archive: %d %s", w.Code, w.Body)
+	}
+	if w := putChunk(t, h, id, 0, payload); w.Code != http.StatusOK {
+		t.Fatalf("retry chunk: %d %s", w.Code, w.Body)
+	}
+	if w := completeUpload(t, h, id); w.Code != http.StatusOK {
+		t.Fatalf("complete retry: %d %s", w.Code, w.Body)
+	}
+	if err := os.Remove(h.uploadZipPath(id)); err != nil {
+		t.Fatal(err)
+	}
+	if w := completeUpload(t, h, id); w.Code != http.StatusConflict {
+		t.Fatalf("complete lost archive: %d %s", w.Code, w.Body)
+	}
+}
 
 func adminHandlers(t *testing.T) (*Handlers, string) {
 	t.Helper()
@@ -97,8 +127,14 @@ func TestChunkedUploadPublishesTheReassembledArchive(t *testing.T) {
 			t.Fatalf("chunk %d: %d %s", i, w.Code, w.Body.String())
 		}
 	}
-	if w := completeUpload(t, h, id); w.Code != http.StatusOK {
-		t.Fatalf("complete: %d %s", w.Code, w.Body.String())
+	retry := bytes.Repeat([]byte{'x'}, min(m.ChunkSize, len(zipData)))
+	if w := putChunk(t, h, id, 0, retry); w.Code != http.StatusOK {
+		t.Fatalf("duplicate chunk: %d %s", w.Code, w.Body.String())
+	}
+	first := completeUpload(t, h, id)
+	again := completeUpload(t, h, id)
+	if first.Code != http.StatusOK || again.Code != http.StatusOK || first.Body.String() != again.Body.String() {
+		t.Fatalf("complete retry: first %d %s; second %d %s", first.Code, first.Body, again.Code, again.Body)
 	}
 
 	w := processUpload(t, h, id)
@@ -128,6 +164,10 @@ func TestChunkedUploadPublishesTheReassembledArchive(t *testing.T) {
 	// is what used to fill the content volume.
 	if _, err := os.Stat(h.uploadZipPath(id)); err == nil {
 		t.Error("the uploaded archive was kept after a successful publication")
+	}
+	again = processUpload(t, h, id)
+	if again.Code != http.StatusOK || !strings.Contains(again.Body.String(), `"type":"done"`) || strings.Contains(again.Body.String(), `"type":"error"`) {
+		t.Fatalf("process retry: %d %s", again.Code, again.Body)
 	}
 }
 

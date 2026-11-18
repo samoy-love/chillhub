@@ -1,6 +1,7 @@
 package news
 
 import (
+	"errors"
 	"io"
 	"log"
 	"maps"
@@ -183,7 +184,7 @@ func (h *Handlers) AssetsUpload(w http.ResponseWriter, r *http.Request) {
 		// strip extension if client provided it
 		desired = strings.TrimSuffix(desired, filepath.Ext(desired))
 	}
-	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data, extHint, "")
+	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data)
 	if err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to process the image", "news:assets", err)
 		return
@@ -216,13 +217,12 @@ func (h *Handlers) AssetsUploadByURL(w http.ResponseWriter, r *http.Request) {
 	}
 	// The fetch runs on behalf of this request, so it is bound to its context:
 	// an admin who navigates away stops the outbound download too.
-	data, ct, err := media.DownloadURL(r.Context(), srcURL)
+	data, _, err := media.DownloadURL(r.Context(), srcURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	extHint := strings.ToLower(filepath.Ext(strings.Split(strings.Split(srcURL, "?")[0], "#")[0]))
-	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data, extHint, ct)
+	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data)
 	if err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to process the image", "news:assets", err)
 		return
@@ -303,7 +303,11 @@ func (h *Handlers) AssetsRename(w http.ResponseWriter, r *http.Request) {
 	}
 	// #nosec G703 -- both ends are SanitizeFilename output joined onto the
 	// gallery, confirmed by EnsureWithin to stay inside it and not to be its root.
-	if err := os.Rename(src, dst); err != nil {
+	if err := media.RenameAsset(src, dst); err != nil {
+		if errors.Is(err, media.ErrAssetExtension) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to rename", "news:assets", err)
 		return
 	}

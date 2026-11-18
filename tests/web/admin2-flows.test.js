@@ -857,6 +857,102 @@ test('версии игры видно и отдать игрокам можно
   await settle();
 });
 
+test('вкладка версий отличает сбой чтения от отсутствия сборок и повторяет запрос', async (t) => {
+  let mode = 'unavailable';
+  const { window, calls } = await boot({
+    list: ({ url }) => {
+      const gameId = new URL(url, 'https://example.test').searchParams.get('gameId');
+      if (gameId === 'peak') return { ok: false, status: 404, text: async () => 'Сборок нет' };
+      if (gameId === 'repo' && mode === 'unavailable') {
+        return { ok: false, status: 503, text: async () => JSON.stringify({ error: 'Хранилище не отвечает' }) };
+      }
+      if (gameId === 'repo' && mode === 'offline') throw new Error('connection lost');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ items: [{ version: '8.4.2' }], latest: '8.4.2' }),
+      };
+    },
+  });
+  t.after(() => window.close());
+  const doc = window.document;
+  const detail = () => doc.querySelector('[data-game-detail]');
+  const retryButton = () => detail()?.querySelector('[data-game-do="retry-versions"]');
+  const countRequests = () => calls.filter((call) => {
+    const url = new URL(call.url, 'https://example.test');
+    return url.pathname === '/admin/api/list' && url.searchParams.get('gameId') === 'repo';
+  }).length;
+
+  await openScreen(window, '#games');
+  await openTab(window, 'versions');
+  let retry = await until(retryButton);
+  assert.ok(retry, '503 не предложил повторить чтение версий');
+  assert.match(text(detail()), /Хранилище не отвечает/);
+  assert.doesNotMatch(text(detail()), /Сборок нет/);
+  assert.equal(detail().querySelector('[data-game-do="upload"]'), null);
+  const before = countRequests();
+
+  mode = 'offline';
+  retry.click();
+  assert.ok(await until(() => /сервер не отвечает/.test(text(detail()))));
+  assert.equal(countRequests(), before + 1);
+  assert.doesNotMatch(text(detail()), /Сборок нет/);
+  retry = retryButton();
+  assert.ok(retry, 'сетевой сбой убрал повтор чтения');
+
+  mode = 'ready';
+  retry.click();
+  assert.ok(await until(() => /8\.4\.2/.test(text(detail())) && detail().querySelector('[data-game-do="upload"]')));
+  assert.match(text(detail()), /у игроков/);
+  assert.equal(retryButton(), null);
+  assert.equal(countRequests(), before + 2);
+
+  doc.querySelector('[data-pick="peak"]').click();
+  await openTab(window, 'versions');
+  assert.ok(await until(() => /Сборок нет/.test(text(detail()))));
+  assert.equal(retryButton(), null);
+  assert.ok(detail().querySelector('[data-game-do="upload"]'), 'для игры без сборок нельзя залить первую');
+});
+
+test('ответ версий прежней игры не заменяет вкладку выбранной игры', async (t) => {
+  let resolveOld;
+  let oldBodyRead = false;
+  const { window } = await boot({
+    list: ({ url }) => {
+      const gameId = new URL(url, 'https://example.test').searchParams.get('gameId');
+      if (gameId === 'repo') {
+        return new Promise((resolve) => { resolveOld = resolve; });
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ items: [{ version: '7.3.1' }], latest: '7.3.1' }),
+      };
+    },
+  });
+  t.after(() => window.close());
+  const doc = window.document;
+  const detail = () => doc.querySelector('[data-game-detail]');
+  await openScreen(window, '#games');
+  await openTab(window, 'versions');
+  assert.ok(await until(() => resolveOld), 'чтение версий первой игры не началось');
+  doc.querySelector('[data-pick="peak"]').click();
+  await openTab(window, 'versions');
+  assert.ok(await until(() => /7\.3\.1/.test(text(detail()))));
+  resolveOld({
+    ok: false,
+    status: 503,
+    text: async () => {
+      oldBodyRead = true;
+      return 'Запоздалый отказ';
+    },
+  });
+  assert.ok(await until(() => oldBodyRead), 'запоздалый ответ не был обработан');
+  assert.match(text(detail()), /7\.3\.1/);
+  assert.doesNotMatch(text(detail()), /Запоздалый отказ|Сборок нет/);
+  assert.equal(detail().querySelector('[data-game-do="retry-versions"]'), null);
+});
+
 test('правка уезжает всем реестром, не теряя чужих полей', async (t) => {
   // Сервер принимает список целиком, а в строках есть поля, которых
   // экран не показывает
@@ -952,7 +1048,7 @@ test('новая игра проверяется по тем же правила
 
 /* ---------- Откуда данные ---------- */
 
-test('раздел с упавшей ручкой честно говорит, что показывает снимок', async (t) => {
+test('первый отказ раздела не превращается в чужой список или пустой результат', async (t) => {
   // Всплывающего сообщения при запуске мало: оно живёт четыре секунды,
   // а раздел открывают через полчаса
   const { window } = await boot({
@@ -966,10 +1062,11 @@ test('раздел с упавшей ручкой честно говорит, �
   await until(() => window.document.querySelector('h1').textContent === 'Сборки модов');
   const note = await until(() => window.document.querySelector('[data-stale]'));
 
-  assert.ok(note, 'раздел молчит про снимок');
-  assert.match(text(note), /показан снимок/);
+  assert.ok(note, 'раздел молчит про отказ');
+  assert.match(text(note), /Не удалось загрузить/);
   assert.match(text(note), /сборки модов/);
-  assert.match(text(note), /Записывать в этом состоянии нельзя/);
+  assert.match(text(window.document.querySelector('[data-main]')), /Данные недоступны/);
+  assert.equal(window.document.querySelector('[data-act="build"]'), null);
 });
 
 test('обзор помечается так же: он собран из тех же разделов', async (t) => {
@@ -1232,7 +1329,7 @@ test('игра без модпака не исчезает молча, а объ
 
   window.location.hash = '#packs';
   await until(() => window.document.body.textContent.includes('Без модпака'));
-  assert.match(window.document.body.textContent, /Без модпака: PEAK/);
+  assert.match(window.document.body.textContent, /Без модпака:\s*1/);
   assert.ok(window.document.querySelector('[data-act="ecosystem"]'), 'подключить моды негде');
 });
 
@@ -1602,6 +1699,62 @@ test('в реестре игр у строк есть иконки, а в спи
   assert.ok(plain && !plain.querySelector('.news-cover, .pick-icon'), 'у заметки без обложки появилась пустая рамка');
   await settle();
 });
+
+for (const scenario of [
+  {
+    name: 'запоздалая загрузка иконки не меняет карточку другой игры',
+    gameId: 'peak',
+    title: 'Черновик PEAK',
+    iconUrl: '/manifests/peak/existing.png',
+  },
+  {
+    name: 'завершение загрузки иконки сохраняет поля, введённые во время запроса',
+    gameId: 'repo',
+    title: 'Черновик R.E.P.O.',
+    iconUrl: '/manifests/repo/uploaded.png',
+  },
+]) {
+  test(scenario.name, async (t) => {
+    let complete;
+    const uploadResponse = new Promise((resolve) => { complete = resolve; });
+    const { window, calls } = await boot({
+      games: { items: [
+        { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe' },
+        { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe', iconUrl: '/manifests/peak/existing.png' },
+      ] },
+      'games/icon/upload': () => uploadResponse,
+    });
+    t.after(() => window.close());
+    const doc = window.document;
+    const q = (selector) => doc.querySelector(selector);
+    await openScreen(window, '#games');
+    fakePicker(window, new window.File(['icon'], 'icon.png', { type: 'image/png' }));
+    q('[data-flow="icon"]').click();
+    const sent = await until(() => calls.find((call) => {
+      const url = new URL(call.url, window.location.origin);
+      return call.method === 'POST' && url.pathname === '/admin/api/games/icon/upload';
+    }));
+    assert.ok(sent, 'загрузка иконки не началась');
+    assert.equal(sent.body.gameId, 'repo');
+    assert.equal(sent.body.file.name, 'icon.png');
+
+    if (scenario.gameId !== 'repo') q(`[data-pick="${scenario.gameId}"]`).click();
+    q('[name="title"]').value = scenario.title;
+    q('[name="exeRelativePath"]').value = 'Draft.exe';
+    const readsBefore = calls.filter((call) => call.url === '/admin/api/games').length;
+    complete({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ iconUrl: '/manifests/repo/uploaded.png' }),
+    });
+    assert.ok(await until(() => calls.filter((call) => call.url === '/admin/api/games').length > readsBefore));
+    assert.ok(q(`[data-pick="${scenario.gameId}"][aria-current="true"]`));
+    assert.equal(q('[name="iconUrl"]').value, scenario.iconUrl);
+    assert.equal(q('[name="title"]').value, scenario.title);
+    assert.equal(q('[name="exeRelativePath"]').value, 'Draft.exe');
+    await settle();
+  });
+}
 
 test('список новостей не прокручивается внутри карточки', async (t) => {
   const { window } = await boot();

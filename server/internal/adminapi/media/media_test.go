@@ -140,7 +140,7 @@ func TestBlockedIPClassification(t *testing.T) {
 // The asset pipeline must refuse the bomb rather than decode it.
 func TestProcessAndSaveAssetRejectsBomb(t *testing.T) {
 	base := t.TempDir()
-	if _, _, err := ProcessAndSaveAsset(base, "", "bomb", pngBomb(t, 30000, 30000), ".png", ""); err == nil {
+	if _, _, err := ProcessAndSaveAsset(base, "", "bomb", pngBomb(t, 30000, 30000)); err == nil {
 		t.Fatal("ProcessAndSaveAsset decoded a PNG bomb")
 	}
 }

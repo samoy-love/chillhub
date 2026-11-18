@@ -286,6 +286,13 @@ func TestGalleryOnlyScopesContentMount(t *testing.T) {
 	if err := os.WriteFile(galleryFile, []byte("png bytes"), 0o644); err != nil {
 		t.Fatalf("write gallery file: %v", err)
 	}
+	nested := filepath.Join(filepath.Dir(galleryFile), "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "space name.png"), []byte("png bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	buildFile := filepath.Join(contentDir, "lethal-company", "1.0.0", "game.exe")
 	if err := os.MkdirAll(filepath.Dir(buildFile), 0o755); err != nil {
 		t.Fatalf("mkdir build: %v", err)
@@ -312,6 +319,18 @@ func TestGalleryOnlyScopesContentMount(t *testing.T) {
 		{"content root listing blocked", "/content/", http.StatusNotFound},
 		{"game root listing blocked", "/content/lethal-company/", http.StatusNotFound},
 		{"dot-dot traversal to builds blocked", "/content/lethal-company/gallery/../1.0.0/game.exe", http.StatusNotFound},
+		{"escaped dot-dot traversal blocked", "/content/lethal-company/gallery/%2e%2e/1.0.0/game.exe", http.StatusNotFound},
+		{"escaped slash traversal blocked", "/content/lethal-company/gallery/%2e%2e%2f1.0.0/game.exe", http.StatusNotFound},
+		{"nested directory without slash blocked", "/content/lethal-company/gallery/nested", http.StatusNotFound},
+		{"nested directory with slash blocked", "/content/lethal-company/gallery/nested/", http.StatusNotFound},
+		{"nested file served", "/content/lethal-company/gallery/nested/space%20name.png", http.StatusOK},
+	}
+	if err := os.Symlink(buildFile, filepath.Join(nested, "linked.exe")); err == nil {
+		cases = append(cases, struct {
+			name       string
+			path       string
+			wantStatus int
+		}{"symlink outside gallery blocked", "/content/lethal-company/gallery/nested/linked.exe", http.StatusNotFound})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

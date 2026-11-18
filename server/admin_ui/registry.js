@@ -111,7 +111,9 @@
       if (!norm(item.title)) {
         out.push({ gameId: id, field: 'title', message: where + ': пустое название — игрок увидит идентификатор' });
       }
-      if (!norm(item.exeRelativePath)) {
+      const modsOnly = item.mods && item.mods.enabled && /^\d+$/.test(norm(item.mods.steamAppId)) &&
+        Array.isArray(item.mods.exeNames) && item.mods.exeNames.some((name) => norm(name));
+      if (!norm(item.exeRelativePath) && !modsOnly) {
         out.push({ gameId: id, field: 'exeRelativePath', message: where + ': не указан исполняемый файл — запускать будет нечего' });
       }
     });

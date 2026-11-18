@@ -89,11 +89,11 @@ type StagedTree struct {
 // StageTree creates a staging directory on the same volume as the final one,
 // so publication is a rename rather than a copy.
 //
-// gid and version must already have passed adminutil.IsSafeGameID and
+// gid and version must already have passed adminutil.IsCatalogGameID and
 // IsSafeVersion; this is not the place that decides whether a caller-supplied
 // id may become a path.
 func (h *Handlers) StageTree(ns Namespace, gid, version string) (*StagedTree, error) {
-	if !adminutil.IsSafeGameID(gid) {
+	if !adminutil.IsCatalogGameID(gid) {
 		return nil, fmt.Errorf("builds: unsafe gameId %q", gid)
 	}
 	if !adminutil.IsSafeVersion(version) {
@@ -180,6 +180,21 @@ func treeDigest(files []manifestFile) string {
 // a pack which resolved with missing mods never reaches players just because
 // the download finished.
 func (h *Handlers) Publish(s *StagedTree, updateLatest bool, onFile func(path string, size int64)) (PublishResult, error) {
+	return h.publishStaged(s, updateLatest, onFile, nil)
+}
+
+const modSourceFile = "source.json"
+
+// PublishModpack stages the source record alongside the files before promoting
+// the version. The record then follows the same rename and rollback as the tree.
+func (h *Handlers) PublishModpack(s *StagedTree, onFile func(string, int64), source func(PublishResult) ([]byte, error)) (PublishResult, error) {
+	if s == nil || s.ns != NamespaceMods || source == nil {
+		return PublishResult{}, errors.New("builds: modpack publication requires a staged modpack and source")
+	}
+	return h.publishStaged(s, false, onFile, source)
+}
+
+func (h *Handlers) publishStaged(s *StagedTree, updateLatest bool, onFile func(string, int64), source func(PublishResult) ([]byte, error)) (PublishResult, error) {
 	var res PublishResult
 	if s == nil {
 		return res, errors.New("builds: no staged tree")
@@ -216,36 +231,72 @@ func (h *Handlers) Publish(s *StagedTree, updateLatest bool, onFile func(path st
 	if err := publishable(m); err != nil {
 		return res, err
 	}
+	res = PublishResult{Version: s.version, Files: len(files), Bytes: total, TreeDigest: treeDigest(files)}
+	if source != nil {
+		data, err := source(res)
+		if err != nil {
+			return PublishResult{}, err
+		}
+		if err := adminutil.WriteFileAtomic(filepath.Join(s.Dir, modSourceFile), data, contentFilePerm); err != nil {
+			return PublishResult{}, fmt.Errorf("builds: store modpack source: %w", err)
+		}
+	}
 
 	// The lock covers promote + manifest write, exactly as the upload paths do:
 	// two publications of the same version otherwise destroy each other's
 	// backup, and the winner of the content rename is not necessarily the one
 	// that writes the manifest last.
-	unlock := lockPublish(string(s.ns)+"/"+s.gameID, s.version)
+	manDir := h.ManifestsDirFor(s.ns, s.gameID)
+	unlock := lockPublish(manDir)
 	defer unlock()
 
 	finalDir := filepath.Join(h.ContentDirFor(s.ns, s.gameID), s.version)
-	stage := s.Dir
-	s.Dir = "" // promoted; Discard must not delete the live version
-
 	// See Upload: the replaced tree comes home if the manifest cannot be written.
-	path, _, err := h.publishTree(stage, finalDir, h.ManifestsDirFor(s.ns, s.gameID), m, updateLatest)
+	path, _, err := h.publishTree(s.Dir, finalDir, manDir, m, updateLatest)
 	if err != nil {
-		return res, err
+		return PublishResult{}, err
 	}
+	s.Dir = ""
+	if s.ns == NamespaceMods {
+		removeLegacyModSource(manDir, s.version)
+	}
+	res.ManifestPath = path
+	return res, nil
+}
 
-	return PublishResult{
-		Version: s.version, Files: len(files), Bytes: total, ManifestPath: path,
-		TreeDigest: treeDigest(files),
-	}, nil
+// ReadModSource reads current source data with a fallback for versions
+// published before it was moved into the content tree.
+func ReadModSource(root, gid, version string) ([]byte, error) {
+	if !adminutil.IsCatalogGameID(gid) || !adminutil.IsSafeVersion(version) {
+		return nil, errors.New("builds: unsafe modpack gameId/version")
+	}
+	// #nosec G304 -- both path components have been validated above.
+	data, err := os.ReadFile(filepath.Join(root, "content", string(NamespaceMods), gid, version, modSourceFile))
+	if !os.IsNotExist(err) {
+		return data, err
+	}
+	// #nosec G304 -- same validation as the current source path.
+	return os.ReadFile(legacyModSourcePath(filepath.Join(root, "manifests", string(NamespaceMods), gid), version))
+}
+
+func legacyModSourcePath(dir, version string) string {
+	return filepath.Join(dir, "sources", version+".json")
+}
+
+func removeLegacyModSource(dir, version string) {
+	if err := os.Remove(legacyModSourcePath(dir, version)); err != nil && !os.IsNotExist(err) {
+		log.Printf("[builds] remove old modpack source %s/%s: %v", dir, version, err)
+	}
 }
 
 // ActivateVersion points a namespace's latest.json at an existing version.
 func (h *Handlers) ActivateVersion(ns Namespace, gid, version string) error {
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(version) {
+	if !adminutil.IsCatalogGameID(gid) || !adminutil.IsSafeVersion(version) {
 		return errors.New("builds: unsafe gameId/version")
 	}
 	dir := h.ManifestsDirFor(ns, gid)
+	unlock := lockPublish(dir)
+	defer unlock()
 	if _, err := os.Stat(filepath.Join(dir, version+".json")); err != nil {
 		return fmt.Errorf("builds: version %q has no manifest", version)
 	}
@@ -283,11 +334,8 @@ func (h *Handlers) VersionStats(ns Namespace, gid, version string) (createdAt st
 // The active version is refused: deleting what latest.json points at leaves
 // every client asking for a manifest that is gone.
 func (h *Handlers) DeletePublished(ns Namespace, gid, version string) error {
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(version) {
+	if !adminutil.IsCatalogGameID(gid) || !adminutil.IsSafeVersion(version) {
 		return errors.New("builds: unsafe gameId/version")
-	}
-	if h.LatestVersion(ns, gid) == version {
-		return fmt.Errorf("builds: version %q is the active one; activate another version first", version)
 	}
 
 	// ANCHORED ON THE VERSION'S OWN PARENT, not on the content root.
@@ -309,8 +357,11 @@ func (h *Handlers) DeletePublished(ns Namespace, gid, version string) error {
 	// The same lock the publishing paths take. Without it a delete can land
 	// between a concurrent promote and its manifest write, leaving a published
 	// manifest whose files are gone — every client then 404s on every file.
-	unlock := lockPublish(string(ns)+"/"+gid, version)
+	unlock := lockPublish(manDir)
 	defer unlock()
+	if readLatestVersion(manDir) == version {
+		return fmt.Errorf("builds: version %q is the active one; activate another version first", version)
+	}
 
 	// The manifest goes first: once it is gone the version is invisible to
 	// every reader, and a failure to remove the tree leaves a stray directory
@@ -320,6 +371,9 @@ func (h *Handlers) DeletePublished(ns Namespace, gid, version string) error {
 	}
 	if err := os.RemoveAll(conDir); err != nil {
 		log.Printf("[builds] delete %s %s/%s content: %v", ns, gid, version, err)
+	}
+	if ns == NamespaceMods {
+		removeLegacyModSource(manDir, version)
 	}
 	return nil
 }

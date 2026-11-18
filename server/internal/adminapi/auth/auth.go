@@ -13,7 +13,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"strconv"
@@ -315,12 +317,18 @@ const maxLoginBodyBytes = 64 << 10
 func readLoginRequest(w http.ResponseWriter, r *http.Request) loginRequest {
 	var in loginRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
-	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
-		_ = json.NewDecoder(r.Body).Decode(&in)
+	contentType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if contentType == "application/json" {
+		body, err := io.ReadAll(r.Body)
+		if err != nil || json.Unmarshal(body, &in) != nil {
+			return loginRequest{}
+		}
 	} else {
-		_ = r.ParseForm()
-		in.Username = r.FormValue("username")
-		in.Password = r.FormValue("password")
+		if r.ParseForm() != nil {
+			return loginRequest{}
+		}
+		in.Username = r.PostForm.Get("username")
+		in.Password = r.PostForm.Get("password")
 	}
 	in.Username = strings.TrimSpace(in.Username)
 	return in

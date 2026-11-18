@@ -46,7 +46,7 @@ function boot(opts) {
     const headers = (init && init.headers) || {};
     const get = (n) => (typeof headers.get === 'function' ? headers.get(n) : headers[n]);
     calls.push({ url, method: (init && init.method) || 'GET', csrf: get('X-CSRF-Token') || null });
-    const status = o.status && calls.length === 1 ? o.status : 200;
+    const status = o.respond ? await o.respond(url) : o.status && calls.length === 1 ? o.status : 200;
     return { ok: status < 400, status, text: async () => '{}' };
   };
 
@@ -213,4 +213,33 @@ test('повтор идёт с тем же методом и теми же за�
   const retry = calls[calls.length - 1];
   assert.strictEqual(retry.method, 'POST');
   assert.strictEqual(retry.csrf, TOKEN, 'повтор ушёл без токена');
+});
+
+test('два отказа используют одно продление сессии', async (t) => {
+  let renewed = false;
+  const { window, calls } = boot({
+    respond: async (url) => {
+      if (url.endsWith('/auth/refresh')) {
+        await new Promise((resolve) => setImmediate(resolve));
+        renewed = true;
+        return 200;
+      }
+      return renewed ? 200 : 401;
+    },
+  });
+  t.after(() => window.close());
+  const responses = await Promise.all([
+    window.fetch('/admin/api/games'),
+    window.fetch('/admin/api/list?gameId=launcher'),
+  ]);
+  assert.deepStrictEqual(responses.map((res) => res.status), [200, 200]);
+  assert.strictEqual(calls.filter((call) => call.url.endsWith('/auth/refresh')).length, 1);
+});
+
+test('чужой 401 и собственный отказ продлить сессию не повторяются', async (t) => {
+  const { window, calls } = boot({ respond: () => 401 });
+  t.after(() => window.close());
+  assert.strictEqual((await window.fetch(FOREIGN)).status, 401);
+  assert.strictEqual((await window.fetch('/admin/api/auth/refresh', { method: 'POST' })).status, 401);
+  assert.deepStrictEqual(calls.map((call) => call.url), [FOREIGN, '/admin/api/auth/refresh']);
 });

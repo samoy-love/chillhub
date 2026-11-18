@@ -62,9 +62,10 @@ type manifest struct {
 	// BlockSize — размер блока, по которому посчитаны "blocks" файлов (см.
 	// blocks.go). Ноль — у манифеста хешей блоков нет, лаунчер качает файлы
 	// целиком, как до их появления.
-	BlockSize int64          `json:"blockSize,omitempty"`
-	Files     []manifestFile `json:"files"`
-	EmptyDirs []string       `json:"emptyDirs"`
+	BlockSize  int64           `json:"blockSize,omitempty"`
+	Files      []manifestFile  `json:"files"`
+	EmptyDirs  []string        `json:"emptyDirs"`
+	SmallPacks []smallFilePack `json:"smallPacks,omitempty"`
 }
 
 type manifestFile struct {
@@ -143,17 +144,86 @@ func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 // afterwards, with the backup already gone.
 func (h *Handlers) publishTree(
 	stageDir, finalDir, manifestDir string, m manifest, updateLatest bool) (string, []byte, error) {
+	packs, err := writeSmallPacks(stageDir, m)
+	if err != nil {
+		return "", nil, fmt.Errorf("preparing small file packs: %w", err)
+	}
+	m.SmallPacks = packs
+	var previousManifest string
+	if updateLatest {
+		previousManifest, err = backupVersionManifest(filepath.Join(manifestDir, m.Version+".json"))
+		if err != nil {
+			return "", nil, fmt.Errorf("backing up the published manifest: %w", err)
+		}
+		defer func() {
+			if previousManifest != "" {
+				_ = os.RemoveAll(filepath.Dir(previousManifest))
+			}
+		}()
+	}
 	prom, err := beginPromote(stageDir, finalDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: %w", errPromoteFailed, err)
 	}
-	path, b, err := h.writeManifestTo(manifestDir, m, updateLatest)
+	path, b, err := h.writeManifestTo(manifestDir, m, false)
 	if err != nil {
 		prom.Rollback(err)
 		return "", nil, err
 	}
+	if updateLatest {
+		if err := writePublishedLatest(manifestDir, m); err != nil {
+			if restoreErr := restoreVersionManifest(path, previousManifest); restoreErr != nil {
+				// Keep the new tree paired with its manifest, and preserve both
+				// backups for manual recovery if the filesystem no longer lets
+				// us restore the manifest.
+				log.Printf("[builds] CRITICAL: unable to roll back manifest %s (%v); previous manifest %q, previous tree %q",
+					path, restoreErr, previousManifest, prom.backup)
+				previousManifest = ""
+				return "", nil, errors.Join(err, fmt.Errorf("restoring the published manifest: %w", restoreErr))
+			}
+			prom.Rollback(err)
+			return "", nil, err
+		}
+	}
 	prom.Commit()
 	return path, b, nil
+}
+
+// Save the old manifest beside the live one so undoing a failed activation
+// only requires renaming it, even when the latest write ran out of disk space.
+func backupVersionManifest(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a regular manifest file", path)
+	}
+	// #nosec G304 -- the manifest path comes from the validated publication target.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(filepath.Dir(path), ".manifest-backup-*")
+	if err != nil {
+		return "", err
+	}
+	backup := filepath.Join(dir, filepath.Base(path))
+	if err := adminutil.WriteFileAtomic(backup, data, info.Mode().Perm()); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	return backup, nil
+}
+
+func restoreVersionManifest(path, backup string) error {
+	if backup == "" {
+		return os.Remove(path)
+	}
+	return os.Rename(backup, path)
 }
 
 // errPromoteFailed marks the half of publishTree that failed before anything
@@ -283,7 +353,7 @@ func dropBackup(backup string) {
 	}
 }
 
-// publishLocks serialises publication per gameId+version.
+// publishLocks serialises changes per game's manifest directory.
 //
 // beginPromote first deletes every finalDir+".old-*" it finds and only
 // then renames the live version aside under that same pattern. Two publications
@@ -303,11 +373,10 @@ type publishLock struct {
 	refs int
 }
 
-// lockPublish blocks until the gameId+version pair is free and returns the
-// unlock function. Entries are reference-counted so the map cannot grow with
-// every published version.
-func lockPublish(gid, ver string) func() {
-	key := strings.ToLower(gid) + "\x00" + ver
+// lockPublish serializes changes to the manifests in one directory, including
+// latest.json, across all publication and deletion entry points.
+func lockPublish(manifestsDir string) func() {
+	key := strings.ToLower(filepath.Clean(manifestsDir))
 	publishLocks.mu.Lock()
 	if publishLocks.m == nil {
 		publishLocks.m = make(map[string]*publishLock)
@@ -540,25 +609,19 @@ func (h *Handlers) writeManifestTo(outDir string, m manifest, updateLatest bool)
 		return "", nil, err
 	}
 	if updateLatest {
-		// A failed latest.json write FAILS THE PUBLICATION.
-		//
-		// The operator ticked "update latest", so the whole point of the request
-		// was to make this version the one launchers download. If the pointer is
-		// not repointed, the version sits on disk and every client keeps getting
-		// the previous one — while the panel says the build was published. The
-		// operator walks away, and the discrepancy surfaces days later as
-		// "players do not get the update".
-		//
-		// The files already written are harmless: an unreferenced version
-		// directory and its manifest are exactly what an inactive version looks
-		// like, and republishing overwrites them. Reporting the failure costs a
-		// retry; hiding it costs a silent non-release.
-		if err := writeLatestJSON(outDir, m.Version); err != nil {
-			log.Printf("[builds] manifest %s/%s written but latest.json not updated: %v", m.GameID, m.Version, err)
-			return "", nil, fmt.Errorf("manifest written but latest.json not updated: %w", err)
+		if err := writePublishedLatest(outDir, m); err != nil {
+			return "", nil, err
 		}
 	}
 	return outPath, b, nil
+}
+
+func writePublishedLatest(dir string, m manifest) error {
+	if err := writeLatestJSON(dir, m.Version); err != nil {
+		log.Printf("[builds] manifest %s/%s written but latest.json not updated: %v", m.GameID, m.Version, err)
+		return fmt.Errorf("manifest written but latest.json not updated: %w", err)
+	}
+	return nil
 }
 
 // writeLatestJSON points the game's latest.json at a version.
@@ -577,7 +640,7 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId", http.StatusBadRequest)
 		return
 	}
-	if !adminutil.IsSafeGameID(gid) {
+	if !adminutil.IsCatalogGameID(gid) {
 		http.Error(w, "invalid gameId", http.StatusBadRequest)
 		return
 	}
@@ -815,15 +878,17 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId or version", http.StatusBadRequest)
 		return
 	}
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
+	if !adminutil.IsCatalogGameID(gid) || !adminutil.IsSafeVersion(ver) {
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
+	dir := h.manifestsDir(gid)
+	unlock := lockPublish(dir)
+	defer unlock()
 	if !h.hasVersionManifest(gid, ver) {
 		http.Error(w, "version manifest not found", http.StatusNotFound)
 		return
 	}
-	dir := h.manifestsDir(gid)
 	b, err := json.MarshalIndent(map[string]string{"version": ver}, "", "  ")
 	if err == nil {
 		err = adminutil.WriteFileAtomic(filepath.Join(dir, "latest.json"), b, contentFilePerm)
@@ -868,11 +933,13 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId or version", http.StatusBadRequest)
 		return
 	}
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
+	if !adminutil.IsCatalogGameID(gid) || !adminutil.IsSafeVersion(ver) {
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
 	manDir := h.manifestsDir(gid)
+	unlock := lockPublish(manDir)
+	defer unlock()
 	if err := h.removeVersion(gid, ver); err != nil {
 		log.Printf("[builds] delete %s/%s: %v", gid, ver, err)
 		// A version that does not name a directory inside its game is a bad
@@ -900,6 +967,7 @@ var errUnsafeVersionPath = errors.New("builds: version path escapes its game dir
 
 // removeVersion erases one published version: its manifest and its extracted
 // content directory. gid and ver must already have passed the safety checks.
+// The caller holds the publication lock for the game's manifests directory.
 //
 // THE JOINED PATHS ARE RE-CHECKED HERE, and that is not belt-and-braces. The
 // version does not have to come from a request: PruneVersions derives it from a
@@ -920,14 +988,6 @@ func (h *Handlers) removeVersion(gid, ver string) error {
 	if !adminutil.EnsureStrictlyWithin(manDir, manPath) || !adminutil.EnsureStrictlyWithin(contentDir, filesDir) {
 		return fmt.Errorf("%w: %s/%s", errUnsafeVersionPath, gid, ver)
 	}
-	// The same lock every publication takes around promote + manifest write.
-	// Deleting without it can slice a concurrent republication of this version
-	// in half: the promote lands, this RemoveAll erases the tree, and the
-	// manifest write that follows publishes a version with no files behind it —
-	// a 404 on every file for every client, with the panel listing the version
-	// as present.
-	unlock := lockPublish(gid, ver)
-	defer unlock()
 	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
 			return err
@@ -998,16 +1058,22 @@ func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "malformed form", http.StatusBadRequest)
+		return
+	}
 	gid := r.URL.Query().Get("gameId")
 	if gid == "" {
 		http.Error(w, "missing gameId", http.StatusBadRequest)
 		return
 	}
-	if !adminutil.IsSafeGameID(gid) {
+	if !adminutil.IsCatalogGameID(gid) {
 		http.Error(w, "invalid gameId", http.StatusBadRequest)
 		return
 	}
 	dir := h.manifestsDir(gid)
+	unlock := lockPublish(dir)
+	defer unlock()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// Do not echo the filesystem error: it carries the absolute content root.
@@ -1033,7 +1099,7 @@ func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
 	// Параметр необязателен: без него ручка ведёт себя как раньше. Обязательным
 	// его сделать нельзя, не сломав уже разосланные копии панели, а отказ по
 	// расхождению защищает ровно того, кто список прислал.
-	if expected, ok := r.URL.Query()["expected"]; ok {
+	if expected, ok := r.Form["expected"]; ok {
 		if diff := versionSetDiff(victims, expected); diff != "" {
 			log.Printf("[builds] prune %s: refused, %s", gid, diff)
 			http.Error(w, "the set of old versions changed since the panel showed it; reopen and try again", http.StatusConflict)
@@ -1076,7 +1142,9 @@ func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
 func versionSetDiff(server, expected []string) string {
 	want := make(map[string]bool, len(expected))
 	for _, v := range expected {
-		want[strings.TrimSpace(v)] = true
+		if v = strings.TrimSpace(v); v != "" {
+			want[v] = true
+		}
 	}
 	have := make(map[string]bool, len(server))
 	for _, v := range server {

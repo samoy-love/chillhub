@@ -121,38 +121,46 @@ docs/              всё остальное, если нужно
 
 ## Команды
 
-Нужны Go 1.26+, .NET 8 SDK, Node 24, PowerShell 7.
+Нужны Go по `server/go.mod`, Node 24, PowerShell 7 и Rust с `rustfmt`/Clippy.
+Для Windows-клиента поддерживаются MSVC с Windows SDK и GNU с LLVM-MinGW;
+закреплённый CI toolchain готовит `scripts/ci/ensure-native-rust.ps1`.
+
+Команды из корня репозитория:
 
 ```powershell
-scripts\run-dev.ps1     # api (:55700) + admin (:55777) + клиент, три окна
-scripts\run-admin.ps1   # только админка
-scripts\run-client.ps1  # только клиент
+npm ci
+node --test tests/web/*.test.js
+./launcher/ChillHub.Native/build.ps1 -FormatCheck
+./launcher/ChillHub.Native/build.ps1 -Clippy
+$env:CHILLHUB_UI_QA = '1'
+./launcher/ChillHub.Native/build.ps1 -Test
+./launcher/ChillHub.Native/build.ps1          # клиент и оба помощника
 ```
-
-Перед пушем — ровно то, что гоняет CI (`.github/workflows/ci.yml`):
 
 ```bash
 cd server && go vet ./... && go test ./... -race && golangci-lint run
-cd ../launcher/tests/ChillHub.Tests && dotnet test
-node --test tests/web/*.test.js          # из корня, нужен npm ci
 ```
 
-Одиночные тесты:
+`./scripts/native-ci.ps1 -ValidationOnly` объединяет Native-проверки и сборку,
+как в `.github/workflows/ci.yml`. Отдельные CI-гейты —
+`scripts/native-coverage.ps1`, `scripts/native-mutations.ps1`, аудит зависимостей
+и `scripts/ci/native-installer-smoke.ps1`.
 
-```bash
-go test ./internal/adminapi/builds -run TestUploadZip -race   # из server/
-dotnet test --filter FullyQualifiedName~SyncFileRulesTests    # из launcher/tests/ChillHub.Tests
-node --test tests/web/mods-panel.test.js                      # из корня
+Для одной группы UI-тестов:
+
+```powershell
+./launcher/ChillHub.Native/build.ps1 -Test -Component Launcher -TestTarget ui_render
 ```
 
-Линтеры (`make lint` = `lint-web` + `lint-go` + `lint-dotnet`) пинятся по
-версиям в двух местах одновременно — `Makefile` и шапка `ci.yml`. Расхождение
-означает «локально чисто, PR красный».
+`-Component Launcher` и `-Component Helpers` собираются отдельно: объединение
+features подтянет графические зависимости клиента в маленькие помощники.
+`launcher/ChillHub.Native/package.ps1 -SkipBuild -Zip` упаковывает готовую полную
+сборку; `scripts/native-installer.ps1 -PackageManifest <путь>` создаёт NSIS Setup.
 
-`dotnet format --verify-no-changes` — блокирующая проверка для четырёх
-проектов: `launcher/ChillHub`, `launcher/tests/ChillHub.Tests`, `updater`,
-`updater/tests/ManifestPreserveCheck`. Файлы `.cs`/`.xaml` прибиты к CRLF
-через `.gitattributes` — иначе проверка выдаёт тысячи фантомных диффов.
+`make lint` запускает `lint-repo`, `lint-web`, `lint-go`, `lint-native`.
+Версии веб- и Go-линтеров согласованы между `Makefile` и CI.
+`scripts/run-admin.ps1` запускает админку; `scripts/run-client.ps1` и клиентская
+часть `scripts/run-dev.ps1` относятся к прежнему C#-клиенту.
 
 Смоук по проду: `make smoke` (переопределяется `SITE_BASE=...`).
 Выкатка — только `dk deploy`, цели описаны в `.deploy-kit/*.env`.
@@ -168,9 +176,14 @@ node --test tests/web/mods-panel.test.js                      # из корня
 | Морда админки | `server/admin_ui` (vanilla JS, без сборщика) | статика `/admin/ui/*` |
 | Лендинг | `landing/` | корень `/` |
 
-Клиент (`launcher/`, C# WPF, net8.0-windows, self-contained) к прод-серверу
-не выкатывается: он приезжает установщиком NSIS (`scripts/installer.nsi`) и
-обновляет себя сам.
+Клиент — Rust/Slint в `launcher/ChillHub.Native/`; он не выкатывается на
+прод-сервер. NSIS (`scripts/installer.nsi`, режим `NATIVE_CLIENT`) доставляет
+`ChillHub.exe`, `ChillHub.Updater.exe` и `ChillHub.SecurityHelper.exe`.
+Все три используют общее ядро `src/lib.rs` (скачивание, очередь, манифесты,
+конфиг, запуск и обновление). UI — `ui/app.slint`, `ui/auxiliary.slint` и
+`ui/setup.slint`; клиентские привязки — `src/main.rs` и `src/controller/`.
+`launcher/ChillHub/`, `launcher/tests/ChillHub.Tests` и `updater/` — прежняя
+C#/WPF-реализация для справки и сравнения паритета; текущий CI собирает Native.
 
 Полная карта — `docs/spec.md`: §3.1 «консистентность путей» (кто какой путь
 знает — установщик, клиент, API, nginx), §3.2 разбиение серверных пакетов,
@@ -183,16 +196,16 @@ node --test tests/web/mods-panel.test.js                      # из корня
 `D:\Games\ChillHub` — игры. Конфиг, попавший в каталог установки, входит в
 манифест самообновления, хеши не сходятся никогда — лаунчер обновляется вечно.
 Тот же цикл ловится, если файл одновременно в манифесте лаунчера и под
-preserve-правилами `updater/UpdatePreserve.cs`; детектор —
-`updater/tests/ManifestPreserveCheck` (в CI гоняет самопроверку, против
-настоящих манифестов запускается вручную с путём к `content/manifests/launcher`).
+preserve-правилами `launcher/ChillHub.Native/src/update.rs`; это проверяют
+`src/update_tests.rs` и `scripts/native-package-tests.ps1`.
 
-**Версия клиента живёт в `launcher/ChillHub/ChillHub.csproj` (`<Version>`) и
-держится на шаг впереди прода.** Иначе локальная сборка считает себя устаревшей
-и на старте уходит в окно самообновления.
+**Версия клиента живёт в `launcher/ChillHub.Native/Cargo.toml`** и совпадает с
+версией пакета в `Cargo.lock` и первым выпуском `Data/changelog.json`.
+`scripts/ci/native-version.py` проверяет совпадение, превышение версии прода
+и отсутствие уже опубликованного манифеста с тем же номером.
 
-**Себя лаунчер обновляет отдельным exe** (`updater/`) — запущенный процесс не
-может переписать свои файлы.
+**Себя лаунчер обновляет отдельным exe** (`ChillHub.Updater.exe`,
+`src/bin/updater.rs`) — запущенный процесс не может переписать свои файлы.
 
 **Маршруты админки объявляются один раз** в `apiRoutes()`
 (`server/cmd/admin/routes.go`) под каноническим `/admin/api/...`; форма
@@ -209,9 +222,10 @@ preserve-правилами `updater/UpdatePreserve.cs`; детектор —
 **`content/` не в git** (манифесты, файлы версий, новости, метрики, инбокс
 обратной связи). Тесты, которым нужен контент, готовят его сами.
 
-**Тесты лаунчера идут последовательно** (`xunit.runner.json`): тестируемый код
-держит состояние в статике процесса — каталог логов, `ConfigService.Current`,
-переменные окружения, файлы квот в `%APPDATA%`.
+**Тестовые настройки и игры изолируются.** `CHILLHUB_DATA_DIR` отключает
+миграцию из `%LOCALAPPDATA%`, `CHILLHUB_GAMES_DIR` задаёт отдельную папку игр.
+Для ручной проверки пакет создаёт `ChillHub-Preview.lnk` с собственным
+`--preview-directory`. Реальные конфиг и игры не служат тестовыми фикстурами.
 
 **Ничего не подписано** — решение, а не упущение; подлинность держится на TLS.
 Установщик пользовательский, без прав администратора.
@@ -219,16 +233,14 @@ preserve-правилами `updater/UpdatePreserve.cs`; детектор —
 ## Тексты для игрока
 
 Всё, что видит игрок в лаунчере, — простым языком, без техжаргона и
-ИИ-штампов. Тексты сообщений вынесены в отдельные классы
-(`Core/Net/OfflineMessage.cs`, `Core/Home/HomeFormat.cs`, `Core/Game/…`) и
-покрыты тестами — правьте текст там, а не в разметке.
+штампов. Статусы и подписи действий — `src/controller/launch_presentation.rs`
+и `src/queue_ui.rs`, разметка и подписи окон — `ui/*.slint` (все пути от
+`launcher/ChillHub.Native/`). Сообщения операций живут в соответствующих
+модулях `src/`; меняйте текст вместе с проверяющими его тестами.
 
-Список обновлений (`Core/Changelog/ChangelogData.cs`) пишется ещё короче:
-окно «Что нового» показывает всю историю разом, поэтому каждая лишняя строка
-про вчерашнюю мелочь отодвигает важное. Выпуск называется результатом одной
-фразой — «починена очередь загрузок», а не три строки про значки, объём и
-падение. Потолок — три пункта на выпуск и 110 символов на пункт, и его
-проверяет `ChangelogTests`.
+Список обновлений — `Data/changelog.json`, отбор выпусков — `src/changelog.rs`.
+Выпуск называется результатом одной фразой. Потолок — три пункта на текущий
+выпуск и 110 символов на пункт; это проверяет `src/changelog_tests.rs`.
 
 ---
 

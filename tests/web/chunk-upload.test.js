@@ -10,6 +10,25 @@ const path = require('node:path');
 
 const { putChunkXHR, pendingBytes, uploadChunkWithRetries, runWorkerPool } = require(path.join('..', '..', 'server', 'admin_ui', 'chunk-upload.js'));
 
+test('просроченная сессия продлевается перед повтором чанка', async () => {
+  let refreshed = false;
+  const result = await uploadChunkWithRetries('id', 0, new Uint8Array(1), {
+    put: async () => ({ ok: refreshed, status: refreshed ? 200 : 401 }),
+    refresh: async () => { refreshed = true; },
+    maxAttempts: 2,
+  });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.attempts, 2);
+});
+
+test('ошибка воркера отмечает повреждённый чанк и освобождает очередь', async () => {
+  const failed = await runWorkerPool([0, 1, 2], () => 1, async (index) => {
+    if (index === 1) throw new Error('chunk failed');
+    return true;
+  });
+  assert.deepStrictEqual(failed, [1]);
+});
+
 test('pendingBytes суммирует байты всех незавершённых чанков', () => {
   const inFlight = new Map([[0, 100], [3, 250], [7, 0]]);
   assert.strictEqual(pendingBytes(inFlight), 350);

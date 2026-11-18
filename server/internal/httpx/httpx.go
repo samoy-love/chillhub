@@ -217,9 +217,9 @@ func (p corsPolicy) apply(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p.echoAllowedOrigin(w, r)
 	}
-	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Requested-With, X-Request-ID")
-	w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, Content-Length")
+	w.Header().Set("Access-Control-Allow-Methods", "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, If-Match, X-Requested-With, X-Request-ID, X-CSRF-Token")
+	w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, Content-Length, ETag")
 }
 
 // echoAllowedOrigin echoes the request Origin back only when it is on the

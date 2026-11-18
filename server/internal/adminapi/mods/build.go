@@ -8,7 +8,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,6 +63,7 @@ type Request struct {
 	GameID string
 	// EcosystemGame is the game's key in the Thunderstore ecosystem schema.
 	EcosystemGame string
+	Community     string
 
 	Kind SourceKind
 
@@ -154,10 +154,8 @@ func (p *Plan) logSkips(community string) {
 	}
 }
 
-// Source records what a published version was built from. Stored next to the
-// manifest as {version}.src.json and used for the composition diff between two
-// versions, which is the thing an operator actually wants to see before making
-// a pack live.
+// Source records what a published version was built from. It is saved with
+// the staged content and used for the composition diff between versions.
 type Source struct {
 	Kind        SourceKind `json:"kind"`
 	Version     string     `json:"version"`
@@ -521,39 +519,33 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 	clashes := layout.Collisions()
 	reportCollisions(version, clashes, emit)
 
-	hashed := 0
-	pub, err := b.Builds.Publish(staged, false, func(_ string, _ int64) {
-		hashed++
-		if hashed%200 == 0 {
-			emit.send(Event{Type: "hashing", Step: hashed, Message: "подсчёт хешей"})
-		}
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	src := &Source{
 		Kind:        req.Kind,
 		Version:     version,
 		DisplayName: req.DisplayName(),
+		PackageURL:  req.PackageURL(req.Community),
 		BuiltAt:     time.Now().UTC().Format(time.RFC3339),
 		Loader:      plan.Loader,
 		Tree:        packageNames(plan.Packages),
 		Missing:     plan.Missing,
-		Files:       pub.Files,
-		Bytes:       pub.Bytes,
 
 		Foreign:      plan.Foreign,
 		ExtraLoaders: plan.ExtraLoaders,
 		Roots:        plan.Roots,
 		Collisions:   clashes,
-		TreeDigest:   pub.TreeDigest,
 	}
-	if err := b.writeSource(req.GameID, version, src); err != nil {
-		// The version itself is published and correct; only the sidecar that
-		// powers the composition diff is missing. Say so rather than pretending
-		// the build failed.
-		log.Printf("[mods] %s/%s published but its source record was not stored: %v", req.GameID, version, err)
+	hashed := 0
+	pub, err := b.Builds.PublishModpack(staged, func(_ string, _ int64) {
+		hashed++
+		if hashed%200 == 0 {
+			emit.send(Event{Type: "hashing", Step: hashed, Message: "подсчёт хешей"})
+		}
+	}, func(result builds.PublishResult) ([]byte, error) {
+		src.Files, src.Bytes, src.TreeDigest = result.Files, result.Bytes, result.TreeDigest
+		return json.MarshalIndent(src, "", "  ")
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	emit.send(Event{
@@ -718,36 +710,9 @@ func packageNames(ps []ResolvedPackage) []string {
 	return out
 }
 
-// sourcePath is where a version's build record lives.
-//
-// A SUBDIRECTORY, not a "{version}.src.json" beside the manifests: every
-// reader of a manifests directory lists its *.json files and calls each one a
-// version. A sidecar sitting there shows up in the panel as a phantom version
-// named "Team-Pack-1.0.0.src" — which is exactly what happened before this
-// moved, and what the isolation test now guards.
-func (b *Builder) sourcePath(gid, version string) string {
-	return filepath.Join(b.Builds.ManifestsDirFor(builds.NamespaceMods, gid), "sources", version+".json")
-}
-
-func (b *Builder) writeSource(gid, version string, src *Source) error {
-	data, err := json.MarshalIndent(src, "", "  ")
-	if err != nil {
-		return err
-	}
-	p := b.sourcePath(gid, version)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil { // #nosec G301 -- manifests tree, nginx serves it
-		return err
-	}
-	return adminutil.WriteFileAtomic(p, data, 0o644)
-}
-
 // ReadSource returns the build record of a published version.
 func (b *Builder) ReadSource(gid, version string) (*Source, error) {
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(version) {
-		return nil, errors.New("mods: unsafe gameId/version")
-	}
-	// #nosec G304 -- both components are validated slug/version values.
-	data, err := os.ReadFile(b.sourcePath(gid, version))
+	data, err := builds.ReadModSource(b.Root, gid, version)
 	if err != nil {
 		return nil, err
 	}
@@ -760,13 +725,7 @@ func (b *Builder) ReadSource(gid, version string) (*Source, error) {
 
 // DeleteVersion removes a published modpack version and its build record.
 func (b *Builder) DeleteVersion(gid, version string) error {
-	if err := b.Builds.DeletePublished(builds.NamespaceMods, gid, version); err != nil {
-		return err
-	}
-	if err := os.Remove(b.sourcePath(gid, version)); err != nil && !os.IsNotExist(err) {
-		log.Printf("[mods] delete source record %s/%s: %v", gid, version, err)
-	}
-	return nil
+	return b.Builds.DeletePublished(builds.NamespaceMods, gid, version)
 }
 
 // DiffEntry is one line of a composition diff between two versions.

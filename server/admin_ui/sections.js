@@ -653,7 +653,6 @@
           api
             .newsList(g.gameId ? 'game' : 'launcher', g.gameId)
             .then((r) => news(r, g.gameId))
-            .catch(() => [])
         )
       );
       return feeds.flat();

@@ -81,10 +81,10 @@ smoke:
 # ============
 # Linting
 # ============
-.PHONY: lint lint-repo lint-web lint-go lint-dotnet
+.PHONY: lint lint-repo lint-web lint-go lint-native
 
 # Aggregate lint that runs all available checks (like CI)
-lint: lint-repo lint-web lint-go lint-dotnet
+lint: lint-repo lint-web lint-go lint-native
 	@echo.
 	@echo ✅ All lint stages finished (see logs above for any issues).
 
@@ -150,18 +150,10 @@ lint-go:
 	@echo [lint:go] Files needing gofmt (if any)
 	@- ( cd server && gofmt -l . )
 
-# .NET: Build and code style check (non-blocking style check like CI)
-lint-dotnet:
-	@echo.
-	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	@echo 🧩 .NET lint (launcher)
-	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	@echo [lint:dotnet] Restore ^& Build (if dotnet is installed)
-	@- ( cd launcher/ChillHub && dotnet restore && dotnet build --no-restore -c Debug /p:UseAppHost=false )
-	@echo [lint:dotnet] Code style check (dotnet format) — non-blocking
-	@- ( cd launcher/ChillHub && dotnet format --verbosity minimal )
-	@ ( cd launcher/ChillHub.Security && dotnet format --verify-no-changes --verbosity minimal )
-	@ ( cd launcher/ChillHub.SecurityHelper && dotnet format --verify-no-changes --verbosity minimal )
+# Same blocking Native checks as CI; Windows desktop toolchain required.
+lint-native:
+	pwsh -NoProfile -File launcher/ChillHub.Native/build.ps1 -FormatCheck
+	pwsh -NoProfile -File launcher/ChillHub.Native/build.ps1 -Clippy
 
 # ============
 # Local run helpers

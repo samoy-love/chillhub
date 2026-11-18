@@ -130,16 +130,16 @@ def check_backup_rotation(tree):
 
 
 def check_installer_postcondition(tree):
-    """Установщик удаляется до вызова makensis, а не только проверяется после."""
-    rel = "scripts/build-installer.ps1"
+    """Уникальный выходной файл не может выдать прошлую сборку за новую."""
+    rel = "scripts/native-installer.ps1"
     text = tree.read(rel)
-    build = text.find('& "$makensis" @nsisArgs')
+    build = text.find('& $MakeNsis @parameters')
     if build < 0:
         raise Unsupported(f"в {rel} не нашлось вызова makensis — его переписали?")
-    removal = text.find("Remove-Item -LiteralPath $setupExe")
-    if removal < 0 or removal > build:
+    rejection = text.find('if (Test-Path -LiteralPath $output) { throw ')
+    if rejection < 0 or rejection > build:
         return [
-            f"{rel}: старый ChillHub-Setup.exe не удаляется перед makensis — "
+            f"{rel}: существующий установщик не отклоняется перед makensis — "
             "постусловие «собрался» пройдёт на файле прошлой сборки"
         ]
     return []
@@ -263,8 +263,8 @@ BROKEN = {
         "mapfile -t snaps < <(find \"$BACKUP_ROOT\" -type d -name '20*' -printf '%f\\n')\n",
     ),
     check_installer_postcondition: (
-        "scripts/build-installer.ps1",
-        '& "$makensis" @nsisArgs\nif (-not (Test-Path -LiteralPath $setupExe)) { throw "нет" }\n',
+        "scripts/native-installer.ps1",
+        '& $MakeNsis @parameters\nif (-not (Test-Path -LiteralPath $output)) { throw "нет" }\n',
     ),
     check_eslint_gate: (
         "Makefile",

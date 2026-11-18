@@ -231,6 +231,12 @@ func IsSafeGameID(s string) bool {
 	return true
 }
 
+// IsCatalogGameID identifies a game which can be routed by the launcher API.
+// Directory names starting with "_" are reserved for service data.
+func IsCatalogGameID(id string) bool {
+	return len(id) <= 64 && !strings.HasPrefix(id, "_") && IsSafeGameID(id)
+}
+
 // IsSafeVersion allows [0-9A-Za-z._-] for version labels (e.g., semver with
 // pre-release), not empty.
 //
@@ -245,6 +251,12 @@ func IsSafeVersion(s string) bool {
 		return false
 	}
 	if s == "." || s == ".." {
+		return false
+	}
+	// These names belong to the publication pointer, the screenshot gallery
+	// and the staging and rollback directories.
+	lower := strings.ToLower(s)
+	if lower == "latest" || lower == "gallery" || strings.Contains(lower, ".old-") || strings.Contains(lower, ".tmp-") {
 		return false
 	}
 	for _, r := range s {

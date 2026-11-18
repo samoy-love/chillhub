@@ -135,6 +135,7 @@
     if (phase === 'failed' || phase === 'aborted') {
       return [
         { act: 'retry', title: 'Повторить', accent: true },
+        { act: 'pick', title: 'Другой ZIP', accent: false },
         { act: 'close', title: 'Закрыть', accent: false },
       ];
     }
@@ -264,8 +265,8 @@
       : '<div class="empty"><b>Файл ещё не выбран</b><span>' + esc(what) + '</span></div>';
 
     const bar =
-      s.phase && s.phase !== 'idle'
-        ? '<div class="meter" role="progressbar" aria-valuenow="' +
+      ['upload', 'retry', 'complete', 'process'].includes(s.phase)
+        ? '<div class="meter" role="progressbar" aria-label="Передача архива" aria-valuenow="' +
           pct +
           '" aria-valuemin="0" aria-valuemax="100">' +
           '<i class="' +
@@ -626,7 +627,8 @@
    * держит место и всё равно отличает строки друг от друга.
    */
   function pickIcon(r) {
-    const letter = String(r.iconLetter || r.title || r.id || '?').trim().charAt(0).toUpperCase() || '?';
+    const initial = String(r.iconLetter || r.title || r.id || '').match(/[\p{L}\p{N}][\p{M}]*/u);
+    const letter = initial ? initial[0].toUpperCase() : '?';
     return (
       '<span class="pick-icon" aria-hidden="true"><span>' + esc(letter) + '</span>' +
       (r.icon ? '<img src="' + esc(r.icon) + '" alt="" loading="lazy" decoding="async" data-pick-icon>' : '') +
@@ -704,7 +706,7 @@
       (items || [])
         .map(
           (t) =>
-            '<button type="button" role="tab" data-tab="' + esc(t.id) + '"' +
+            '<button type="button" role="tab" id="game-tab-' + esc(t.id) + '" data-tab="' + esc(t.id) + '" aria-controls="game-tab-panel" aria-selected="' + (t.id === active) + '" tabindex="' + (t.id === active ? '0' : '-1') + '"' +
             (t.id === active ? ' aria-current="page"' : '') +
             '>' + esc(t.title) + '</button>'
         )
@@ -716,18 +718,20 @@
   function gameForm(item, problems) {
     const g = item || {};
     const errs = problems || [];
-    const err = (field) => {
-      const hit = errs.find((e) => e.field === field);
-      return hit ? '<span class="help help--bad">' + esc(hit.message || hit.text) + '</span>' : '';
+    const field = (name, label, value, help, extra) => {
+      const id = 'g-' + name;
+      const problem = errs.find((err) => err.field === name);
+      const descriptionIds = [help && id + '-hint', problem && id + '-error'].filter(Boolean);
+      return '<div class="field"><label for="' + id + '">' + esc(label) + '</label>' +
+        '<input id="' + id + '" name="' + name + '" type="text" value="' + esc(value) + '"' + (extra || '') +
+        (descriptionIds.length ? ' aria-describedby="' + descriptionIds.join(' ') + '"' : '') +
+        (problem ? ' aria-invalid="true"' : '') + '>' +
+        (help ? '<span class="help" id="' + id + '-hint">' + esc(help) + '</span>' : '') +
+        (problem ? '<span class="help help--bad" id="' + id + '-error">' + esc(problem.message || problem.text) + '</span>' : '') + '</div>';
     };
-    const field = (name, label, value, help, extra) =>
-      '<div class="field"><label for="g-' + name + '">' + esc(label) + '</label>' +
-      '<input id="g-' + name + '" name="' + name + '" type="text" value="' + esc(value) + '"' + (extra || '') + '>' +
-      (help ? '<span class="help">' + esc(help) + '</span>' : '') +
-      err(name) + '</div>';
 
     return (
-      '<div class="cols cols--2">' +
+      '<div class="stack game-form"><div class="cols cols--2">' +
       field(
         'gameId',
         'Идентификатор',
@@ -746,17 +750,73 @@
       '</div>' +
       '<div class="field"><label for="g-icon">Иконка</label>' +
       '<div class="btn-row"><input id="g-icon" name="iconUrl" type="text" value="' + esc(g.iconUrl) + '" placeholder="/manifests/' + esc(g.gameId || 'gameId') + '/icon.png">' +
-      (g.existing ? '<button class="btn" type="button" data-flow="icon">Загрузить</button>' : '') +
-      (g.iconUrl ? '<button class="btn btn--text" type="button" data-flow="icon-default">Вернуть стандартную</button>' : '') +
+      (g.existing && !g.deleted ? '<button class="btn" type="button" data-flow="icon">Загрузить</button>' : '') +
+      (g.iconUrl && !g.deleted ? '<button class="btn btn--text" type="button" data-flow="icon-default">Вернуть стандартную</button>' : '') +
       '</div>' +
       '<span class="help">Без неё в списке будет буква на цветном квадрате</span></div>' +
       '<label class="check"><input type="checkbox" name="published"' + (g.unpublished ? '' : ' checked') + '>' +
       '<span>Показывать игрокам</span>' +
-      '<span class="help">Снятая галочка убирает игру из лаунчера, но файлы и версии остаются на месте</span></label>'
+      '<span class="help">Снятая галочка убирает игру из лаунчера, но файлы и версии остаются на месте</span></label></div>'
     );
   }
 
   /* ---------- Порядок игр ---------- */
+
+  function presentationForm(value, problems) {
+    const p = value || {};
+    const field = (key, label, val, max, multiline, row) => {
+      const id = 'p-' + (row || '') + key;
+      const attr = row ? ' data-p-key="' + key + '"' : ' data-p-field="' + key + '"';
+      return '<div class="field"><label for="' + id + '">' + esc(label) + '</label>' +
+        (multiline ? '<textarea id="' + id + '"' + attr + ' rows="' + multiline + '" maxlength="' + max + '">' + esc(val || '') + '</textarea>'
+          : '<input id="' + id + '"' + attr + ' type="text" maxlength="' + max + '" value="' + esc(val || '') + '">') + '</div>';
+    };
+    const controls = (group, index, length) => '<div class="btn-row">' +
+      '<button class="btn btn--text" type="button" data-p-action="up" data-p-group="' + group + '" data-p-index="' + index + '"' + (index ? '' : ' disabled') + '>Выше</button>' +
+      '<button class="btn btn--text" type="button" data-p-action="down" data-p-group="' + group + '" data-p-index="' + index + '"' + (index + 1 < length ? '' : ' disabled') + '>Ниже</button>' +
+      '<span class="push"></span><button class="btn btn--text" type="button" data-p-action="remove" data-p-group="' + group + '" data-p-index="' + index + '">Убрать</button></div>';
+    const media = Array.isArray(p.media) ? p.media : [];
+    const mods = Array.isArray(p.mods) ? p.mods : [];
+    const benefits = Array.isArray(p.modBenefits) ? p.modBenefits : [];
+    const select = (key, label, val, values, row) => '<div class="field"><label for="p-' + row + key + '">' + esc(label) + '</label><select id="p-' + row + key + '" data-p-key="' + key + '">' + values.map(([v, title]) => '<option value="' + v + '"' + ((val || '') === v ? ' selected' : '') + '>' + esc(title) + '</option>').join('') + '</select></div>';
+    const issues = (problems || []).filter((e) => e.field.startsWith('presentation.'));
+    return '<div class="stack" data-presentation>' +
+      '<p class="note">Эту информацию игрок увидит в карточке игры. Изменения появятся после сохранения.</p>' +
+      (issues.length ? '<div role="alert" class="note note--warn">' + issues.map((e) => '<p>' + esc(e.message) + '</p>').join('') + '</div>' : '') +
+      field('description', 'Об игре', p.description, 12000, 5) +
+      field('modpackDescription', 'Что добавляет модпак', p.modpackDescription, 2000, 3) +
+      '<section class="stack"><h3>Главное о модпаке</h3><p class="help">До пяти коротких преимуществ; первые три видны сразу. Пишите о том, что меняется для игрока.</p>' +
+      benefits.map((b, i) => '<fieldset class="presentation-row" data-p-row="modBenefits"><legend>Преимущество ' + (i + 1) + '</legend>' + field('title', 'Заголовок', b.title, 80, 0, 'benefit-' + i + '-') + field('description', 'Короткое описание', b.description, 240, 2, 'benefit-' + i + '-') + select('icon', 'Значок', b.icon || 'package', [['package', 'Новые возможности'], ['users', 'Команда'], ['gamepad', 'Игровой процесс'], ['sparkles', 'Косметика'], ['wrench', 'Удобство'], ['compass', 'Исследование']], 'benefit-' + i + '-') + controls('modBenefits', i, benefits.length) + '</fieldset>').join('') +
+      '<button class="btn" type="button" data-p-action="add" data-p-group="modBenefits"' + (benefits.length >= 5 ? ' disabled' : '') + '>Добавить преимущество</button></section>' +
+      '<div class="cols cols--2">' + field('modpackVersion', 'Сборка, для которой описан состав', p.modpackVersion, 200) + field('modpackRevision', 'Ревизия состава', p.modpackRevision, 32) + '</div>' +
+      '<p class="muted">Укажите полный идентификатор опубликованной сборки модов и её ревизию из 32 символов. При смене сборки обновите описание и состав: несовпавший список лаунчер скроет.</p>' +
+      '<div class="cols cols--2">' + field('genre', 'Жанр', p.genre, 120) + field('heroUrl', 'Обложка — ссылка', p.heroUrl, 2048) + '</div>' +
+      '<span class="help">Используйте HTTPS-ссылку или адрес файла из галереи, например /assets/…</span>' +
+      field('highlights', 'Главное об игре — по одному пункту в строке', (p.highlights || []).join('\n'), 5800, 3) +
+      '<section class="stack"><h3>Скриншоты и трейлеры</h3>' +
+      media.map((m, i) => '<fieldset class="presentation-row" data-p-row="media"><legend>Файл ' + (i + 1) + '</legend>' +
+        '<div class="field"><label for="p-media-' + i + '-kind">Тип</label><select id="p-media-' + i + '-kind" data-p-key="kind"><option value="image"' + (m.kind === 'video' ? '' : ' selected') + '>Скриншот</option><option value="video"' + (m.kind === 'video' ? ' selected' : '') + '>Видео</option></select></div>' +
+        '<div class="cols cols--2">' + select('provider', 'Воспроизведение', m.provider, [['', 'Файл на сервере Chill Hub'], ['file', 'Файл на сервере Chill Hub']], 'media-' + i + '-') + select('role', 'Назначение', m.role, [['', 'Скриншот / не указано'], ['trailer', 'Официальный трейлер'], ['gameplay', 'Как играют другие']], 'media-' + i + '-') + '</div>' +
+        field('url', 'Ссылка на файл', m.url, 2048, 0, 'media-' + i + '-') +
+        '<details class="presentation-qualities"><summary>Качество видео · 1080p / 720p / 480p</summary><p class="muted">Для файлов на сервере. Пустые варианты не показываются игрокам. Размер и разрешение указаны в отчёте подготовки видео.</p>' +
+        [480, 720, 1080].map(h => { const v = (m.variants || []).find(v => v.height === h) || {}; return '<fieldset class="presentation-quality"><legend>' + h + 'p</legend>' +
+          field('quality' + h + 'url', 'Ссылка на MP4', v.url, 2048, 0, 'media-' + i + '-') +
+          '<div class="cols cols--2">' + field('quality' + h + 'width', 'Ширина в пикселях', v.width, 4, 0, 'media-' + i + '-') + field('quality' + h + 'bytes', 'Размер в байтах', v.bytes, 11, 0, 'media-' + i + '-') + '</div></fieldset>'; }).join('') + '</details>' +
+        field('posterUrl', 'Заставка трейлера — ссылка, необязательно', m.posterUrl, 2048, 0, 'media-' + i + '-') +
+        field('caption', 'Подпись', m.caption, 240, 0, 'media-' + i + '-') +
+        field('sourceUrl', 'Первоисточник — ссылка', m.sourceUrl, 2048, 0, 'media-' + i + '-') +
+        '<div class="cols cols--2">' + field('author', 'Автор', m.author, 160, 0, 'media-' + i + '-') + field('publishedAt', 'Дата публикации — ГГГГ-ММ-ДД', m.publishedAt, 10, 0, 'media-' + i + '-') + '</div>' +
+        '<div class="cols cols--2">' + field('width', 'Ширина в пикселях (0 — неизвестна)', m.width, 5, 0, 'media-' + i + '-') + field('height', 'Высота в пикселях (0 — неизвестна)', m.height, 5, 0, 'media-' + i + '-') + '</div>' + controls('media', i, media.length) + '</fieldset>').join('') +
+      '<button class="btn" type="button" data-p-action="add" data-p-group="media"' + (media.length >= 24 ? ' disabled' : '') + '>Добавить скриншот или трейлер</button></section>' +
+      '<details class="presentation-mods"><summary>Полный состав модпака · ' + mods.length + '</summary><section class="stack"><p class="help">Здесь — понятные игроку названия и описания. Состав устанавливаемых файлов настраивается в разделе модов.</p>' +
+      mods.map((m, i) => '<fieldset class="presentation-row" data-p-row="mods"><legend>Мод ' + (i + 1) + '</legend>' +
+        '<div class="cols cols--2">' + field('id', 'Идентификатор', m.id, 160, 0, 'mod-' + i + '-') + field('name', 'Название автора', m.name, 160, 0, 'mod-' + i + '-') + '</div>' +
+        field('russianName', 'Название по-русски', m.russianName, 160, 0, 'mod-' + i + '-') +
+        field('description', 'Что меняет в игре', m.description, 2000, 3, 'mod-' + i + '-') +
+        '<div class="cols cols--2">' + field('category', 'Категория', m.category, 80, 0, 'mod-' + i + '-') + field('version', 'Версия', m.version, 80, 0, 'mod-' + i + '-') + '</div>' +
+        field('url', 'Страница мода — ссылка, необязательно', m.url, 2048, 0, 'mod-' + i + '-') + controls('mods', i, mods.length) + '</fieldset>').join('') +
+      '<button class="btn" type="button" data-p-action="add" data-p-group="mods"' + (mods.length >= 256 ? ' disabled' : '') + '>Добавить описание мода</button></section></details></div>';
+  }
 
   /**
    * Список игр с перестановкой.
@@ -835,19 +895,15 @@
    * «Не ответил» и «ещё не спрашивали» — разные вещи: первое повод
    * насторожиться, второе просто ожидание.
    */
-  function staleNote(failed, loading) {
+  function staleNote(failed, loading, previous) {
     const bad = failed || [];
-    if (bad.length) {
-      return (
-        '<div class="note note--bad" data-stale>Здесь показан снимок, а не то, что на сервере: ' +
-        esc(bad.join(', ')) +
-        ' не ответил. Записывать в этом состоянии нельзя — запись уйдёт, а список останется прежним.</div>'
-      );
-    }
-    if (loading && loading.length) {
-      return '<div class="note" data-stale>Читаем с сервера…</div>';
-    }
-    return '';
+    const stale = previous || [];
+    const issues = [];
+    if (bad.length) issues.push('<p>Не удалось загрузить: ' + esc(bad.join(', ')) + '.</p>');
+    if (stale.length) issues.push('<p>Последние полученные данные: ' + esc(stale.join(', ')) + '. Обновление не удалось.</p>');
+    if (loading && loading.length) issues.push('<p>Читаем с сервера…</p>');
+    if (!issues.length) return '';
+    return '<div class="note' + (bad.length || stale.length ? ' note--bad' : '') + '" role="status" data-stale>' + issues.join('') + '</div>';
   }
 
   /* ---------- Отборы ---------- */
@@ -862,7 +918,7 @@
   function inboxFilter(f) {
     const flt = f || {};
     const sel = (name, label, options) =>
-      '<label class="inline-label" for="fi-' + name + '">' + esc(label) + '</label>' +
+      '<div class="filter-field"><label class="inline-label" for="fi-' + name + '">' + esc(label) + '</label>' +
       '<select id="fi-' + name + '" name="' + name + '">' +
       options
         .map(
@@ -870,7 +926,7 @@
             '<option value="' + esc(v) + '"' + (String(flt[name] || '') === v ? ' selected' : '') + '>' + esc(t) + '</option>'
         )
         .join('') +
-      '</select>';
+      '</select></div>';
 
     return (
       '<div class="filters" data-inbox-filter>' +
@@ -880,8 +936,8 @@
       '<label class="check check--inline"><input type="checkbox" name="important"' +
       (flt.important ? ' checked' : '') +
       '><span>только важные</span></label>' +
-      '<label class="inline-label" for="fi-from">С</label><input id="fi-from" name="from" type="date" value="' + esc(flt.from) + '">' +
-      '<label class="inline-label" for="fi-to">по</label><input id="fi-to" name="to" type="date" value="' + esc(flt.to) + '">' +
+      '<div class="filter-field"><label class="inline-label" for="fi-from">С</label><input id="fi-from" name="from" type="date" value="' + esc(flt.from) + '"></div>' +
+      '<div class="filter-field"><label class="inline-label" for="fi-to">по</label><input id="fi-to" name="to" type="date" value="' + esc(flt.to) + '"></div>' +
       (anyFilter(flt) ? '<button class="btn btn--text" type="button" data-inbox-reset>Сбросить</button>' : '') +
       '</div>'
     );
@@ -901,11 +957,11 @@
     const st = state || {};
     const days = Number(st.days || 30);
     const btn = (n, label) =>
-      '<button class="seg' + (days === n ? ' on' : '') + '" type="button" data-days="' + n + '">' + esc(label) + '</button>';
+      '<button class="seg' + (days === n ? ' on' : '') + '" type="button" data-days="' + n + '" aria-pressed="' + (days === n) + '">' + esc(label) + '</button>';
     return (
       '<div class="filters" data-metrics-filter>' +
       '<div class="segs">' + btn(7, '7 дней') + btn(30, '30 дней') + btn(90, '90 дней') + '</div>' +
-      '<label class="inline-label" for="mf-game">Игра</label>' +
+      '<div class="filter-field"><label class="inline-label" for="mf-game">Игра</label>' +
       '<select id="mf-game" name="gameId"><option value="">все</option>' +
       (games || [])
         .map(
@@ -915,7 +971,7 @@
             '</option>'
         )
         .join('') +
-      '</select></div>'
+      '</select></div></div>'
     );
   }
 
@@ -1831,6 +1887,7 @@
     logsView,
     ecosystemPicker,
     gameForm,
+    presentationForm,
     newsFilter,
     pickList,
     newsCover,

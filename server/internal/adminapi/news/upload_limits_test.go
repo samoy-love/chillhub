@@ -70,13 +70,23 @@ func TestUploadCoverRejectsOversizedBody(t *testing.T) {
 // A normal-sized cover still works.
 func TestUploadCoverAcceptsSmallImage(t *testing.T) {
 	h := New(t.TempDir())
-	body, ct := multipartFile(t, "small.png", 1<<10)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/news/uploadCover", body)
-	req.Header.Set("Content-Type", ct)
+	req := coverUpload(t, "small.png", nil)
 	w := httptest.NewRecorder()
 	h.UploadCover(w, req)
 	if w.Code != http.StatusOK {
 		b, _ := io.ReadAll(w.Body)
 		t.Fatalf("small cover rejected: %d %s", w.Code, string(b))
+	}
+}
+
+func TestUploadCoverRejectsNonImage(t *testing.T) {
+	h := New(t.TempDir())
+	body, ct := multipartFile(t, "page.html", 1<<10)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/news/uploadCover", body)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	h.UploadCover(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("non-image cover status = %d, want 400", w.Code)
 	}
 }

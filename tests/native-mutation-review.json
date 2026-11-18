@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "scope": "Windows core mutation gate; every exception requires exact mutation name and normalized source hash",
+  "exceptions": [
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:84:13: replace || with && in validate_relative",
+      "sourceSha256": "da85e8718c64b053db190491d41d9016d05671aa89e50b478495751559008137",
+      "reason": "Эквивалентно: сегменты . и .. независимо отклоняются проверкой ends_with точки."
+    },
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:322:33: replace | with ^ in DirectoryGuard::acquire",
+      "sourceSha256": "da85e8718c64b053db190491d41d9016d05671aa89e50b478495751559008137",
+      "reason": "Эквивалентно: 0x1 и 0x2 не имеют общих битов; OR и XOR равны 0x3."
+    },
+    {
+      "file": "src/manifest.rs",
+      "name": "src/manifest.rs:323:42: replace | with ^ in DirectoryGuard::acquire",
+      "sourceSha256": "da85e8718c64b053db190491d41d9016d05671aa89e50b478495751559008137",
+      "reason": "Эквивалентно: 0x00200000 и 0x02000000 не имеют общих битов; OR и XOR совпадают."
+    },
+    {
+      "file": "src/paths.rs",
+      "name": "src/paths.rs:223:39: replace | with ^ in replace_file",
+      "sourceSha256": "cd5890f74fa0dfbef0f3d3cde2dee1b89dd8e522a0a564b683f09a7018b903bf",
+      "reason": "Эквивалентно: MOVEFILE_REPLACE_EXISTING=1 и MOVEFILE_WRITE_THROUGH=8 не имеют общих битов."
+    },
+    {
+      "file": "src/paths.rs",
+      "name": "src/paths.rs:235:5: replace replace_file -> io::Result<()> with Ok(())",
+      "sourceSha256": "cd5890f74fa0dfbef0f3d3cde2dee1b89dd8e522a0a564b683f09a7018b903bf",
+      "reason": "Функция находится под cfg(not(windows)) и не компилируется в Windows-продукт. Windows atomic replacement проверяется отдельно."
+    }
+  ]
+}
