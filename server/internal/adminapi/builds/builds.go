@@ -149,17 +149,81 @@ func (h *Handlers) publishTree(
 		return "", nil, fmt.Errorf("preparing small file packs: %w", err)
 	}
 	m.SmallPacks = packs
+	var previousManifest string
+	if updateLatest {
+		previousManifest, err = backupVersionManifest(filepath.Join(manifestDir, m.Version+".json"))
+		if err != nil {
+			return "", nil, fmt.Errorf("backing up the published manifest: %w", err)
+		}
+		defer func() {
+			if previousManifest != "" {
+				_ = os.RemoveAll(filepath.Dir(previousManifest))
+			}
+		}()
+	}
 	prom, err := beginPromote(stageDir, finalDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: %w", errPromoteFailed, err)
 	}
-	path, b, err := h.writeManifestTo(manifestDir, m, updateLatest)
+	path, b, err := h.writeManifestTo(manifestDir, m, false)
 	if err != nil {
 		prom.Rollback(err)
 		return "", nil, err
 	}
+	if updateLatest {
+		if err := writePublishedLatest(manifestDir, m); err != nil {
+			if restoreErr := restoreVersionManifest(path, previousManifest); restoreErr != nil {
+				// Keep the new tree paired with its manifest, and preserve both
+				// backups for manual recovery if the filesystem no longer lets
+				// us restore the manifest.
+				log.Printf("[builds] CRITICAL: unable to roll back manifest %s (%v); previous manifest %q, previous tree %q",
+					path, restoreErr, previousManifest, prom.backup)
+				previousManifest = ""
+				return "", nil, errors.Join(err, fmt.Errorf("restoring the published manifest: %w", restoreErr))
+			}
+			prom.Rollback(err)
+			return "", nil, err
+		}
+	}
 	prom.Commit()
 	return path, b, nil
+}
+
+// Save the old manifest beside the live one so undoing a failed activation
+// only requires renaming it, even when the latest write ran out of disk space.
+func backupVersionManifest(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a regular manifest file", path)
+	}
+	// #nosec G304 -- the manifest path comes from the validated publication target.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(filepath.Dir(path), ".manifest-backup-*")
+	if err != nil {
+		return "", err
+	}
+	backup := filepath.Join(dir, filepath.Base(path))
+	if err := adminutil.WriteFileAtomic(backup, data, info.Mode().Perm()); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	return backup, nil
+}
+
+func restoreVersionManifest(path, backup string) error {
+	if backup == "" {
+		return os.Remove(path)
+	}
+	return os.Rename(backup, path)
 }
 
 // errPromoteFailed marks the half of publishTree that failed before anything
@@ -545,25 +609,19 @@ func (h *Handlers) writeManifestTo(outDir string, m manifest, updateLatest bool)
 		return "", nil, err
 	}
 	if updateLatest {
-		// A failed latest.json write FAILS THE PUBLICATION.
-		//
-		// The operator ticked "update latest", so the whole point of the request
-		// was to make this version the one launchers download. If the pointer is
-		// not repointed, the version sits on disk and every client keeps getting
-		// the previous one — while the panel says the build was published. The
-		// operator walks away, and the discrepancy surfaces days later as
-		// "players do not get the update".
-		//
-		// The files already written are harmless: an unreferenced version
-		// directory and its manifest are exactly what an inactive version looks
-		// like, and republishing overwrites them. Reporting the failure costs a
-		// retry; hiding it costs a silent non-release.
-		if err := writeLatestJSON(outDir, m.Version); err != nil {
-			log.Printf("[builds] manifest %s/%s written but latest.json not updated: %v", m.GameID, m.Version, err)
-			return "", nil, fmt.Errorf("manifest written but latest.json not updated: %w", err)
+		if err := writePublishedLatest(outDir, m); err != nil {
+			return "", nil, err
 		}
 	}
 	return outPath, b, nil
+}
+
+func writePublishedLatest(dir string, m manifest) error {
+	if err := writeLatestJSON(dir, m.Version); err != nil {
+		log.Printf("[builds] manifest %s/%s written but latest.json not updated: %v", m.GameID, m.Version, err)
+		return fmt.Errorf("manifest written but latest.json not updated: %w", err)
+	}
+	return nil
 }
 
 // writeLatestJSON points the game's latest.json at a version.
